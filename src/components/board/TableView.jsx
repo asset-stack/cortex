@@ -32,7 +32,7 @@ function AddRow({ onAdd, colSpan }) {
   );
 }
 
-export default function TableView({ boardKey, schema, groups, onOpen }) {
+export default function TableView({ boardKey, schema, groups, onOpen, onAdd }) {
   const { actions } = useStore();
   const [collapsed, setCollapsed] = useState({});
 
@@ -60,11 +60,11 @@ export default function TableView({ boardKey, schema, groups, onOpen }) {
                   <tr key={it.id} className="border-t rowline hover:bg-white/5">
                     <td className="p-3 text-center">
                       <input type="checkbox" checked={it.done} aria-label={`Mark ${it.name} done`}
-                        onChange={() => actions.updateItem(boardKey, it.id, { done: !it.done, values: !it.done ? { status: 'Done' } : {} })}
+                        onChange={() => actions.updateItem(boardKey, it.id, { done: !it.done, values: { status: it.done ? 'Not started' : 'Done' } })}
                         className="h-4 w-4 accent-[#5fd4ff]" />
                     </td>
                     <td className="p-3">
-                      <button type="button" onClick={() => onOpen(it.id)} className={cn('text-left font-semibold hover:underline', it.done && 'line-through opacity-60')}>{it.name}</button>
+                      <button type="button" onClick={() => onOpen(it.id)} className={cn('text-left font-semibold hover:underline', it.done && 'line-through opacity-60')}>{it.name.trim() || 'Untitled task'}</button>
                       {it.subtasks.length > 0 && <span className="ml-2 text-[11.5px] dimmer tnum">{it.subtasks.filter((s) => s.done).length}/{it.subtasks.length}</span>}
                     </td>
                     <td className="text-center">
@@ -79,9 +79,9 @@ export default function TableView({ boardKey, schema, groups, onOpen }) {
                       if (c.type === 'date') {
                         return (
                           <td key={c.key} className="text-center">
-                            <label className="relative inline-block cursor-pointer dim tnum hover:text-white">
+                            <label className="relative inline-block cursor-pointer rounded-[10px] px-1 dim tnum hover:text-white has-[:focus-visible]:text-white has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-white">
                               {shortDate(val)}
-                              <input type="date" value={val} aria-label="Due date" onChange={(e) => actions.updateItem(boardKey, it.id, { values: { [c.key]: e.target.value } })}
+                              <input type="date" value={val} aria-label={`${c.label} date for ${it.name}`} onChange={(e) => actions.updateItem(boardKey, it.id, { values: { [c.key]: e.target.value } })}
                                 className="absolute inset-0 opacity-0 cursor-pointer" />
                             </label>
                           </td>
@@ -89,14 +89,14 @@ export default function TableView({ boardKey, schema, groups, onOpen }) {
                       }
                       return (
                         <td key={c.key} className="px-1.5">
-                          <LabelPicker value={val} options={c.options} allowEmpty={c.type !== 'status'}
+                          <LabelPicker label={`${c.label} for ${it.name}`} value={val} options={c.options} allowEmpty={c.type !== 'status'}
                             onChange={(v) => actions.updateItem(boardKey, it.id, { values: { [c.key]: v }, ...(c.key === 'status' ? { done: v === 'Done' } : {}) })} />
                         </td>
                       );
                     })}
                   </tr>
                 ))}
-                <AddRow colSpan={schema.columns.length + 2} onAdd={(name) => actions.addItem(boardKey, g.id, name)} />
+                <AddRow colSpan={schema.columns.length + 2} onAdd={(name) => onAdd(g.id, name)} />
               </tbody>
             </table>
           </div>

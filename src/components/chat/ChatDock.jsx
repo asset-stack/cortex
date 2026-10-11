@@ -1,10 +1,10 @@
 // Slack-style team chat docked at the bottom of the workspace: groups, messages, @mentions.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AtSign, ChevronDown, ChevronUp, Hash, MessageSquare, Plus, SendHorizontal, UserPlus } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { Avatar, Modal } from '@/components/ui';
 import { MessageText, mentionsUser } from '@/lib/mentions';
-import { clockTime } from '@/lib/format';
+import { chatTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
 export const openChat = (channelId) => window.dispatchEvent(new CustomEvent('ops:open-chat', { detail: { channelId } }));
@@ -16,7 +16,7 @@ export function useChatCounts() {
     const per = {};
     let unread = 0, mentions = 0;
     state.channels.filter((c) => c.members.includes(state.me)).forEach((c) => {
-      const since = state.lastRead[c.id] || '';
+      const since = state.lastRead[state.me]?.[c.id] || '';
       const fresh = state.messages.filter((m) => m.channel === c.id && m.user !== state.me && m.ts > since);
       const ment = fresh.filter((m) => mentionsUser(m.text, me)).length;
       per[c.id] = { unread: fresh.length, mentions: ment };
@@ -47,7 +47,7 @@ function GroupModal({ open, onClose, onCreate }) {
           <legend className="text-[12px] dimmer mb-2">Members</legend>
           <div className="grid grid-cols-2 gap-1.5">
             {state.users.filter((u) => u.id !== state.me).map((u) => (
-              <label key={u.id} className={cn('flex items-center gap-2 rounded-xl px-2.5 py-2 cursor-pointer', members.includes(u.id) ? 'bg-white/20' : 'hover:bg-white/10')}>
+              <label key={u.id} className={cn('relative flex items-center gap-2 rounded-xl px-2.5 py-2 cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-white', members.includes(u.id) ? 'bg-white/20' : 'hover:bg-white/10')}>
                 <input type="checkbox" className="sr-only" checked={members.includes(u.id)} onChange={() => toggle(u.id)} />
                 <Avatar userId={u.id} size={24} ring={false} />{u.name}
               </label>
@@ -71,7 +71,7 @@ function AddMembersModal({ channel, onClose }) {
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-1.5">
             {others.map((u) => (
-              <label key={u.id} className={cn('flex items-center gap-2 rounded-xl px-2.5 py-2 cursor-pointer', picked.includes(u.id) ? 'bg-white/20' : 'hover:bg-white/10')}>
+              <label key={u.id} className={cn('relative flex items-center gap-2 rounded-xl px-2.5 py-2 cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-white', picked.includes(u.id) ? 'bg-white/20' : 'hover:bg-white/10')}>
                 <input type="checkbox" className="sr-only" checked={picked.includes(u.id)} onChange={() => setPicked((p) => (p.includes(u.id) ? p.filter((x) => x !== u.id) : [...p, u.id]))} />
                 <Avatar userId={u.id} size={24} ring={false} />{u.name}
               </label>
@@ -91,12 +91,21 @@ function Composer({ channel, onSend }) {
   const [hi, setHi] = useState(0);
   const ref = useRef(null);
   const caret = useRef(null); // caret position to restore right after the controlled value updates
+  const listId = useId();
 
   useLayoutEffect(() => {
     if (caret.current == null || !ref.current) return;
     ref.current.focus();
     ref.current.setSelectionRange(caret.current, caret.current);
     caret.current = null;
+  }, [text]);
+
+  // Grow with the text so Shift+Enter lines stay visible (max-h-32 caps it, then it scrolls).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
   }, [text]);
 
   const candidates = useMemo(() => {
@@ -113,6 +122,8 @@ function Composer({ channel, onSend }) {
 
   const pick = (u) => {
     const end = ref.current.selectionStart;
+    // A stale query (caret moved off the @word) only closes the list; never splice the wrong range.
+    if (!query || end <= query.start || !/^@\w*$/.test(text.slice(query.start, end))) { setQuery(null); return; }
     caret.current = query.start + u.name.length + 2;
     setText(`${text.slice(0, query.start)}@${u.name} ${text.slice(end)}`);
     setQuery(null);
@@ -123,21 +134,23 @@ function Composer({ channel, onSend }) {
     onSend(text.trim()); setText(''); setQuery(null);
   };
 
+  const listOpen = !!(query && candidates.length);
+
   return (
     <div className="relative">
-      {query && candidates.length > 0 && (
-        <ul role="listbox" aria-label="Mention someone" className="glass-dark absolute bottom-full left-0 mb-2 w-60 rounded-2xl p-1.5">
+      {listOpen && (
+        <ul id={listId} role="listbox" aria-label="Mention someone" className="glass-dark absolute bottom-full left-0 mb-2 w-60 rounded-2xl p-1.5">
           {candidates.map((u, i) => (
-            <li key={u.id} role="option" aria-selected={i === hi}>
-              <button type="button" onMouseDown={(e) => { e.preventDefault(); pick(u); }}
-                className={cn('flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left', i === hi ? 'bg-white/20' : 'hover:bg-white/10')}>
-                {u.id === 'here' ? <span className="grid h-6 w-6 place-items-center rounded-full bg-white/20"><AtSign className="h-3.5 w-3.5" /></span> : <Avatar userId={u.id} size={24} ring={false} />}
-                <span className="font-semibold">{u.name}</span>{u.id === 'here' && <span className="dimmer text-[12px]">everyone in group</span>}
-              </button>
+            <li key={u.id} id={`${listId}-${i}`} role="option" aria-selected={i === hi}
+              onMouseDown={(e) => e.preventDefault()} onClick={() => pick(u)}
+              className={cn('flex w-full cursor-pointer items-center gap-2 rounded-xl px-2 py-1.5 text-left', i === hi ? 'bg-white/20' : 'hover:bg-white/10')}>
+              {u.id === 'here' ? <span className="grid h-6 w-6 place-items-center rounded-full bg-white/20"><AtSign className="h-3.5 w-3.5" /></span> : <Avatar userId={u.id} size={24} ring={false} />}
+              <span className="font-semibold">{u.name}</span>{u.id === 'here' && <span className="dimmer text-[12px]">everyone in group</span>}
             </li>
           ))}
         </ul>
       )}
+      <span className="sr-only" aria-live="polite">{listOpen ? `${candidates.length} people to mention. Up and down to choose, Enter to insert, Escape to dismiss.` : ''}</span>
       <div className="flex items-end gap-2 rounded-[20px] chip p-1.5 pl-4">
         <textarea
           ref={ref}
@@ -145,13 +158,16 @@ function Composer({ channel, onSend }) {
           value={text}
           placeholder={`Message #${channel.name}`}
           aria-label={`Message ${channel.name}`}
+          aria-autocomplete="list"
+          aria-controls={listOpen ? listId : undefined}
+          aria-activedescendant={listOpen ? `${listId}-${hi}` : undefined}
           onChange={(e) => { setText(e.target.value); detect(e.target.value, e.target.selectionStart); }}
-          onClick={(e) => detect(e.target.value, e.target.selectionStart)}
+          onSelect={(e) => detect(e.target.value, e.target.selectionStart)}
           onKeyDown={(e) => {
-            if (query && candidates.length) {
+            if (listOpen) {
               if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => (h + 1) % candidates.length); return; }
               if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => (h - 1 + candidates.length) % candidates.length); return; }
-              if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(candidates[hi]); return; }
+              if (e.key === 'Enter' || (e.key === 'Tab' && !e.shiftKey)) { e.preventDefault(); pick(candidates[hi]); return; }
               if (e.key === 'Escape') { setQuery(null); return; }
             }
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
@@ -178,29 +194,49 @@ export default function ChatDock() {
   const [adding, setAdding] = useState(false);
   const [onlyMentions, setOnlyMentions] = useState(false);
   const listRef = useRef(null);
+  const barRef = useRef(null);
+  const sectionRef = useRef(null);
+  const prevOpen = useRef(open);
+  // Every channel switch starts with the full conversation, not the "Me" filter.
+  const switchTo = (id) => { setActive(id); setOnlyMentions(false); };
 
   const channel = myChannels.find((c) => c.id === active) || myChannels[0];
   const messages = state.messages.filter((m) => m.channel === channel?.id && (!onlyMentions || mentionsUser(m.text, me)));
   const latest = [...state.messages].filter((m) => myChannels.some((c) => c.id === m.channel)).sort((a, b) => b.ts.localeCompare(a.ts))[0];
 
   useEffect(() => {
-    const on = (e) => { setOpen(true); if (e.detail?.channelId) setActive(e.detail.channelId); };
+    const on = (e) => { setOpen(true); if (e.detail?.channelId) { setActive(e.detail.channelId); setOnlyMentions(false); } };
     window.addEventListener('ops:open-chat', on);
     return () => window.removeEventListener('ops:open-chat', on);
   }, []);
 
   // Mark the visible channel read whenever new messages land while it is open.
+  const activeId = channel?.id;
+  const activeUnread = activeId ? counts.per[activeId]?.unread || 0 : 0;
   useEffect(() => {
-    if (open && channel && counts.per[channel.id]?.unread) actions.markRead(channel.id);
-  }, [open, channel, counts.per, actions]);
+    if (open && activeId && activeUnread) actions.markRead(activeId);
+  }, [open, activeId, activeUnread, actions]);
 
   useEffect(() => {
     if (open && listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [open, channel?.id, messages.length]);
+  }, [open, channel?.id, onlyMentions, messages.length]);
+
+  // Keep keyboard focus with the chat: into the panel on open (the composer where there is a mouse,
+  // so phones don't pop the keyboard), back to the bar on minimise. Not on first render.
+  useEffect(() => {
+    if (prevOpen.current === open) return;
+    prevOpen.current = open;
+    if (open) {
+      const el = sectionRef.current;
+      ((window.matchMedia?.('(pointer: fine)').matches && el?.querySelector('textarea')) || el)?.focus();
+    } else barRef.current?.focus();
+  }, [open]);
 
   if (!open) {
+    const chatLabel = ['Open team chat', counts.unread > 0 && `${counts.unread} unread`,
+      counts.mentions > 0 && `${counts.mentions} mention${counts.mentions === 1 ? '' : 's'}`].filter(Boolean).join(', ');
     return (
-      <button type="button" onClick={() => setOpen(true)} aria-label="Open team chat"
+      <button ref={barRef} type="button" onClick={() => setOpen(true)} aria-label={chatLabel}
         className="glass-solid flex w-full items-center gap-3 rounded-full px-4 py-2.5 text-left">
         <MessageSquare className="h-5 w-5 shrink-0" />
         <span className="font-bold shrink-0">Team chat</span>
@@ -218,7 +254,7 @@ export default function ChatDock() {
   }
 
   return (
-    <section aria-label="Team chat" className="glass-solid flex h-[min(560px,72vh)] overflow-hidden rounded-[28px]">
+    <section ref={sectionRef} tabIndex={-1} aria-label="Team chat" className="glass-solid flex h-[min(560px,72vh)] overflow-hidden rounded-[28px]">
       {/* Group list */}
       <div className="hidden w-[220px] shrink-0 flex-col border-r rowline sm:flex">
         <div className="flex items-center justify-between px-4 pt-4 pb-2">
@@ -229,7 +265,7 @@ export default function ChatDock() {
           {myChannels.map((c) => {
             const k = counts.per[c.id] || {};
             return (
-              <button key={c.id} type="button" onClick={() => { setActive(c.id); setOnlyMentions(false); }}
+              <button key={c.id} type="button" onClick={() => switchTo(c.id)}
                 className={cn('flex w-full items-center gap-2 rounded-full px-3 py-2 text-left', c.id === channel?.id ? 'chip-on' : k.unread ? 'font-bold hover:bg-white/10' : 'dim hover:bg-white/10')}>
                 <Hash className="h-4 w-4 shrink-0 opacity-70" /><span className="flex-1 truncate">{c.name}</span>
                 {k.mentions > 0 && <span className="rounded-full bg-[#ff9a3c] px-1.5 text-[11px] font-bold text-[#1a1206]">@{k.mentions}</span>}
@@ -243,13 +279,13 @@ export default function ChatDock() {
       {/* Conversation */}
       {channel ? (
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex items-center gap-2 border-b rowline px-4 py-3">
-            <select aria-label="Group" value={channel.id} onChange={(e) => setActive(e.target.value)} className="field !w-auto !py-1 sm:hidden">
+          <header className="flex min-w-0 items-center gap-2 border-b rowline px-4 py-3">
+            <select aria-label="Group" value={channel.id} onChange={(e) => switchTo(e.target.value)} className="field !w-auto !py-1 min-w-0 flex-1 sm:hidden">
               {myChannels.map((c) => <option key={c.id} value={c.id}>#{c.name}</option>)}
             </select>
-            <h2 className="hidden items-center gap-1 text-[16px] font-extrabold sm:flex"><Hash className="h-4 w-4 opacity-70" />{channel.name}</h2>
-            <div className="ml-2 hidden -space-x-2 md:flex">{channel.members.slice(0, 5).map((u) => <Avatar key={u} userId={u} size={24} />)}</div>
-            <div className="ml-auto flex items-center gap-1.5">
+            <h2 className="hidden min-w-0 items-center gap-1 text-[16px] font-extrabold sm:flex"><Hash className="h-4 w-4 shrink-0 opacity-70" /><span className="truncate">{channel.name}</span></h2>
+            <div className="ml-2 hidden shrink-0 -space-x-2 xl:flex">{channel.members.slice(0, 5).map((u) => <Avatar key={u} userId={u} size={24} />)}</div>
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
               <button type="button" onClick={() => setOnlyMentions((v) => !v)} aria-pressed={onlyMentions} title="Show only messages that mention you"
                 className={cn('inline-flex h-8 items-center gap-1 rounded-full px-3 text-[12.5px] font-semibold', onlyMentions ? 'chip-on' : 'chip')}><AtSign className="h-3.5 w-3.5" />Me</button>
               <button type="button" onClick={() => setAdding(true)} aria-label="Add members" title="Add members" className="grid h-8 w-8 place-items-center rounded-full chip"><UserPlus className="h-4 w-4" /></button>
@@ -257,7 +293,8 @@ export default function ChatDock() {
               <button type="button" onClick={() => setOpen(false)} aria-label="Minimise team chat" className="grid h-8 w-8 place-items-center rounded-full chip"><ChevronDown className="h-4 w-4" /></button>
             </div>
           </header>
-          <ol ref={listRef} className="flex-1 overflow-y-auto scroll-thin px-4 py-3 flex flex-col gap-3" aria-live="polite">
+          {/* Keyed per view so a channel switch mounts a fresh live region instead of reading the whole channel out. */}
+          <ol key={`${channel.id}:${onlyMentions ? 'me' : 'all'}`} ref={listRef} className="flex-1 overflow-y-auto scroll-thin px-4 py-3 flex flex-col gap-3" aria-live="polite">
             {messages.length === 0 && <li className="m-auto dimmer">{onlyMentions ? 'No mentions of you here.' : 'No messages yet. Say hello.'}</li>}
             {messages.map((m) => {
               const mine = mentionsUser(m.text, me) && m.user !== state.me;
@@ -265,14 +302,14 @@ export default function ChatDock() {
                 <li key={m.id} className={cn('flex gap-3 rounded-2xl px-2 py-1.5', mine && 'bg-[#ff9a3c]/10')}>
                   <Avatar userId={m.user} size={32} ring={false} />
                   <div className="min-w-0">
-                    <div className="flex items-baseline gap-2"><span className="font-bold">{users[m.user]?.name}</span><span className="text-[11.5px] dimmer tnum">{clockTime(m.ts)}</span></div>
+                    <div className="flex items-baseline gap-2"><span className="font-bold">{users[m.user]?.name}</span><time dateTime={m.ts} className="text-[11.5px] dimmer tnum">{chatTime(m.ts)}</time></div>
                     <p className="whitespace-pre-wrap break-words leading-relaxed"><MessageText text={m.text} users={state.users} me={me} /></p>
                   </div>
                 </li>
               );
             })}
           </ol>
-          <div className="px-4 pb-4"><Composer channel={channel} onSend={(t) => actions.sendMessage(channel.id, t)} /></div>
+          <div className="px-4 pb-4"><Composer key={`${state.me}:${channel.id}`} channel={channel} onSend={(t) => actions.sendMessage(channel.id, t)} /></div>
         </div>
       ) : (
         <div className="m-auto flex flex-col items-center gap-3 dim">
@@ -281,7 +318,7 @@ export default function ChatDock() {
         </div>
       )}
 
-      <GroupModal open={creating} onClose={() => setCreating(false)} onCreate={(name, members) => { setActive(actions.createChannel(name, members)); setCreating(false); }} />
+      {creating && <GroupModal open onClose={() => setCreating(false)} onCreate={(name, members) => { switchTo(actions.createChannel(name, members)); setCreating(false); }} />}
       {adding && <AddMembersModal channel={channel} onClose={() => setAdding(false)} />}
     </section>
   );

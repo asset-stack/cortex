@@ -30,14 +30,14 @@ export default function CalendarView({ groups, onOpen }) {
           {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => <div key={d} className="px-3 pb-2">{d}</div>)}
         </div>
         <div className="grid grid-cols-7">
-          {Array.from({ length: lead }, (_, k) => <div key={`l${k}`} className="h-28 border-t border-r rowline" />)}
+          {Array.from({ length: lead }, (_, k) => <div key={`l${k}`} className="min-h-28 border-t border-r rowline" />)}
           {Array.from({ length: days }, (_, k) => k + 1).map((d) => (
-            <div key={d} className={cn('h-28 border-t border-r rowline p-1.5 overflow-hidden', isToday(d) && 'bg-white/15')}>
+            <div key={d} className={cn('min-h-28 border-t border-r rowline p-1.5', isToday(d) && 'bg-white/15')}>
               <div className={cn('text-[12px] tnum', isToday(d) ? 'font-bold' : 'dimmer')}>{d}</div>
               {items.filter((i) => i.values.due === `${prefix}${pad(d)}`).map((i) => (
                 <button key={i.id} type="button" onClick={() => onOpen(i.id)} title={i.name}
-                  className="pill mt-1 !h-6 w-full !justify-start overflow-hidden text-ellipsis text-[11.5px]" style={{ backgroundColor: STATUS[i.values.status] }}>
-                  {i.name}
+                  className="pill mt-1 !h-6 w-full !justify-start overflow-hidden text-[11.5px]" style={{ backgroundColor: STATUS[i.values.status] }}>
+                  <span className="min-w-0 truncate">{i.name}</span>
                 </button>
               ))}
             </div>

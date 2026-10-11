@@ -27,7 +27,7 @@ The output is a static site and is ready for Cloudflare Pages.
 
 ## Current state: local prototype
 
-- **Data** lives in the browser (`localStorage`) and is seeded with example data from the Client Tracker, the monday.com Posting Schedule and the master-layout whiteboard. *Reset demo data* in the sidebar restores the seed.
+- **Data** lives in the browser (`localStorage`) and is seeded with fictional example data shaped on the Client Tracker, the monday.com Posting Schedule and the master-layout whiteboard. *Reset demo data* in the sidebar restores the seed.
 - **Gmail and the Claude agent are stubbed** in `src/integrations/`. Drafts come from templates and "sent" emails are only logged to the feed.
 - **Team members** are a fixed list in `src/data/seed.js`. The avatar menu at the bottom of the sidebar switches who you are viewing as (demo only), so you can see tagging from both sides.
 

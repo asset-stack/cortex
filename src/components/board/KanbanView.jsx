@@ -5,10 +5,12 @@ import { Avatar } from '@/components/ui';
 import { shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
-export default function KanbanView({ boardKey, groups, onOpen }) {
+export default function KanbanView({ boardKey, groups, sortDue, onOpen }) {
   const { actions } = useStore();
   const [over, setOver] = useState(null);
+  // Board sorts within each group; columns mix groups, so sort the combined list too.
   const all = groups.flatMap((g) => g.items);
+  if (sortDue) all.sort((a, b) => (a.values.due || '9999').localeCompare(b.values.due || '9999'));
 
   return (
     <div className="mt-7 overflow-x-auto scroll-thin pb-2">
@@ -19,7 +21,7 @@ export default function KanbanView({ boardKey, groups, onOpen }) {
             <div key={s}
               className={cn('rounded-[24px] glass p-3', over === s && 'drag-over')}
               onDragOver={(e) => { e.preventDefault(); setOver(s); }}
-              onDragLeave={() => setOver(null)}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(null); }}
               onDrop={(e) => {
                 e.preventDefault(); setOver(null);
                 const itemId = e.dataTransfer.getData('text/plain');

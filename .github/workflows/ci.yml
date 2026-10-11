@@ -25,5 +25,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # The repo is public: only placeholder (example.com) or company (assetstackai.com) addresses in src/.
+      - name: Check src/ for real email addresses
+        run: |
+          if grep -rEoHn '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' src | grep -vE '@(example\.com|assetstackai\.com)$'; then
+            echo "Use @example.com placeholders in src/." >&2
+            exit 1
+          fi
       - run: npm ci
       - run: npm run build

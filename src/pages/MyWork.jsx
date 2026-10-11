@@ -22,9 +22,10 @@ export default function MyWork() {
     b.groups.flatMap((g) => g.items.filter((i) => i.values.owner === state.me && !i.done).map((i) => ({ ...i, board: key }))))
     .sort((a, b) => (a.values.due || '9999').localeCompare(b.values.due || '9999')), [state.boards, state.me]);
 
-  const mentions = useMemo(() => state.messages
+  const allMentions = useMemo(() => state.messages
     .filter((m) => m.user !== state.me && mentionsUser(m.text, me) && state.channels.find((c) => c.id === m.channel)?.members.includes(state.me))
-    .sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 5), [state.messages, state.channels, state.me, me]);
+    .sort((a, b) => b.ts.localeCompare(a.ts)), [state.messages, state.channels, state.me, me]);
+  const mentions = allMentions.slice(0, 5); // the KPI counts them all; the list shows the latest five
 
   const overdue = state.clients.flatMap((c) => c.invoices).filter((i) => i.status === 'Overdue');
 
@@ -34,7 +35,7 @@ export default function MyWork() {
       <KpiRow items={[
         { value: mine.length, label: 'My open tasks', tint: '#334155' },
         { value: mine.filter((i) => i.values.status === 'Stuck').length, label: 'Stuck', tint: '#e2445c' },
-        { value: mentions.length, label: 'Mentions', tint: '#0f9f6f' },
+        { value: allMentions.length, label: 'Mentions', tint: '#0f9f6f' },
         { value: overdue.length, label: overdue.length === 1 ? 'Overdue invoice' : 'Overdue invoices', tint: '#f59e0b' },
       ]} />
 
@@ -54,7 +55,7 @@ export default function MyWork() {
               {mine.length === 0 && <tr><td className="p-5 dimmer">Nothing assigned to you. Nice.</td></tr>}
               {mine.map((i, k) => (
                 <tr key={i.id} className={k ? 'border-t rowline' : ''}>
-                  <td className="p-3.5 font-semibold"><a href={`#/${i.board}`} className="hover:underline">{i.name}</a></td>
+                  <td className="p-3.5 font-semibold"><a href={`#/${i.board}?item=${encodeURIComponent(i.id)}`} className="hover:underline">{i.name}</a></td>
                   <td className="p-3.5 dimmer">{BOARD_SCHEMAS[i.board].title}</td>
                   <td className="w-[130px] px-2"><span className="pill" style={{ backgroundColor: STATUS[i.values.status] }}>{i.values.status}</span></td>
                   <td className="p-3.5 text-right dim tnum">{shortDate(i.values.due)}</td>

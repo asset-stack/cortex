@@ -129,7 +129,9 @@ body {
 
 input::placeholder, textarea::placeholder { color: rgba(255,255,255,.62); opacity: 1; }
 select option { color: #111; }
-:focus-visible { outline: 2px solid #fff; outline-offset: 2px; border-radius: 10px; }
+/* Programmatic focus targets (dialog panels, the chat panel: tabindex="-1") take focus without a ring. */
+:focus-visible:where(:not([tabindex="-1"])) { outline: 2px solid #fff; outline-offset: 2px; border-radius: 10px; }
+[tabindex="-1"]:focus { outline: none; }
 .drag-over { background: rgba(255,255,255,.14) !important; outline: 2px dashed rgba(255,255,255,.6); }
 .scroll-thin { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.3) transparent; }
 
@@ -139,6 +141,17 @@ select option { color: #111; }
 @media print {
   body { background: #fff; color: #000; overflow: visible; }
   .no-print, .backdrop-photo, .backdrop-vignette, .backdrop-grain { display: none !important; }
-  .print-area { position: static !important; color: #000 !important; background: #fff !important; box-shadow: none !important; backdrop-filter: none !important; }
-  .print-area * { color: #000 !important; }
+  /* Invoice "Print / PDF" (html.printing-invoice): only the clicked invoice, no app chrome, free to run onto more pages. */
+  html.printing-invoice, html.printing-invoice body { height: auto !important; overflow: visible !important; }
+  html.printing-invoice #root { display: none !important; }
+  html.printing-invoice .drawer-shell,
+  html.printing-invoice .drawer-panel,
+  html.printing-invoice .drawer-body {
+    position: static !important; inset: auto !important; width: auto !important; height: auto !important;
+    display: block !important; overflow: visible !important; padding: 0 !important; border: 0 !important; border-radius: 0 !important;
+    background: #fff !important; box-shadow: none !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+  }
+  html.printing-invoice .invoice-card:not([data-print-target]) { display: none !important; }
+  .invoice-card[data-print-target] { padding: 0 !important; border: 0 !important; color: #000 !important; background: #fff !important; box-shadow: none !important; }
+  .invoice-card[data-print-target] * { color: #000 !important; }
 }

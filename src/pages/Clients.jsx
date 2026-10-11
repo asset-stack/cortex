@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useRef, useState } from 'react';
 import { Clock, ExternalLink, KeyRound, Landmark, LayoutGrid, List, NotebookPen, Plus, Printer, Receipt, Trash2, UserRound } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
-import { CLIENT_GROUPS, CLIENT_STATUSES, INVOICE_STATUS } from '@/data/boards';
-import { Avatar, Drawer, KpiRow, LabelPicker, Modal, PageHeader, QuickAdd, SearchField, Segmented } from '@/components/ui';
-import { ago, compactMoney, invoiceTotals, money, money2, shortDate } from '@/lib/format';
+import { CLIENT_GROUPS, CLIENT_STATUSES, INVOICE_STATUS, SUPPLIER } from '@/data/boards';
+import { Avatar, Drawer, KpiRow, LabelPicker, Modal, PageHeader, PersonPicker, QuickAdd, SearchField, Segmented } from '@/components/ui';
+import { ago, compactMoney, fullDate, invoiceTotals, isBadAmount, lineAmount, money, money2, parseAmount, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
 const TABS = [{ id: 'overview', label: 'Overview' }, { id: 'invoices', label: 'Invoices' }, { id: 'access', label: 'Access' }];
@@ -19,7 +19,19 @@ function owed(clients) {
   return { outstanding, overdue, paid };
 }
 
+// Demo links are free text: add https:// when there is no scheme, and only ever link http(s).
+function safeDemoUrl(v) {
+  const s = (v || '').trim();
+  if (!s) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s.replace(/^\/+/, '')}`;
+  try {
+    const u = new URL(withScheme);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
+  } catch { return null; }
+}
+
 function ClientCard({ c, onOpen }) {
+  const demoHref = safeDemoUrl(c.demoUrl);
   return (
     <article className="mt-3 rounded-[26px] glass glass-rim float p-5">
       <div className="flex items-start gap-3.5">
@@ -39,8 +51,8 @@ function ClientCard({ c, onOpen }) {
         <span className={cn('rounded-full px-2.5 py-0.5 text-[12px] font-bold', c.priority === 'P1' ? 'bg-rose-500' : 'bg-emerald-500')}>{c.priority}</span>
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2 text-[12.5px]">
-        {c.demoUrl && (
-          <a href={c.demoUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 font-semibold"><ExternalLink className="h-3.5 w-3.5" />Demo</a>
+        {demoHref && (
+          <a href={demoHref} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 font-semibold"><ExternalLink className="h-3.5 w-3.5" />Demo</a>
         )}
         <button type="button" onClick={() => onOpen(c.id, 'invoices')} className="inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 font-semibold" aria-label={`${c.invoices.length} invoices`}>
           <Receipt className="h-3.5 w-3.5" />{c.invoices.length}
@@ -48,7 +60,8 @@ function ClientCard({ c, onOpen }) {
         <button type="button" onClick={() => onOpen(c.id, 'access')} className="inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 font-semibold" aria-label={`${c.access.length} users with access`}>
           <KeyRound className="h-3.5 w-3.5" />{c.access.length}
         </button>
-        <button type="button" onClick={() => onOpen(c.id, 'overview')} className="inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 font-semibold">
+        <button type="button" onClick={() => onOpen(c.id, 'overview')} className="inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 font-semibold"
+          aria-label={c.notes.length ? `${c.notes.length} ${c.notes.length === 1 ? 'note' : 'notes'}` : 'Add note'}>
           <NotebookPen className="h-3.5 w-3.5" />{c.notes.length || 'Note'}
         </button>
         <div className="ml-auto flex -space-x-2">{c.team.map((u) => <Avatar key={u} userId={u} size={26} />)}</div>
@@ -65,10 +78,13 @@ function Overview({ c }) {
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Status</span>
-          <LabelPicker value={c.status} options={CLIENT_STATUSES} allowEmpty={false} onChange={(v) => actions.updateClient(c.id, { status: v, group: v === 'Onboarding' ? 'Onboarding' : 'Active' })} />
+          <LabelPicker label="Status" value={c.status} options={CLIENT_STATUSES} allowEmpty={false} onChange={(v) => actions.updateClient(c.id, { status: v, group: v === 'Onboarding' ? 'Onboarding' : 'Active' })} />
         </div>
         <div className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Priority</span>
-          <LabelPicker value={c.priority} options={{ P1: '#e2445c', P2: '#10b981' }} allowEmpty={false} onChange={(v) => actions.updateClient(c.id, { priority: v })} />
+          <LabelPicker label="Priority" value={c.priority} options={{ P1: '#e2445c', P2: '#10b981' }} allowEmpty={false} onChange={(v) => actions.updateClient(c.id, { priority: v })} />
+        </div>
+        <div className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Owner</span>
+          <div><PersonPicker value={c.contact} onChange={(v) => actions.updateClient(c.id, { contact: v, team: Array.from(new Set([v, ...c.team].filter(Boolean))) })} /></div>
         </div>
       </div>
       <div className="grid gap-3">
@@ -104,28 +120,57 @@ function Overview({ c }) {
   );
 }
 
+const PRINT_COLS = 'grid-cols-[1fr_56px_96px_96px]';
+
 function InvoiceEditor({ c, inv }) {
   const { actions } = useStore();
+  const ref = useRef(null);
   const t = invoiceTotals(inv);
+  // Print just this invoice: flag it and the page for the print CSS, and clear the flags afterwards.
+  // (A data attribute, so React's className updates can't drop it mid-print.)
+  const printThis = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.setAttribute('data-print-target', '');
+    document.documentElement.classList.add('printing-invoice');
+    window.addEventListener('afterprint', () => {
+      el.removeAttribute('data-print-target');
+      document.documentElement.classList.remove('printing-invoice');
+    }, { once: true });
+    window.print();
+  };
   return (
-    <div className="rounded-2xl chip p-4 print-area">
+    <div ref={ref} className="invoice-card rounded-2xl chip p-4">
+      <div className="hidden print:block mb-4">
+        <div className="text-[20px] font-extrabold">{inv.status === 'Draft' ? 'Draft invoice' : SUPPLIER.abn ? 'Tax invoice' : 'Invoice'}</div>
+        <div>{SUPPLIER.name}{SUPPLIER.abn && ` · ABN ${SUPPLIER.abn}`}</div>
+      </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="font-extrabold">{inv.number}</div>
-          <div className="text-[12px] dimmer">{c.name} · Issued {shortDate(inv.issued)} · Due {shortDate(inv.due)}</div>
+          <div className="font-extrabold">{inv.number}<span className="hidden print:inline"> · {inv.status}</span></div>
+          <div className="text-[12px] dimmer">{c.name} · Issued {fullDate(inv.issued)} · Due {fullDate(inv.due)}</div>
         </div>
         <div className="w-[120px] no-print">
-          <LabelPicker value={inv.status} options={INVOICE_STATUS} allowEmpty={false} onChange={(v) => actions.updateInvoice(c.id, inv.id, { status: v })} />
+          <LabelPicker label={`${inv.number} status`} value={inv.status} options={INVOICE_STATUS} allowEmpty={false} onChange={(v) => actions.updateInvoice(c.id, inv.id, { status: v })} />
         </div>
       </div>
       <div className="mt-3 flex flex-col gap-2">
+        <div className={cn('hidden print:grid gap-2 text-[12px] font-bold', PRINT_COLS)}>
+          <span>Description</span><span className="text-right">Qty</span><span className="text-right">Rate (ex GST)</span><span className="text-right">Amount</span>
+        </div>
         {inv.lines.map((l) => (
-          <div key={l.id} className="grid grid-cols-[1fr_56px_96px_28px] gap-2 items-center">
-            <input className="field !py-1.5" placeholder="Description" aria-label="Description" value={l.desc} onChange={(e) => actions.updateInvoiceLine(c.id, inv.id, l.id, { desc: e.target.value })} />
-            <input className="field !py-1.5 !px-2 text-right tnum" aria-label="Quantity" inputMode="decimal" value={l.qty} onChange={(e) => actions.updateInvoiceLine(c.id, inv.id, l.id, { qty: e.target.value })} />
-            <input className="field !py-1.5 !px-2 text-right tnum" aria-label="Rate (ex GST)" inputMode="decimal" value={l.rate} onChange={(e) => actions.updateInvoiceLine(c.id, inv.id, l.id, { rate: e.target.value })} />
-            <button type="button" aria-label="Remove line" onClick={() => actions.removeInvoiceLine(c.id, inv.id, l.id)} className="no-print dimmer hover:text-white"><Trash2 className="h-4 w-4" /></button>
-          </div>
+          <Fragment key={l.id}>
+            <div className="grid grid-cols-[1fr_56px_96px_28px] gap-2 items-center print:hidden">
+              <input className="field !py-1.5" placeholder="Description" aria-label="Description" value={l.desc} onChange={(e) => actions.updateInvoiceLine(c.id, inv.id, l.id, { desc: e.target.value })} />
+              <input className={cn('field !py-1.5 !px-2 text-right tnum', isBadAmount(l.qty) && '!border-rose-400')} aria-label="Quantity" aria-invalid={isBadAmount(l.qty) || undefined} inputMode="decimal" value={l.qty} onChange={(e) => actions.updateInvoiceLine(c.id, inv.id, l.id, { qty: e.target.value })} />
+              <input className={cn('field !py-1.5 !px-2 text-right tnum', isBadAmount(l.rate) && '!border-rose-400')} aria-label="Rate (ex GST)" aria-invalid={isBadAmount(l.rate) || undefined} inputMode="decimal" value={l.rate} onChange={(e) => actions.updateInvoiceLine(c.id, inv.id, l.id, { rate: e.target.value })} />
+              <button type="button" aria-label="Remove line" onClick={() => actions.removeInvoiceLine(c.id, inv.id, l.id)} className="no-print dimmer hover:text-white"><Trash2 className="h-4 w-4" /></button>
+            </div>
+            <div className={cn('hidden print:grid gap-2 tnum', PRINT_COLS)}>
+              <span className="break-words">{l.desc}</span><span className="text-right">{l.qty}</span>
+              <span className="text-right">{money2(parseAmount(l.rate) || 0)}</span><span className="text-right">{money2(lineAmount(l))}</span>
+            </div>
+          </Fragment>
         ))}
         <button type="button" onClick={() => actions.addInvoiceLine(c.id, inv.id)} className="no-print self-start inline-flex items-center gap-1.5 rounded-full chip px-3 py-1 text-[12.5px]"><Plus className="h-3.5 w-3.5" />Line</button>
       </div>
@@ -134,7 +179,7 @@ function InvoiceEditor({ c, inv }) {
         <dt className="dimmer">GST 10%</dt><dd className="text-right">{money2(t.gst)}</dd>
         <dt className="font-bold">Total</dt><dd className="text-right font-extrabold">{money2(t.total)}</dd>
       </dl>
-      <button type="button" onClick={() => window.print()} className="no-print mt-3 inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 text-[12.5px] font-semibold"><Printer className="h-3.5 w-3.5" />Print / PDF</button>
+      <button type="button" onClick={printThis} className="no-print mt-3 inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 text-[12.5px] font-semibold"><Printer className="h-3.5 w-3.5" />Print / PDF</button>
     </div>
   );
 }
@@ -143,8 +188,8 @@ function Invoices({ c }) {
   const { actions } = useStore();
   return (
     <div className="flex flex-col gap-3">
-      <button type="button" onClick={() => actions.addInvoice(c.id)} className="btn-primary self-start inline-flex items-center gap-2 rounded-full px-4 h-10 font-semibold"><Plus className="h-4 w-4" />New invoice</button>
-      {c.invoices.length === 0 && <p className="dimmer">No invoices yet.</p>}
+      <button type="button" onClick={() => actions.addInvoice(c.id)} className="btn-primary no-print self-start inline-flex items-center gap-2 rounded-full px-4 h-10 font-semibold"><Plus className="h-4 w-4" />New invoice</button>
+      {c.invoices.length === 0 && <p className="dimmer no-print">No invoices yet.</p>}
       {c.invoices.map((inv) => <InvoiceEditor key={inv.id} c={c} inv={inv} />)}
     </div>
   );
@@ -228,7 +273,9 @@ export default function Clients() {
                 <tbody>
                   {clients.map((c) => (
                     <tr key={c.id} className="border-t rowline hover:bg-white/5 cursor-pointer" onClick={() => setOpen({ id: c.id, tab: 'overview' })}>
-                      <td className="p-3 font-semibold">{c.name}</td>
+                      <td className="p-3 font-semibold">
+                        <button type="button" onClick={(e) => { e.stopPropagation(); setOpen({ id: c.id, tab: 'overview' }); }} className="text-left hover:underline">{c.name}</button>
+                      </td>
                       <td className="p-2"><span className="pill" style={{ backgroundColor: CLIENT_STATUSES[c.status] }}>{c.status}</span></td>
                       <td className="p-3 dim">{c.sector}</td>
                       <td className="p-3 dim">{c.next}</td>

@@ -2,35 +2,52 @@ import { useState } from 'react';
 import { ArrowRight, Check } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { DEAL_STAGES } from '@/data/boards';
-import { KpiRow, Modal, PageHeader } from '@/components/ui';
+import { Avatar, KpiRow, Modal, PageHeader, PersonPicker } from '@/components/ui';
 import { compactMoney } from '@/lib/format';
 import { go } from '@/lib/router';
 import { cn } from '@/lib/cn';
 
 const PRIORITY_BG = { P1: 'bg-rose-500', P2: 'bg-amber-500', P3: 'bg-sky-500' };
 
+// '250,000' | '$250k' | '85 000' | '1.2m' -> number; '' -> 0; anything else -> null.
+function parseValue(s) {
+  const t = s.replace(/[$,\s]/g, '').toLowerCase();
+  if (!t) return 0;
+  const m = t.match(/^(\d+(?:\.\d+)?)([km])?$/);
+  if (!m) return null;
+  return Math.round(Number(m[1]) * (m[2] === 'm' ? 1e6 : m[2] === 'k' ? 1e3 : 1));
+}
+
 function NewDeal({ open, onClose }) {
-  const { actions } = useStore();
-  const [f, setF] = useState({ name: '', sector: '', value: '', priority: 'P2', contact: '', next: '' });
+  const { state, actions } = useStore();
+  const blank = () => ({ name: '', sector: '', value: '', priority: 'P2', contact: state.me, next: '' }); // contact = owner's user id
+  const [f, setF] = useState(blank);
+  const [err, setErr] = useState('');
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
   return (
     <Modal open={open} onClose={onClose} title="New deal">
       <form className="flex flex-col gap-3" onSubmit={(e) => {
         e.preventDefault();
         if (!f.name.trim()) return;
-        actions.addDeal({ ...f, name: f.name.trim(), value: Number(f.value) || 0 });
-        setF({ name: '', sector: '', value: '', priority: 'P2', contact: '', next: '' });
+        const value = parseValue(f.value);
+        if (value === null) { setErr('Enter an amount, e.g. 250000, 250,000 or 250k'); return; }
+        actions.addDeal({ ...f, name: f.name.trim(), value });
+        setF(blank()); setErr('');
         onClose();
       }}>
         <input className="field" placeholder="Organisation" aria-label="Organisation" value={f.name} onChange={set('name')} autoFocus />
         <div className="grid grid-cols-2 gap-3">
           <input className="field" placeholder="Sector" aria-label="Sector" value={f.sector} onChange={set('sector')} />
-          <input className="field" placeholder="Value (AUD / yr)" aria-label="Value" inputMode="numeric" value={f.value} onChange={set('value')} />
-          <input className="field" placeholder="Owner" aria-label="Owner" value={f.contact} onChange={set('contact')} />
+          <input className={cn('field', err && '!border-rose-400')} placeholder="Value (AUD / yr)" aria-label="Value" aria-invalid={!!err} inputMode="numeric" value={f.value}
+            onChange={(e) => { setErr(''); set('value')(e); }} />
+          <div className="field flex items-center gap-2 !py-1"><span className="dimmer">Owner</span>
+            <PersonPicker value={f.contact} onChange={(v) => setF((x) => ({ ...x, contact: v }))} size={26} />
+          </div>
           <select className="field" aria-label="Priority" value={f.priority} onChange={set('priority')}>
             <option>P1</option><option>P2</option><option>P3</option>
           </select>
         </div>
+        {err && <div role="alert" className="text-[12.5px] text-rose-200">{err}</div>}
         <input className="field" placeholder="Next step" aria-label="Next step" value={f.next} onChange={set('next')} />
         <button type="submit" className="btn-primary rounded-full h-11 font-semibold">Add to Opportunities</button>
       </form>
@@ -63,7 +80,7 @@ export default function Pipeline() {
               <div key={stage}
                 className={cn('rounded-[24px] glass p-3', over === stage && 'drag-over')}
                 onDragOver={(e) => { e.preventDefault(); setOver(stage); }}
-                onDragLeave={() => setOver(null)}
+                onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(null); }}
                 onDrop={(e) => { e.preventDefault(); setOver(null); const id = e.dataTransfer.getData('text/plain'); if (id) actions.moveDeal(id, stage); }}>
                 <div className="mb-3 flex items-center justify-between px-2 pt-1 font-bold">
                   {stage}<span className="rounded-full chip px-2 text-[12px] tnum">{items.length}</span>
@@ -78,7 +95,10 @@ export default function Pipeline() {
                       </div>
                       {d.next && <div className="mt-1 text-[12.5px] dim">{d.next}</div>}
                       <div className="mt-2 flex items-center justify-between gap-2">
-                        <span className="font-extrabold tnum text-[16px]">{compactMoney(d.value)}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-extrabold tnum text-[16px]">{compactMoney(d.value)}</span>
+                          {d.contact && <Avatar userId={d.contact} size={22} />}
+                        </div>
                         {stage === 'Won' && (d.clientId ? (
                           <button type="button" onClick={() => go('clients')} className="inline-flex items-center gap-1 rounded-full chip px-2.5 py-1 text-[12px] font-semibold">
                             <Check className="h-3.5 w-3.5" />Client
@@ -89,6 +109,11 @@ export default function Pipeline() {
                           </button>
                         ))}
                       </div>
+                      {/* Keyboard path for moving a deal; drag and drop stays as the mouse shortcut. */}
+                      <select className="field mt-2 !rounded-full !py-1 !px-2.5 text-[12px]" aria-label={`Stage for ${d.name}`} value={d.stage}
+                        draggable={false} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => actions.moveDeal(d.id, e.target.value)}>
+                        {DEAL_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
+                      </select>
                     </div>
                   ))}
                 </div>

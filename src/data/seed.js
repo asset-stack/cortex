@@ -1,11 +1,11 @@
 // Example data shaped on the Client Tracker, the monday.com Posting Schedule and the
 // master-layout whiteboard. Everything here is demo content until a real backend is wired in.
-// The repo is public: people's names and emails are placeholders (example.com). Never put
-// real client contact details in this file.
+// The repo is public: organisations, people, invoices and amounts are fictional and emails are
+// placeholders (example.com). Never put real client names or details in this file.
 
 let n = 0;
 const id = (p) => `${p}_${(++n).toString(36)}`;
-const now = Date.now();
+let now = Date.now(); // refreshed by createSeed, so Reset gives fresh relative times
 const hoursAgo = (h) => new Date(now - h * 3600e3).toISOString();
 
 export const USERS = [
@@ -59,7 +59,7 @@ function boards() {
         ] },
         { id: id('g'), name: 'November', color: '#ead9ff', items: [
           item('LinkedIn weekly engagement', { owner: '', status: 'Not started', type: 'Projects', channel: 'LinkedIn', approval: '', due: '2026-11-30' }),
-          item('Bunbury case study', { owner: 'sam', status: 'Not started', type: 'Projects', channel: 'Website', approval: 'Pending', due: '2026-11-14' }),
+          item('Westbay case study', { owner: 'sam', status: 'Not started', type: 'Projects', channel: 'Website', approval: 'Pending', due: '2026-11-14' }),
           item('G2 + Google reviews', { owner: 'david', status: 'Not started', type: 'Industry', channel: 'Reviews', approval: '', due: '2026-11-21' }),
           item('Council landing page (Upwork)', { owner: 'sam', status: 'Not started', type: 'Projects', channel: 'Content', approval: '', due: '2026-11-25' }),
         ] },
@@ -68,15 +68,16 @@ function boards() {
   };
 }
 
+// `contact` is the deal owner's user id.
 const deal = (name, sector, value, priority, stage, contact, next) => ({ id: id('d'), name, sector, value, priority, stage, contact, next });
 
 function clients() {
   return [
     {
-      id: id('c'), name: 'Bunbury Council', group: 'Onboarding', status: 'Onboarding', priority: 'P1',
+      id: id('c'), name: 'Westbay Council', group: 'Onboarding', status: 'Onboarding', priority: 'P1',
       next: 'David to finalise onboarding meeting', sector: 'Government', contact: 'dale', team: ['dale', 'david'],
       lastContact: '2026-05-19', demo: 'Live site with client', keyContact: 'Alex Taylor', email: 'alex.taylor@example.com',
-      demoUrl: 'https://bunburycouncil.assetstack.site', avatar: '#3b82f6',
+      demoUrl: 'https://demo.example.com', avatar: '#3b82f6',
       notes: [
         { id: id('n'), user: 'david', text: 'Kick-off went well. Alex wants the asset register imported before training.', ts: hoursAgo(72) },
         { id: id('n'), user: 'dale', text: 'Sent the capability statement and onboarding plan.', ts: hoursAgo(120) },
@@ -84,8 +85,8 @@ function clients() {
       ],
       tasks: [{ id: id('t'), text: 'Book onboarding meeting', done: false }, { id: id('t'), text: 'Import asset register', done: false }],
       invoices: [
-        { id: id('i'), number: 'INV-1042', issued: '2026-10-08', due: '2026-11-07', status: 'Sent', lines: [{ id: id('l'), desc: 'Onboarding – Phase 1', qty: 1, rate: 21818.18 }] },
-        { id: id('i'), number: 'INV-1038', issued: '2026-09-01', due: '2026-10-01', status: 'Overdue', lines: [{ id: id('l'), desc: 'Asset data capture', qty: 1, rate: 16818.18 }] },
+        { id: id('i'), number: 'INV-1017', issued: '2026-10-08', due: '2026-11-07', status: 'Sent', lines: [{ id: id('l'), desc: 'Onboarding – Phase 1', qty: 1, rate: 18450 }] },
+        { id: id('i'), number: 'INV-1012', issued: '2026-09-01', due: '2026-10-01', status: 'Overdue', lines: [{ id: id('l'), desc: 'Asset data capture', qty: 1, rate: 12600 }] },
       ],
       access: [
         { id: id('a'), name: 'Alex Taylor', email: 'alex.taylor@example.com', role: 'Client admin' },
@@ -95,75 +96,86 @@ function clients() {
       ],
     },
     {
-      id: id('c'), name: 'Catholic Diocese', group: 'Active', status: 'Proposal sent', priority: 'P1',
+      id: id('c'), name: 'Northside Diocese', group: 'Active', status: 'Proposal sent', priority: 'P1',
       next: 'Dale to send scope', sector: 'Healthcare', contact: 'dale', team: ['stu', 'david', 'dale'],
       lastContact: '2026-05-17', demo: 'Demo with client', keyContact: 'Jordan Price', email: 'jordan.price@example.com', demoUrl: '', avatar: '#6366f1',
       notes: [], tasks: [{ id: id('t'), text: 'Send scope document', done: false }], invoices: [],
       access: [{ id: id('a'), name: 'Jordan Price', email: 'jordan.price@example.com', role: 'Client admin' }, { id: id('a'), name: 'Stu', email: 'stu@example.com', role: 'AssetStack' }],
     },
     {
-      id: id('c'), name: 'Queensland Rail', group: 'Active', status: 'Passive', priority: 'P2',
-      next: 'Re-send demo link (blocked on QLD network)', sector: 'Transport', contact: 'nick', team: ['nick'],
+      id: id('c'), name: 'Coastal Rail', group: 'Active', status: 'Passive', priority: 'P2',
+      next: 'Re-send demo link (blocked on their network)', sector: 'Transport', contact: 'nick', team: ['nick'],
       lastContact: '2026-08-11', demo: 'Re-send demo link', keyContact: 'Casey Ng', email: 'casey.ng@example.com', demoUrl: '', avatar: '#f59e0b',
-      notes: [{ id: id('n'), user: 'nick', text: 'Spoke with PWI President (ARTC Senior PE). Previous demo link would not open on the QLD system.', ts: hoursAgo(1400) }],
+      notes: [{ id: id('n'), user: 'nick', text: 'Spoke with their senior engineer. Previous demo link would not open on their network.', ts: hoursAgo(1400) }],
       tasks: [], invoices: [], access: [],
     },
     {
-      id: id('c'), name: 'Acciona', group: 'Active', status: 'Active', priority: 'P2',
+      id: id('c'), name: 'Harbour Construction', group: 'Active', status: 'Active', priority: 'P2',
       next: 'Pilot running on two sites', sector: 'Construction', contact: 'stu', team: ['stu'],
       lastContact: '2026-10-02', demo: 'Pilot', keyContact: 'Jamie Park', email: 'jamie.park@example.com', demoUrl: '', avatar: '#ef4444',
       notes: [], tasks: [],
-      invoices: [{ id: id('i'), number: 'INV-1031', issued: '2026-09-12', due: '2026-10-12', status: 'Paid', lines: [{ id: id('l'), desc: 'Pilot licence', qty: 1, rate: 8909.09 }] }],
+      invoices: [{ id: id('i'), number: 'INV-1014', issued: '2026-09-12', due: '2026-10-12', status: 'Paid', lines: [{ id: id('l'), desc: 'Pilot licence', qty: 1, rate: 7250 }] }],
       access: [{ id: id('a'), name: 'Jamie Park', email: 'jamie.park@example.com', role: 'Client admin' }],
     },
   ];
 }
 
 function chat() {
-  const general = id('ch'), sales = id('ch'), marketing = id('ch'), bunbury = id('ch');
+  const general = id('ch'), sales = id('ch'), marketing = id('ch'), westbay = id('ch');
   return {
     channels: [
       { id: general, name: 'general', members: USERS.map((u) => u.id) },
       { id: sales, name: 'sales', members: ['david', 'dale', 'nick', 'stu'] },
       { id: marketing, name: 'marketing', members: ['david', 'sam'] },
-      { id: bunbury, name: 'bunbury-onboarding', members: ['david', 'dale', 'stu'] },
+      { id: westbay, name: 'westbay-onboarding', members: ['david', 'dale', 'stu'] },
     ],
     messages: [
       { id: id('m'), channel: general, user: 'stu', text: 'Morning all. Golf Day is Monday 12th, shirts arrive Friday.', ts: hoursAgo(26) },
       { id: id('m'), channel: general, user: 'sam', text: '@david can you approve the Dolphins & Colts post before lunch?', ts: hoursAgo(3) },
-      { id: id('m'), channel: sales, user: 'nick', text: 'QLD Rail still cannot open the demo link on their network. Trying a PDF walkthrough instead.', ts: hoursAgo(20) },
+      { id: id('m'), channel: sales, user: 'nick', text: 'Coastal Rail still cannot open the demo link on their network. Trying a PDF walkthrough instead.', ts: hoursAgo(20) },
       { id: id('m'), channel: sales, user: 'dale', text: '@nick send it through, I will add it to the Diocese scope pack too.', ts: hoursAgo(19) },
-      { id: id('m'), channel: bunbury, user: 'dale', text: '@david Alex is free Thursday 10am for the onboarding meeting.', ts: hoursAgo(1.5) },
-      { id: id('m'), channel: marketing, user: 'sam', text: 'Case study draft for Bunbury is in the Marketing board.', ts: hoursAgo(48) },
+      { id: id('m'), channel: westbay, user: 'dale', text: '@david Alex is free Thursday 10am for the onboarding meeting.', ts: hoursAgo(1.5) },
+      { id: id('m'), channel: marketing, user: 'sam', text: 'Case study draft for Westbay is in the Marketing board.', ts: hoursAgo(48) },
     ],
-    lastRead: { [general]: hoursAgo(10), [sales]: hoursAgo(1), [marketing]: hoursAgo(1), [bunbury]: hoursAgo(5) },
+    // Read positions are per viewer: { [userId]: { [channelId]: ts } }.
+    lastRead: Object.fromEntries(USERS.map((u) => [u.id, { [general]: hoursAgo(10), [sales]: hoursAgo(1), [marketing]: hoursAgo(1), [westbay]: hoursAgo(5) }])),
   };
 }
 
 export function createSeed() {
   n = 0;
+  now = Date.now();
+  const seedBoards = boards();
+  const deals = [
+    deal('City of Lakeside', 'Government', 70000, 'P2', 'Opportunities', 'dale', 'Intro call'),
+    deal('Riverbend Water', 'Utilities', 220000, 'P1', 'Opportunities', 'david', 'Send digital twin brief'),
+    deal('Coastal Rail', 'Transport', 160000, 'P2', 'Opportunities', 'nick', 'PDF walkthrough'),
+    deal('Shire of Southcliff', 'Government', 55000, 'P2', 'First meetings', 'dale', 'Thursday 10am walkthrough'),
+    deal('Eastgate University Facilities', 'Education', 90000, 'P3', 'First meetings', 'stu', 'Confirm campus list'),
+    deal('Northside Diocese', 'Healthcare', 110000, 'P1', 'Demos', 'dale', 'Scope document'),
+    deal('Harbour Construction', 'Construction', 190000, 'P1', 'Demos', 'stu', 'Pilot review'),
+    deal('Westbay Council', 'Government', 130000, 'P1', 'Won', 'david', 'Onboarding'),
+  ];
+  const seedClients = clients();
+  // Won deals that already have a client start linked, so Pipeline shows "Client", not "Make client".
+  deals.forEach((dl) => {
+    if (dl.stage !== 'Won') return;
+    const c = seedClients.find((x) => x.name === dl.name);
+    if (c) dl.clientId = c.id;
+  });
   return {
     version: 1,
     me: 'david',
     users: USERS,
-    boards: boards(),
-    deals: [
-      deal('City of Rockingham', 'Government', 85000, 'P2', 'Opportunities', 'Dale', 'Intro call'),
-      deal('Sydney Water', 'Utilities', 240000, 'P1', 'Opportunities', 'David', 'Send digital twin brief'),
-      deal('Queensland Rail', 'Transport', 180000, 'P2', 'Opportunities', 'Nick', 'PDF walkthrough'),
-      deal('Shire of Busselton', 'Government', 60000, 'P2', 'First meetings', 'Dale', 'Thursday 10am walkthrough'),
-      deal('UniSA Facilities', 'Education', 95000, 'P3', 'First meetings', 'Stu', 'Confirm campus list'),
-      deal('Catholic Diocese', 'Healthcare', 120000, 'P1', 'Demos', 'Dale', 'Scope document'),
-      deal('Acciona', 'Construction', 210000, 'P1', 'Demos', 'Stu', 'Pilot review'),
-      deal('Bunbury Council', 'Government', 145000, 'P1', 'Won', 'David', 'Onboarding'),
-    ],
-    clients: clients(),
+    boards: seedBoards,
+    deals,
+    clients: seedClients,
     contacts: [
-      { id: id('p'), name: 'Alex Taylor', org: 'Bunbury Council', email: 'alex.taylor@example.com', stage: 'Won', status: 'Replied', last: hoursAgo(48) },
-      { id: id('p'), name: 'Jordan Price', org: 'Catholic Diocese', email: 'jordan.price@example.com', stage: 'Demo', status: 'Opened', last: hoursAgo(96) },
-      { id: id('p'), name: 'Riley Shaw', org: 'Sydney Water', email: 'riley.shaw@example.com', stage: 'Opportunity', status: 'Sent', last: hoursAgo(6) },
-      { id: id('p'), name: 'Casey Ng', org: 'Queensland Rail', email: 'casey.ng@example.com', stage: 'Opportunity', status: 'No reply', last: hoursAgo(216) },
-      { id: id('p'), name: 'Morgan Hale', org: 'Shire of Busselton', email: 'morgan.hale@example.com', stage: 'First meeting', status: 'Replied', last: hoursAgo(24) },
+      { id: id('p'), name: 'Alex Taylor', org: 'Westbay Council', email: 'alex.taylor@example.com', stage: 'Won', status: 'Replied', last: hoursAgo(48) },
+      { id: id('p'), name: 'Jordan Price', org: 'Northside Diocese', email: 'jordan.price@example.com', stage: 'Demo', status: 'Opened', last: hoursAgo(96) },
+      { id: id('p'), name: 'Riley Shaw', org: 'Riverbend Water', email: 'riley.shaw@example.com', stage: 'Opportunity', status: 'Sent', last: hoursAgo(6) },
+      { id: id('p'), name: 'Casey Ng', org: 'Coastal Rail', email: 'casey.ng@example.com', stage: 'Opportunity', status: 'No reply', last: hoursAgo(216) },
+      { id: id('p'), name: 'Morgan Hale', org: 'Shire of Southcliff', email: 'morgan.hale@example.com', stage: 'First meeting', status: 'Replied', last: hoursAgo(24) },
     ],
     emails: [
       { id: id('e'), kind: 'reply', contact: 'Morgan Hale', subject: 'Re: Asset register walkthrough', snippet: 'Thursday 10am works, can you include our facilities lead?', ts: hoursAgo(24) },

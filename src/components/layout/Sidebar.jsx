@@ -14,14 +14,51 @@ export const NAV = [
   { id: 'clients', label: 'Clients', icon: Building2 },
 ];
 
-export default function Sidebar({ route }) {
+/** Avatar button with the "Viewing as" picker. Shared by Sidebar and MobileNav. */
+function WhoSwitcher({ showName = true, align = 'left' }) {
   const { state, actions } = useStore();
   const users = useUsers();
+  const [anchor, setAnchor] = useState(null);
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" ref={setAnchor} onClick={() => setOpen((o) => !o)} className={cn('flex items-center gap-2 rounded-full hover:bg-white/10', showName && 'pr-2')} aria-label="Switch team member" title="Switch team member (demo)">
+        <Avatar userId={state.me} size={30} />{showName && <span className="font-semibold">{users[state.me]?.name}</span>}
+      </button>
+      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={200} align={align}>
+        <div className="px-2 pb-1 pt-0.5 text-[12px] dimmer">Viewing as (demo)</div>
+        {state.users.map((u) => (
+          <button key={u.id} type="button" onClick={() => { actions.setMe(u.id); setOpen(false); }}
+            className={cn('flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-white/10', u.id === state.me && 'bg-white/15')}>
+            <Avatar userId={u.id} size={24} ring={false} />{u.name}
+          </button>
+        ))}
+      </Popover>
+    </>
+  );
+}
+
+/** Reset button with its confirm dialog. Shared by Sidebar and MobileNav. */
+function ResetDemo() {
+  const { actions } = useStore();
+  const [confirm, setConfirm] = useState(false);
+  return (
+    <>
+      <button type="button" onClick={() => setConfirm(true)} aria-label="Reset demo data" title="Reset demo data" className="grid h-8 w-8 place-items-center rounded-full hover:bg-white/10"><RotateCcw className="h-4 w-4" /></button>
+      <Modal open={confirm} onClose={() => setConfirm(false)} title="Reset demo data?">
+        <p className="dim">This replaces everything in this browser with the original example data.</p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={() => setConfirm(false)} className="rounded-full chip px-4 h-10 font-semibold">Cancel</button>
+          <button type="button" onClick={() => { actions.reset(); setConfirm(false); }} className="btn-primary rounded-full px-4 h-10 font-semibold">Reset</button>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+export default function Sidebar({ route }) {
   const [collapsed, setCollapsed] = useState(false);
   const [level, setLevel] = useState('Admin');
-  const [anchor, setAnchor] = useState(null);
-  const [whoOpen, setWhoOpen] = useState(false);
-  const [confirmReset, setConfirmReset] = useState(false);
 
   return (
     <aside className={cn('glass glass-rim hidden md:flex shrink-0 flex-col m-4 mr-0 rounded-[30px] transition-[width] duration-300', collapsed ? 'w-[76px]' : 'w-[220px]')}>
@@ -49,46 +86,31 @@ export default function Sidebar({ route }) {
       )}
 
       <div className={cn('flex items-center gap-2 px-4 pb-4 pt-1', collapsed ? 'flex-col' : 'justify-between')}>
-        <button type="button" ref={setAnchor} onClick={() => setWhoOpen((o) => !o)} className="flex items-center gap-2 rounded-full pr-2 hover:bg-white/10" aria-label="Switch team member" title="Switch team member (demo)">
-          <Avatar userId={state.me} size={30} />{!collapsed && <span className="font-semibold">{users[state.me]?.name}</span>}
-        </button>
+        <WhoSwitcher showName={!collapsed} />
         <div className={cn('flex gap-1 dim', collapsed && 'flex-col')}>
           <button type="button" onClick={() => setCollapsed((c) => !c)} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} className="grid h-8 w-8 place-items-center rounded-full hover:bg-white/10">
             {collapsed ? <PanelLeftOpen className="h-[18px] w-[18px]" /> : <PanelLeftClose className="h-[18px] w-[18px]" />}
           </button>
-          <button type="button" onClick={() => setConfirmReset(true)} aria-label="Reset demo data" title="Reset demo data" className="grid h-8 w-8 place-items-center rounded-full hover:bg-white/10"><RotateCcw className="h-4 w-4" /></button>
+          <ResetDemo />
           <button type="button" aria-label="Log out" title="Sign-in arrives with the backend" className="grid h-8 w-8 place-items-center rounded-full hover:bg-white/10"><LogOut className="h-[18px] w-[18px]" /></button>
         </div>
       </div>
-
-      <Popover anchor={anchor} open={whoOpen} onClose={() => setWhoOpen(false)} width={200} align="left">
-        <div className="px-2 pb-1 pt-0.5 text-[12px] dimmer">Viewing as (demo)</div>
-        {state.users.map((u) => (
-          <button key={u.id} type="button" onClick={() => { actions.setMe(u.id); setWhoOpen(false); }}
-            className={cn('flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-white/10', u.id === state.me && 'bg-white/15')}>
-            <Avatar userId={u.id} size={24} ring={false} />{u.name}
-          </button>
-        ))}
-      </Popover>
-      <Modal open={confirmReset} onClose={() => setConfirmReset(false)} title="Reset demo data?">
-        <p className="dim">This replaces everything in this browser with the original example data.</p>
-        <div className="mt-4 flex justify-end gap-2">
-          <button type="button" onClick={() => setConfirmReset(false)} className="rounded-full chip px-4 h-10 font-semibold">Cancel</button>
-          <button type="button" onClick={() => { actions.reset(); setConfirmReset(false); }} className="btn-primary rounded-full px-4 h-10 font-semibold">Reset</button>
-        </div>
-      </Modal>
     </aside>
   );
 }
 
 export function MobileNav({ route }) {
   return (
-    <div className="glass md:hidden sticky top-0 z-20 rounded-b-[24px] px-4 py-3">
-      <nav className="flex gap-1.5 overflow-x-auto text-[13px]">
+    <div className="glass md:hidden sticky top-0 z-20 rounded-b-[24px] px-4 py-3 flex items-center gap-2">
+      <nav className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto text-[13px]">
         {NAV.map(({ id, label }) => (
           <a key={id} href={`#/${id}`} aria-current={route === id ? 'page' : undefined} className={cn('whitespace-nowrap rounded-full px-3 py-1.5', route === id ? 'chip-on font-semibold' : 'chip')}>{label}</a>
         ))}
       </nav>
+      <div className="flex shrink-0 items-center gap-1 dim">
+        <ResetDemo />
+        <WhoSwitcher showName={false} align="right" />
+      </div>
     </div>
   );
 }

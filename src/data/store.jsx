@@ -1,24 +1,50 @@
 // Single data seam for the app. Today it persists to localStorage; swap the
 // load/save pair (and make actions async) to move to Supabase or monday.com.
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createSeed } from './seed';
+import { emailSnippet, localYmd } from '@/lib/format';
 
 const KEY = 'assetstack-ops:v1';
 const uid = (p) => `${p}_${Math.random().toString(36).slice(2, 9)}`;
+const normName = (s) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+// Bring v1 data saved by older builds up to the current shape.
+function migrate(data) {
+  // lastRead used to be one map shared by everyone; it is now { [userId]: { [channelId]: ts } }.
+  const lr = data.lastRead || {};
+  if (Object.values(lr).some((v) => typeof v === 'string')) data.lastRead = Object.fromEntries(data.users.map((u) => [u.id, { ...lr }]));
+  // Deal owners used to be display names; they are now user ids.
+  (data.deals || []).forEach((dl) => {
+    const u = data.users.find((x) => x.id === dl.contact || normName(x.name) === normName(dl.contact));
+    if (u) dl.contact = u.id;
+  });
+  return data;
+}
 
 function load() {
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const data = JSON.parse(raw);
-      if (data?.version === 1) return data;
+      if (data?.version === 1) return migrate(data);
     }
   } catch { /* storage unavailable: fall back to seed */ }
   return createSeed();
 }
 
-function save(state) {
-  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* ignore quota / private mode */ }
+// A send moves a New / No reply contact to Sent (never downgrading Opened or Replied). Found by id;
+// entries from older builds only carry the name.
+function markContactSent(d, entry) {
+  const c = entry.contactId ? d.contacts.find((x) => x.id === entry.contactId) : d.contacts.find((x) => x.name === entry.contact);
+  if (!c) return;
+  if (c.status === 'New' || c.status === 'No reply') c.status = 'Sent';
+  c.last = new Date().toISOString();
+}
+
+// Chat read positions are per viewer and only move forward.
+function markSeen(d, chId, ts) {
+  const mine = d.lastRead[d.me] || {};
+  d.lastRead[d.me] = { ...mine, [chId]: (mine[chId] || '') > ts ? mine[chId] : ts };
 }
 
 const StoreContext = createContext(null);
@@ -33,7 +59,29 @@ function findItem(state, boardKey, itemId) {
 
 export function StoreProvider({ children }) {
   const [state, setState] = useState(load);
-  useEffect(() => { save(state); }, [state]);
+  const lastRaw = useRef(null); // last JSON written here or adopted from another tab
+
+  useEffect(() => {
+    const raw = JSON.stringify(state);
+    if (raw === lastRaw.current) return; // don't echo state that just arrived from another tab
+    lastRaw.current = raw;
+    try { localStorage.setItem(KEY, raw); } catch { /* ignore quota / private mode */ }
+  }, [state]);
+
+  // Keep tabs in sync: adopt what another tab saved instead of later overwriting it with stale state.
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key !== KEY || !e.newValue || e.newValue === lastRaw.current) return;
+      try {
+        const data = JSON.parse(e.newValue);
+        if (data?.version !== 1) return;
+        lastRaw.current = e.newValue;
+        setState(migrate(data));
+      } catch { /* ignore malformed payload */ }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   // mutate(draft => { ... }) — clone-and-modify keeps every action a few lines.
   const mutate = useCallback((fn) => setState((s) => { const d = structuredClone(s); fn(d); return d; }), []);
@@ -57,6 +105,7 @@ export function StoreProvider({ children }) {
       const { values, ...rest } = patch;
       Object.assign(item, rest);
       if (values) Object.assign(item.values, values);
+      if (values && 'status' in values) item.done = item.values.status === 'Done'; // done always follows status
     }),
     deleteItem: (board, itemId) => mutate((d) => {
       d.boards[board].groups.forEach((g) => { g.items = g.items.filter((i) => i.id !== itemId); });
@@ -84,11 +133,13 @@ export function StoreProvider({ children }) {
       mutate((d) => {
         const deal = d.deals.find((v) => v.id === dealId);
         if (!deal) return;
-        const existing = d.clients.find((c) => c.name === deal.name);
+        const existing = d.clients.find((c) => normName(c.name) === normName(deal.name));
         if (existing) { deal.clientId = existing.id; return; }
+        // The deal owner keeps the client; fall back to whoever converts it.
+        const owner = d.users.some((u) => u.id === deal.contact) ? deal.contact : d.me;
         d.clients.unshift({
           id: clientId, name: deal.name, group: 'Onboarding', status: 'Onboarding', priority: deal.priority === 'P3' ? 'P2' : deal.priority,
-          next: 'Schedule onboarding kick-off', sector: deal.sector, contact: d.me, team: [d.me], lastContact: new Date().toISOString().slice(0, 10),
+          next: 'Schedule onboarding kick-off', sector: deal.sector, contact: owner, team: Array.from(new Set([owner, d.me])), lastContact: localYmd(),
           demo: '', keyContact: '', email: '', demoUrl: '', avatar: '#3b82f6', notes: [], tasks: [], invoices: [], access: [],
         });
         deal.clientId = clientId;
@@ -99,7 +150,7 @@ export function StoreProvider({ children }) {
     addClient: (name) => mutate((d) => {
       d.clients.unshift({
         id: uid('c'), name, group: 'Onboarding', status: 'Onboarding', priority: 'P2', next: '', sector: '', contact: d.me, team: [d.me],
-        lastContact: new Date().toISOString().slice(0, 10), demo: '', keyContact: '', email: '', demoUrl: '', avatar: '#3b82f6',
+        lastContact: localYmd(), demo: '', keyContact: '', email: '', demoUrl: '', avatar: '#3b82f6',
         notes: [], tasks: [], invoices: [], access: [],
       });
     }),
@@ -117,9 +168,9 @@ export function StoreProvider({ children }) {
       const all = d.clients.flatMap((c) => c.invoices.map((i) => parseInt(i.number.replace(/\D/g, ''), 10) || 0));
       const next = Math.max(1000, ...all) + 1;
       const issued = new Date();
-      const due = new Date(issued.getTime() + 30 * 864e5);
+      const due = new Date(issued.getFullYear(), issued.getMonth(), issued.getDate() + 30); // calendar days, safe across DST
       d.clients.find((x) => x.id === clientId)?.invoices.unshift({
-        id: uid('i'), number: `INV-${next}`, issued: issued.toISOString().slice(0, 10), due: due.toISOString().slice(0, 10),
+        id: uid('i'), number: `INV-${next}`, issued: localYmd(issued), due: localYmd(due),
         status: 'Draft', lines: [{ id: uid('l'), desc: 'Platform licence', qty: 1, rate: 0 }],
       });
     }),
@@ -146,19 +197,31 @@ export function StoreProvider({ children }) {
     // Outreach
     logEmail: (entry) => mutate((d) => {
       d.emails.unshift({ id: uid('e'), ts: new Date().toISOString(), ...entry });
-      const c = d.contacts.find((x) => x.name === entry.contact);
-      if (c && entry.kind === 'sent') { c.status = 'Sent'; c.last = new Date().toISOString(); }
+      if (entry.kind === 'sent') markContactSent(d, entry);
     }),
     queueApproval: (entry) => mutate((d) => { d.approvals.unshift({ id: uid('ap'), ts: new Date().toISOString(), by: d.me, ...entry }); }),
+    approveApproval: (apId) => mutate((d) => {
+      const a = d.approvals.find((x) => x.id === apId);
+      if (!a) return; // already handled
+      d.approvals = d.approvals.filter((x) => x.id !== apId);
+      const entry = { kind: 'sent', contactId: a.contactId, contact: a.contact, subject: a.subject, snippet: emailSnippet(a.body) };
+      d.emails.unshift({ id: uid('e'), ts: new Date().toISOString(), ...entry });
+      markContactSent(d, entry);
+    }),
+    discardApproval: (apId) => mutate((d) => { d.approvals = d.approvals.filter((x) => x.id !== apId); }),
     addContact: (contact) => mutate((d) => { d.contacts.unshift({ id: uid('p'), stage: 'Opportunity', status: 'New', last: new Date().toISOString(), ...contact }); }),
 
     // Team chat
     createChannel: (name, members) => {
       const chId = uid('ch');
       mutate((d) => {
-        const clean = name.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'group';
+        const base = name.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'group';
+        // Keep names distinguishable: a taken name gets -2, -3 …
+        const taken = new Set(d.channels.map((c) => c.name));
+        let clean = base;
+        for (let i = 2; taken.has(clean); i++) clean = `${base}-${i}`;
         d.channels.push({ id: chId, name: clean, members: Array.from(new Set([d.me, ...members])) });
-        d.lastRead[chId] = new Date().toISOString();
+        markSeen(d, chId, new Date().toISOString());
       });
       return chId;
     },
@@ -169,9 +232,14 @@ export function StoreProvider({ children }) {
     sendMessage: (chId, text) => mutate((d) => {
       const ts = new Date().toISOString();
       d.messages.push({ id: uid('m'), channel: chId, user: d.me, text, ts });
-      d.lastRead[chId] = ts;
+      markSeen(d, chId, ts);
     }),
-    markRead: (chId) => mutate((d) => { d.lastRead[chId] = new Date().toISOString(); }),
+    // Read up to the newest message even if its timestamp is ahead of this clock, so unread reaches 0.
+    markRead: (chId) => mutate((d) => {
+      const now = new Date().toISOString();
+      const newest = d.messages.reduce((t, m) => (m.channel === chId && m.ts > t ? m.ts : t), '');
+      markSeen(d, chId, newest > now ? newest : now);
+    }),
   }), [mutate]);
 
   const value = useMemo(() => ({ state, actions }), [state, actions]);

@@ -19,3 +19,5 @@ export function useRoute() {
 }
 
 export const go = (r) => { window.location.hash = `/${r}`; };
+// Query part of the hash: #/marketing?item=it_3 → hashParam('item') === 'it_3'.
+export const hashParam = (k) => new URLSearchParams(window.location.hash.split('?')[1] || '').get(k);

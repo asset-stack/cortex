@@ -25,38 +25,73 @@ export function Avatar({ userId, size = 28, ring = true, className }) {
   );
 }
 
-/** Popover rendered in a portal with fixed positioning, so table scroll containers can't clip it. */
+const FOCUSABLE = 'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+const focusAnchor = (anchor) => (anchor?.matches?.(FOCUSABLE) ? anchor : anchor?.querySelector?.(FOCUSABLE))?.focus({ preventScroll: true });
+
+/** Popover rendered in a portal with fixed positioning, so table scroll containers can't clip it.
+ *  Inside a Drawer/Modal it portals into that dialog, so it stays in the aria-modal subtree. */
 export function Popover({ anchor, open, onClose, children, width = 200, align = 'center' }) {
   const ref = useRef(null);
   const [pos, setPos] = useState(null);
+  // Uses the real height to flip above the anchor, and follows the anchor on scroll and resize.
   useLayoutEffect(() => {
-    if (!open || !anchor) return;
-    const r = anchor.getBoundingClientRect();
-    let left = align === 'center' ? r.left + r.width / 2 - width / 2 : align === 'right' ? r.right - width : r.left;
-    left = Math.max(12, Math.min(left, window.innerWidth - width - 12));
-    const below = r.bottom + 6;
-    const top = below + 260 > window.innerHeight ? Math.max(12, r.top - 6 - 260) : below;
-    setPos({ left, top });
+    if (!open || !anchor) { setPos(null); return; }
+    const update = () => {
+      const r = anchor.getBoundingClientRect();
+      const h = ref.current?.offsetHeight || 0;
+      let left = align === 'center' ? r.left + r.width / 2 - width / 2 : align === 'right' ? r.right - width : r.left;
+      left = Math.max(12, Math.min(left, window.innerWidth - width - 12));
+      const below = r.bottom + 6;
+      const top = below + h + 12 > window.innerHeight ? Math.max(12, r.top - 6 - h) : below;
+      setPos({ left, top });
+    };
+    update();
+    const onScroll = (e) => { if (!ref.current?.contains(e.target)) update(); };
+    window.addEventListener('scroll', onScroll, true); // capture: also catches <main>, drawer bodies and table scrollers
+    window.addEventListener('resize', update);
+    return () => { window.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', update); };
   }, [open, anchor, width, align]);
   useEffect(() => {
     if (!open) return;
     const onDown = (e) => { if (ref.current && !ref.current.contains(e.target) && !anchor?.contains(e.target)) onClose(); };
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    // Capture phase + preventDefault: Escape closes only this popover, not the Drawer/Modal under it.
+    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose(); } };
     document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+    document.addEventListener('keydown', onKey, true);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey, true); };
   }, [open, onClose, anchor]);
-  if (!open || !pos) return null;
+  // Focus the current (or first) option once placed; if the popover closes with focus inside it
+  // (a pick, Escape), hand focus back to the anchor instead of dropping it to <body>.
+  const placed = !!pos;
+  useEffect(() => {
+    if (!open || !placed) return;
+    const el = ref.current;
+    (el?.querySelector('[aria-selected="true"], [aria-pressed="true"]') || el?.querySelector(FOCUSABLE))?.focus({ preventScroll: true });
+    return () => { if (!document.activeElement || document.activeElement === document.body) focusAnchor(anchor); };
+  }, [open, placed, anchor]);
+  // Arrow keys, Home and End move between options; Tab closes and carries on from the anchor.
+  const onKeyDown = (e) => {
+    const items = [...ref.current.querySelectorAll(FOCUSABLE)];
+    const i = items.indexOf(document.activeElement);
+    const move = (k) => { e.preventDefault(); items[(k + items.length) % items.length]?.focus({ preventScroll: true }); };
+    if (e.key === 'ArrowDown') move(i + 1);
+    else if (e.key === 'ArrowUp') move(i < 0 ? -1 : i - 1);
+    else if (e.key === 'Home') move(0);
+    else if (e.key === 'End') move(-1);
+    else if (e.key === 'Tab') { focusAnchor(anchor); onClose(); }
+  };
+  if (!open) return null;
   return createPortal(
-    <div ref={ref} className="glass-dark fixed z-[80] rounded-2xl p-2" style={{ left: pos.left, top: pos.top, width }}>
+    <div ref={ref} onKeyDown={onKeyDown} className="glass-dark fixed z-[80] rounded-2xl p-2"
+      style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, width, visibility: pos ? 'visible' : 'hidden' }}>
       {children}
     </div>,
-    document.body,
+    anchor?.closest?.('[role="dialog"]') || document.body,
   );
 }
 
-/** Monday-style coloured cell; click to pick a value. */
-export function LabelPicker({ value, options, onChange, className, allowEmpty = true }) {
+/** Monday-style coloured cell; click to pick a value. `label` names the field for screen readers. */
+export function LabelPicker({ value, options, onChange, className, allowEmpty = true, label }) {
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
   const color = value ? options[value] : null;
@@ -69,18 +104,20 @@ export function LabelPicker({ value, options, onChange, className, allowEmpty = 
         className={cn('pill w-full', !value && 'pill-empty', className)}
         style={color ? { backgroundColor: color } : undefined}
         aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={label ? `${label}: ${value || 'Not set'}` : (value || 'Not set')}
       >
-        {value || ' '}
+        {value || ' '}
       </button>
       <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={180}>
-        <div role="listbox" className="flex flex-col gap-1.5">
-          {Object.entries(options).map(([label, c]) => (
-            <button key={label} type="button" className="pill" style={{ backgroundColor: c }} onClick={() => { onChange(label); setOpen(false); }}>
-              {label}
+        <div role="listbox" aria-label={label} className="flex flex-col gap-1.5">
+          {Object.entries(options).map(([opt, c]) => (
+            <button key={opt} type="button" role="option" aria-selected={opt === value} className="pill" style={{ backgroundColor: c }} onClick={() => { onChange(opt); setOpen(false); }}>
+              {opt}
             </button>
           ))}
           {allowEmpty && (
-            <button type="button" className="pill pill-empty dim" onClick={() => { onChange(''); setOpen(false); }}>Clear</button>
+            <button type="button" role="option" aria-selected={false} className="pill pill-empty dim" onClick={() => { onChange(''); setOpen(false); }}>Clear</button>
           )}
         </div>
       </Popover>
@@ -92,33 +129,36 @@ export function PersonPicker({ value, onChange, size = 28 }) {
   const { state } = useStore();
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
+  const owner = state.users.find((u) => u.id === value);
   return (
     <>
-      <button type="button" ref={setAnchor} onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }} aria-label="Change owner" className="rounded-full">
+      <button type="button" ref={setAnchor} onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        aria-label={`Owner: ${owner?.name || 'Unassigned'}. Change owner`} aria-haspopup="true" aria-expanded={open} className="rounded-full">
         <Avatar userId={value} size={size} />
       </button>
       <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={190}>
         <div className="flex flex-col">
           {state.users.map((u) => (
-            <button key={u.id} type="button" onClick={() => { onChange(u.id); setOpen(false); }}
+            <button key={u.id} type="button" aria-pressed={value === u.id} onClick={() => { onChange(u.id); setOpen(false); }}
               className={cn('flex items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-white/10', value === u.id && 'bg-white/15')}>
               <Avatar userId={u.id} size={24} ring={false} />{u.name}
             </button>
           ))}
-          <button type="button" onClick={() => { onChange(''); setOpen(false); }} className="rounded-xl px-2 py-1.5 text-left dimmer hover:bg-white/10">Unassigned</button>
+          <button type="button" aria-pressed={!value} onClick={() => { onChange(''); setOpen(false); }} className="rounded-xl px-2 py-1.5 text-left dimmer hover:bg-white/10">Unassigned</button>
         </div>
       </Popover>
     </>
   );
 }
 
+/** Toggle-button group (not tabs: there are no tab panels or arrow-key roving). */
 export function Segmented({ options, value, onChange, label }) {
   return (
-    <div role="tablist" aria-label={label} className="inline-flex rounded-full chip p-1 text-[13px]">
+    <div role="group" aria-label={label} className="inline-flex rounded-full chip p-1 text-[13px]">
       {options.map(({ id, icon: Icon, label: l }) => (
-        <button key={id} role="tab" aria-selected={value === id} type="button" onClick={() => onChange(id)}
+        <button key={id} type="button" aria-pressed={value === id} aria-label={l} title={Icon ? l : undefined} onClick={() => onChange(id)}
           className={cn('inline-flex items-center gap-1.5 rounded-full px-3 py-1.5', value === id ? 'chip-on font-semibold' : 'dim')}>
-          {Icon && <Icon className="h-4 w-4" />}<span className={cn(Icon && 'hidden sm:inline')}>{l}</span>
+          {Icon && <Icon className="h-4 w-4" aria-hidden="true" />}<span className={cn(Icon && 'hidden sm:inline')}>{l}</span>
         </button>
       ))}
     </div>
@@ -170,25 +210,52 @@ export function KpiRow({ items }) {
   );
 }
 
-export function Drawer({ open, onClose, title, children, width = 520 }) {
+// Dialog focus: remember the trigger, make the page behind (#root) inert, focus the panel unless a
+// child autoFocused, and give focus back to the trigger when the dialog closes. #root rather than a
+// Tab trap, so popovers portalled next to the panel stay reachable.
+let openDialogs = 0;
+function useDialogFocus(open, panelRef) {
+  const returnTo = useRef(null);
+  // Captured during render: a child's autoFocus runs before this component's effects.
+  if (open && !returnTo.current) returnTo.current = document.activeElement;
+  if (!open) returnTo.current = null;
   useEffect(() => {
     if (!open) return;
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const prev = returnTo.current;
+    const root = document.getElementById('root');
+    if (root && openDialogs++ === 0) root.setAttribute('inert', '');
+    const panel = panelRef.current;
+    if (panel && !panel.contains(document.activeElement)) panel.focus({ preventScroll: true });
+    return () => {
+      if (root && --openDialogs === 0) root.removeAttribute('inert');
+      // Only when focus went away with the dialog (not on StrictMode's effect re-run).
+      const lost = !document.activeElement || document.activeElement === document.body;
+      if (lost && prev?.isConnected && typeof prev.focus === 'function') prev.focus({ preventScroll: true });
+    };
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+export function Drawer({ open, onClose, title, children, width = 520 }) {
+  const panel = useRef(null);
+  useDialogFocus(open, panel);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) onClose(); };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [open, onClose]);
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-[60]">
-      <div className="absolute inset-0 bg-black/30 no-print" onClick={onClose} />
-      <aside role="dialog" aria-modal="true" aria-label={title}
-        className="glass-dark print-area absolute right-3 top-3 bottom-3 flex flex-col rounded-[28px] overflow-hidden"
+    <div role="dialog" aria-modal="true" aria-label={title} className="drawer-shell fixed inset-0 z-[60]">
+      <div className="absolute inset-0 bg-black/30 no-print" aria-hidden="true" onClick={onClose} />
+      <aside ref={panel} tabIndex={-1}
+        className="drawer-panel glass-dark absolute right-3 top-3 bottom-3 flex flex-col rounded-[28px] overflow-hidden"
         style={{ width: `min(${width}px, calc(100vw - 24px))` }}>
         <div className="flex items-center justify-between gap-3 px-6 pt-5 pb-3 no-print">
           <h2 className="text-[20px] font-extrabold truncate">{title}</h2>
           <button type="button" onClick={onClose} aria-label="Close" className="grid h-9 w-9 place-items-center rounded-full chip"><X className="h-4 w-4" /></button>
         </div>
-        <div className="flex-1 overflow-y-auto scroll-thin px-6 pb-6">{children}</div>
+        <div className="drawer-body flex-1 overflow-y-auto scroll-thin px-6 pb-6">{children}</div>
       </aside>
     </div>,
     document.body,
@@ -196,17 +263,19 @@ export function Drawer({ open, onClose, title, children, width = 520 }) {
 }
 
 export function Modal({ open, onClose, title, children, width = 440 }) {
+  const panel = useRef(null);
+  useDialogFocus(open, panel);
   useEffect(() => {
     if (!open) return;
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) onClose(); };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [open, onClose]);
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-[70] grid place-items-center p-4">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-label={title} className="glass-dark relative rounded-[26px] p-6" style={{ width: `min(${width}px, 100%)` }}>
+    <div role="dialog" aria-modal="true" aria-label={title} className="fixed inset-0 z-[70] grid place-items-center p-4">
+      <div className="absolute inset-0 bg-black/40" aria-hidden="true" onClick={onClose} />
+      <div ref={panel} tabIndex={-1} className="glass-dark relative rounded-[26px] p-6" style={{ width: `min(${width}px, 100%)` }}>
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-[18px] font-extrabold">{title}</h2>
           <button type="button" onClick={onClose} aria-label="Close" className="grid h-8 w-8 place-items-center rounded-full chip"><X className="h-4 w-4" /></button>

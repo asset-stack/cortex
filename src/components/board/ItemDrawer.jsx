@@ -8,14 +8,19 @@ export default function ItemDrawer({ boardKey, schema, itemId, onClose }) {
   const { state, actions } = useStore();
   const users = useUsers();
   const [update, setUpdate] = useState('');
+  const [nameDraft, setNameDraft] = useState(null); // holds a blank name locally so '' never reaches the store
   const item = itemId ? state.boards[boardKey].groups.flatMap((g) => g.items).find((i) => i.id === itemId) : null;
 
   return (
-    <Drawer open={!!item} onClose={onClose} title={item?.name || ''}>
+    <Drawer open={!!item} onClose={onClose} title={item?.name.trim() || 'Untitled task'}>
       {item && (
         <div className="flex flex-col gap-6">
-          <input value={item.name} onChange={(e) => actions.updateItem(boardKey, item.id, { name: e.target.value })}
-            aria-label="Task name" className="field text-[16px] font-semibold" />
+          <input value={nameDraft ?? item.name} aria-label="Task name" className="field text-[16px] font-semibold"
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v.trim()) { setNameDraft(null); actions.updateItem(boardKey, item.id, { name: v }); } else setNameDraft(v);
+            }}
+            onBlur={() => setNameDraft(null)} />
 
           <div className="grid grid-cols-2 gap-3">
             {schema.columns.map((c) => (
@@ -25,7 +30,7 @@ export default function ItemDrawer({ boardKey, schema, itemId, onClose }) {
                 {c.type === 'date' && <input type="date" value={item.values[c.key] || ''} className="field !py-1.5" aria-label={c.label}
                   onChange={(e) => actions.updateItem(boardKey, item.id, { values: { [c.key]: e.target.value } })} />}
                 {(c.type === 'status' || c.type === 'label') && (
-                  <LabelPicker value={item.values[c.key] || ''} options={c.options} allowEmpty={c.type !== 'status'}
+                  <LabelPicker label={c.label} value={item.values[c.key] || ''} options={c.options} allowEmpty={c.type !== 'status'}
                     onChange={(v) => actions.updateItem(boardKey, item.id, { values: { [c.key]: v }, ...(c.key === 'status' ? { done: v === 'Done' } : {}) })} />
                 )}
               </div>

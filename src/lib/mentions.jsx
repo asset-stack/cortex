@@ -3,13 +3,17 @@ import { Fragment } from 'react';
 
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// '@' only counts at the start or after whitespace/punctuation, so URLs and emails don't match.
+// A capture group rather than a lookbehind keeps older Safari working.
+const LEAD = '(^|[^\\w@./:-])';
+
 export function mentionRegex(users) {
   const names = users.map((u) => escape(u.name)).sort((a, b) => b.length - a.length);
-  return new RegExp(`@(${names.join('|')}|here)\\b`, 'gi');
+  return new RegExp(`${LEAD}@(${names.join('|')}|here)\\b`, 'gi');
 }
 
 export function mentionsUser(text, user) {
-  const re = new RegExp(`@(${escape(user.name)}|here)\\b`, 'i');
+  const re = new RegExp(`${LEAD}@(${escape(user.name)}|here)\\b`, 'i');
   return re.test(text);
 }
 
@@ -19,9 +23,10 @@ export function MessageText({ text, users, me }) {
   let last = 0;
   let m;
   while ((m = re.exec(text))) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
-    const isMe = m[1].toLowerCase() === 'here' || m[1].toLowerCase() === me.name.toLowerCase();
-    parts.push(<span key={m.index} className={isMe ? 'mention mention-me' : 'mention'}>@{m[1]}</span>);
+    const start = m.index + m[1].length;
+    if (start > last) parts.push(text.slice(last, start));
+    const isMe = m[2].toLowerCase() === 'here' || m[2].toLowerCase() === me.name.toLowerCase();
+    parts.push(<span key={start} className={isMe ? 'mention mention-me' : 'mention'}>@{m[2]}</span>);
     last = m.index + m[0].length;
   }
   if (last < text.length) parts.push(text.slice(last));
