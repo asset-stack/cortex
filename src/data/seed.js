@@ -1,5 +1,7 @@
-// Example data drawn from the Client Tracker, the monday.com Posting Schedule and the
+// Example data shaped on the Client Tracker, the monday.com Posting Schedule and the
 // master-layout whiteboard. Everything here is demo content until a real backend is wired in.
+// The repo is public: people's names and emails are placeholders (example.com). Never put
+// real client contact details in this file.
 
 let n = 0;
 const id = (p) => `${p}_${(++n).toString(36)}`;
@@ -73,10 +75,10 @@ function clients() {
     {
       id: id('c'), name: 'Bunbury Council', group: 'Onboarding', status: 'Onboarding', priority: 'P1',
       next: 'David to finalise onboarding meeting', sector: 'Government', contact: 'dale', team: ['dale', 'david'],
-      lastContact: '2026-05-19', demo: 'Live site with client', keyContact: 'Terri Coyne', email: 'tcoyne@bunbury.wa.gov.au',
+      lastContact: '2026-05-19', demo: 'Live site with client', keyContact: 'Alex Taylor', email: 'alex.taylor@example.com',
       demoUrl: 'https://bunburycouncil.assetstack.site', avatar: '#3b82f6',
       notes: [
-        { id: id('n'), user: 'david', text: 'Kick-off went well. Terri wants the asset register imported before training.', ts: hoursAgo(72) },
+        { id: id('n'), user: 'david', text: 'Kick-off went well. Alex wants the asset register imported before training.', ts: hoursAgo(72) },
         { id: id('n'), user: 'dale', text: 'Sent the capability statement and onboarding plan.', ts: hoursAgo(120) },
         { id: id('n'), user: 'stu', text: 'Data template shared with their GIS team.', ts: hoursAgo(200) },
       ],
@@ -86,33 +88,33 @@ function clients() {
         { id: id('i'), number: 'INV-1038', issued: '2026-09-01', due: '2026-10-01', status: 'Overdue', lines: [{ id: id('l'), desc: 'Asset data capture', qty: 1, rate: 16818.18 }] },
       ],
       access: [
-        { id: id('a'), name: 'Terri Coyne', email: 'tcoyne@bunbury.wa.gov.au', role: 'Client admin' },
-        { id: id('a'), name: 'Field team (3 seats)', email: 'assets@bunbury.wa.gov.au', role: 'Field user' },
-        { id: id('a'), name: 'David', email: 'david@assetstackai.com', role: 'AssetStack' },
-        { id: id('a'), name: 'Dale', email: 'dale@assetstackai.com', role: 'AssetStack' },
+        { id: id('a'), name: 'Alex Taylor', email: 'alex.taylor@example.com', role: 'Client admin' },
+        { id: id('a'), name: 'Field team (3 seats)', email: 'field-team@example.com', role: 'Field user' },
+        { id: id('a'), name: 'David', email: 'david@example.com', role: 'AssetStack' },
+        { id: id('a'), name: 'Dale', email: 'dale@example.com', role: 'AssetStack' },
       ],
     },
     {
       id: id('c'), name: 'Catholic Diocese', group: 'Active', status: 'Proposal sent', priority: 'P1',
       next: 'Dale to send scope', sector: 'Healthcare', contact: 'dale', team: ['stu', 'david', 'dale'],
-      lastContact: '2026-05-17', demo: 'Demo with client', keyContact: 'Mark Ellis', email: 'mark.ellis@diocese.org.au', demoUrl: '', avatar: '#6366f1',
+      lastContact: '2026-05-17', demo: 'Demo with client', keyContact: 'Jordan Price', email: 'jordan.price@example.com', demoUrl: '', avatar: '#6366f1',
       notes: [], tasks: [{ id: id('t'), text: 'Send scope document', done: false }], invoices: [],
-      access: [{ id: id('a'), name: 'Mark Ellis', email: 'mark.ellis@diocese.org.au', role: 'Client admin' }, { id: id('a'), name: 'Stu', email: 'stu@assetstackai.com', role: 'AssetStack' }],
+      access: [{ id: id('a'), name: 'Jordan Price', email: 'jordan.price@example.com', role: 'Client admin' }, { id: id('a'), name: 'Stu', email: 'stu@example.com', role: 'AssetStack' }],
     },
     {
       id: id('c'), name: 'Queensland Rail', group: 'Active', status: 'Passive', priority: 'P2',
       next: 'Re-send demo link (blocked on QLD network)', sector: 'Transport', contact: 'nick', team: ['nick'],
-      lastContact: '2026-08-11', demo: 'Re-send demo link', keyContact: 'Jason Lee', email: 'jason.lee@qr.com.au', demoUrl: '', avatar: '#f59e0b',
+      lastContact: '2026-08-11', demo: 'Re-send demo link', keyContact: 'Casey Ng', email: 'casey.ng@example.com', demoUrl: '', avatar: '#f59e0b',
       notes: [{ id: id('n'), user: 'nick', text: 'Spoke with PWI President (ARTC Senior PE). Previous demo link would not open on the QLD system.', ts: hoursAgo(1400) }],
       tasks: [], invoices: [], access: [],
     },
     {
       id: id('c'), name: 'Acciona', group: 'Active', status: 'Active', priority: 'P2',
       next: 'Pilot running on two sites', sector: 'Construction', contact: 'stu', team: ['stu'],
-      lastContact: '2026-10-02', demo: 'Pilot', keyContact: 'Laura Chen', email: 'l.chen@acciona.com.au', demoUrl: '', avatar: '#ef4444',
+      lastContact: '2026-10-02', demo: 'Pilot', keyContact: 'Jamie Park', email: 'jamie.park@example.com', demoUrl: '', avatar: '#ef4444',
       notes: [], tasks: [],
       invoices: [{ id: id('i'), number: 'INV-1031', issued: '2026-09-12', due: '2026-10-12', status: 'Paid', lines: [{ id: id('l'), desc: 'Pilot licence', qty: 1, rate: 8909.09 }] }],
-      access: [{ id: id('a'), name: 'Laura Chen', email: 'l.chen@acciona.com.au', role: 'Client admin' }],
+      access: [{ id: id('a'), name: 'Jamie Park', email: 'jamie.park@example.com', role: 'Client admin' }],
     },
   ];
 }
@@ -131,7 +133,7 @@ function chat() {
       { id: id('m'), channel: general, user: 'sam', text: '@david can you approve the Dolphins & Colts post before lunch?', ts: hoursAgo(3) },
       { id: id('m'), channel: sales, user: 'nick', text: 'QLD Rail still cannot open the demo link on their network. Trying a PDF walkthrough instead.', ts: hoursAgo(20) },
       { id: id('m'), channel: sales, user: 'dale', text: '@nick send it through, I will add it to the Diocese scope pack too.', ts: hoursAgo(19) },
-      { id: id('m'), channel: bunbury, user: 'dale', text: '@david Terri is free Thursday 10am for the onboarding meeting.', ts: hoursAgo(1.5) },
+      { id: id('m'), channel: bunbury, user: 'dale', text: '@david Alex is free Thursday 10am for the onboarding meeting.', ts: hoursAgo(1.5) },
       { id: id('m'), channel: marketing, user: 'sam', text: 'Case study draft for Bunbury is in the Marketing board.', ts: hoursAgo(48) },
     ],
     lastRead: { [general]: hoursAgo(10), [sales]: hoursAgo(1), [marketing]: hoursAgo(1), [bunbury]: hoursAgo(5) },
@@ -157,16 +159,16 @@ export function createSeed() {
     ],
     clients: clients(),
     contacts: [
-      { id: id('p'), name: 'Terri Coyne', org: 'Bunbury Council', email: 'tcoyne@bunbury.wa.gov.au', stage: 'Won', status: 'Replied', last: hoursAgo(48) },
-      { id: id('p'), name: 'Mark Ellis', org: 'Catholic Diocese', email: 'mark.ellis@diocese.org.au', stage: 'Demo', status: 'Opened', last: hoursAgo(96) },
-      { id: id('p'), name: 'Priya Nair', org: 'Sydney Water', email: 'priya.nair@sydneywater.com.au', stage: 'Opportunity', status: 'Sent', last: hoursAgo(6) },
-      { id: id('p'), name: 'Jason Lee', org: 'Queensland Rail', email: 'jason.lee@qr.com.au', stage: 'Opportunity', status: 'No reply', last: hoursAgo(216) },
-      { id: id('p'), name: 'Anna Russo', org: 'Shire of Busselton', email: 'a.russo@busselton.wa.gov.au', stage: 'First meeting', status: 'Replied', last: hoursAgo(24) },
+      { id: id('p'), name: 'Alex Taylor', org: 'Bunbury Council', email: 'alex.taylor@example.com', stage: 'Won', status: 'Replied', last: hoursAgo(48) },
+      { id: id('p'), name: 'Jordan Price', org: 'Catholic Diocese', email: 'jordan.price@example.com', stage: 'Demo', status: 'Opened', last: hoursAgo(96) },
+      { id: id('p'), name: 'Riley Shaw', org: 'Sydney Water', email: 'riley.shaw@example.com', stage: 'Opportunity', status: 'Sent', last: hoursAgo(6) },
+      { id: id('p'), name: 'Casey Ng', org: 'Queensland Rail', email: 'casey.ng@example.com', stage: 'Opportunity', status: 'No reply', last: hoursAgo(216) },
+      { id: id('p'), name: 'Morgan Hale', org: 'Shire of Busselton', email: 'morgan.hale@example.com', stage: 'First meeting', status: 'Replied', last: hoursAgo(24) },
     ],
     emails: [
-      { id: id('e'), kind: 'reply', contact: 'Anna Russo', subject: 'Re: Asset register walkthrough', snippet: 'Thursday 10am works, can you include our facilities lead?', ts: hoursAgo(24) },
-      { id: id('e'), kind: 'open', contact: 'Mark Ellis', subject: 'Proposal – asset program', snippet: 'Opened 3 times', ts: hoursAgo(96) },
-      { id: id('e'), kind: 'sent', contact: 'Priya Nair', subject: 'Digital twin for treatment sites', snippet: 'Sequence: Utilities intro, step 1 of 4', ts: hoursAgo(6) },
+      { id: id('e'), kind: 'reply', contact: 'Morgan Hale', subject: 'Re: Asset register walkthrough', snippet: 'Thursday 10am works, can you include our facilities lead?', ts: hoursAgo(24) },
+      { id: id('e'), kind: 'open', contact: 'Jordan Price', subject: 'Proposal – asset program', snippet: 'Opened 3 times', ts: hoursAgo(96) },
+      { id: id('e'), kind: 'sent', contact: 'Riley Shaw', subject: 'Digital twin for treatment sites', snippet: 'Sequence: Utilities intro, step 1 of 4', ts: hoursAgo(6) },
     ],
     sequences: [
       { id: id('q'), name: 'Council intro', steps: 4, enrolled: 18, replyRate: 0.22 },

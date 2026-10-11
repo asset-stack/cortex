@@ -6,6 +6,8 @@ site (`AssetLanding`) and from the signed-in product (bunburycouncil.assetstack.
 ## Rules
 - All data access goes through `src/data/store.jsx` (`useStore()` → `{ state, actions }`). Don't read or write
   localStorage anywhere else; that file is the seam for the future backend.
+- **This repo (asset-stack/cortex) is public.** Never commit real client names, emails, invoices or
+  credentials. Seed people use `@example.com` placeholders.
 - Seed and demo data live in `src/data/seed.js`. Board columns and label colours live in `src/data/boards.js`.
 - No secrets in the frontend. Gmail and Claude calls go through `src/integrations/*`, which stay stubs until
   a server endpoint exists.

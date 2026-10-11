@@ -1,5 +1,7 @@
 # AssetStack Ops
 
+Repository: `asset-stack/cortex`. It is public, so the demo data uses placeholder people at `example.com`.
+
 The internal operations tool for AssetStack staff. One workspace covers the six departments plus team chat:
 
 | Area | What it does |
@@ -14,6 +16,7 @@ The internal operations tool for AssetStack staff. One workspace covers the six 
 ## Running it
 
 ```bash
+git clone https://github.com/asset-stack/cortex.git && cd cortex
 npm install
 npm run dev       # http://localhost:5173
 npm run build     # static output in dist/
