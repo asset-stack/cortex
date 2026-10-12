@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import { useRoute } from '@/lib/router';
+import { useIsAdmin } from '@/data/store';
 import Sidebar, { MobileNav } from '@/components/layout/Sidebar';
 import ChatDock from '@/components/chat/ChatDock';
 import Board from '@/components/board/Board';
@@ -7,6 +8,7 @@ import MyWork from '@/pages/MyWork';
 import Pipeline from '@/pages/Pipeline';
 import Clients from '@/pages/Clients';
 import Outreach from '@/pages/Outreach';
+import Settings from '@/pages/Settings';
 
 function Page({ route }) {
   switch (route) {
@@ -17,12 +19,15 @@ function Page({ route }) {
     case 'pipeline': return <Pipeline />;
     case 'clients': return <Clients />;
     case 'outreach': return <Outreach />;
+    case 'settings': return <Settings />;
     default: return <MyWork />;
   }
 }
 
 export default function App() {
-  const route = useRoute();
+  const isAdmin = useIsAdmin();
+  const hashRoute = useRoute();
+  const route = hashRoute === 'settings' && !isAdmin ? 'work' : hashRoute; // Settings is admin-only
   const scroller = useRef(null);
   const dock = useRef(null);
   const [dockH, setDockH] = useState(0);

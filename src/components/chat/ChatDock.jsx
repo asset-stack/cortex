@@ -46,7 +46,7 @@ function GroupModal({ open, onClose, onCreate }) {
         <fieldset>
           <legend className="text-[12px] dimmer mb-2">Members</legend>
           <div className="grid grid-cols-2 gap-1.5">
-            {state.users.filter((u) => u.id !== state.me).map((u) => (
+            {state.users.filter((u) => u.id !== state.me && u.active !== false).map((u) => (
               <label key={u.id} className={cn('relative flex items-center gap-2 rounded-xl px-2.5 py-2 cursor-pointer has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-white', members.includes(u.id) ? 'bg-white/20' : 'hover:bg-white/10')}>
                 <input type="checkbox" className="sr-only" checked={members.includes(u.id)} onChange={() => toggle(u.id)} />
                 <Avatar userId={u.id} size={24} ring={false} />{u.name}
@@ -64,7 +64,7 @@ function AddMembersModal({ channel, onClose }) {
   const { state, actions } = useStore();
   const [picked, setPicked] = useState([]);
   if (!channel) return null;
-  const others = state.users.filter((u) => !channel.members.includes(u.id));
+  const others = state.users.filter((u) => !channel.members.includes(u.id) && u.active !== false);
   return (
     <Modal open onClose={onClose} title={`Add to #${channel.name}`}>
       {others.length === 0 ? <p className="dimmer">Everyone is already in this group.</p> : (
@@ -110,7 +110,7 @@ function Composer({ channel, onSend }) {
 
   const candidates = useMemo(() => {
     if (!query) return [];
-    const pool = [...state.users.filter((u) => u.id !== state.me), { id: 'here', name: 'here', initials: '@' }];
+    const pool = [...state.users.filter((u) => u.id !== state.me && u.active !== false), { id: 'here', name: 'here', initials: '@' }];
     return pool.filter((u) => u.name.toLowerCase().startsWith(query.q.toLowerCase())).slice(0, 6);
   }, [query, state.users, state.me]);
 

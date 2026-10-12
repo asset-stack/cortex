@@ -1,7 +1,7 @@
 // Tiny hash router: #/clients, #/marketing … keeps the build static.
 import { useEffect, useState } from 'react';
 
-export const ROUTES = ['work', 'projects', 'admin', 'outreach', 'marketing', 'pipeline', 'clients'];
+export const ROUTES = ['work', 'projects', 'admin', 'outreach', 'marketing', 'pipeline', 'clients', 'settings'];
 
 const read = () => {
   const r = window.location.hash.replace(/^#\/?/, '').split('?')[0];

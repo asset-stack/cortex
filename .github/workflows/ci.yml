@@ -33,4 +33,7 @@ jobs:
             exit 1
           fi
       - run: npm ci
+      # Sync mapping + migration/RLS checks (PGlite, no network).
+      - run: npm test
+      # No Supabase env vars here, so this is the demo-mode build.
       - run: npm run build

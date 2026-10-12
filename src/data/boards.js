@@ -64,5 +64,3 @@ export const CLIENT_GROUPS = [
 ];
 export const INVOICE_STATUS = { Draft: '#9aa3b5', Sent: '#579bfc', Paid: '#00c875', Overdue: '#e2445c' };
 export const GST_RATE = 0.1;
-// Printed on invoices. Fill in the ABN before sending tax invoices; without one the print says "Invoice".
-export const SUPPLIER = { name: 'AssetStack', abn: '' };

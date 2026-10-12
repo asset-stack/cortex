@@ -1,0 +1,15 @@
+# Cloudflare Pages response headers (copied to dist/ by Vite). Not applied by `npm run dev` / `preview`.
+# The CSP allows this origin, Google Fonts and Supabase (REST + realtime). A new external origin has to be
+# added here or it is blocked; inline scripts are never allowed.
+
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co; frame-ancestors 'none'; base-uri 'self'; form-action 'self'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  X-Frame-Options: DENY
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+
+# Vite fingerprints everything in /assets, so it can be cached for a year.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

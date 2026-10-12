@@ -1,8 +1,11 @@
 const aud = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 });
 const aud2 = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2 });
+const audUnit = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 2, maximumFractionDigits: 4 });
 
 export const money = (n) => aud.format(n || 0);
 export const money2 = (n) => aud2.format(n || 0);
+// Unit prices keep up to 4 decimals, so a $0.125 rate isn't printed as $0.13.
+export const unitMoney = (n) => audUnit.format(n || 0);
 const trim = (s) => s.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
 // The unit is picked after rounding, so 999,500 reads "$1M" rather than "$1000k".
 export const compactMoney = (n) => {
@@ -30,11 +33,21 @@ export function fullDate(iso) {
   return parseDay(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+// Whole calendar days from one YYYY-MM-DD to another (in UTC, so daylight saving can't shift it); null if either is blank or invalid.
+export function daysBetween(from, to) {
+  const utc = (s) => { const [y, m, d] = String(s || '').slice(0, 10).split('-').map(Number); return Date.UTC(y, m - 1, d); };
+  const n = Math.round((utc(to) - utc(from)) / 864e5);
+  return Number.isFinite(n) ? n : null;
+}
+
 // YYYY-MM-DD in local time (toISOString gives the UTC day, which is yesterday on Australian mornings).
 export const localYmd = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
+// Blank or unparseable (a contact never emailed) reads as a dash, not "NaNd".
 export function ago(iso) {
-  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  const t = iso ? new Date(iso).getTime() : NaN;
+  if (Number.isNaN(t)) return '—';
+  const s = (Date.now() - t) / 1000;
   if (s < 60) return 'now';
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
@@ -68,12 +81,36 @@ export function emailSnippet(body) {
 export const parseAmount = (v) => Number(String(v ?? '').trim().replace(/[$,\s]/g, ''));
 export const isBadAmount = (v) => String(v ?? '').trim() !== '' && !Number.isFinite(parseAmount(v));
 
-// Work in whole cents so the printed lines, subtotal, GST and total always add up.
-const lineCents = (l) => Math.round((parseAmount(l.qty) || 0) * (parseAmount(l.rate) || 0) * 100);
-export const lineAmount = (l) => lineCents(l) / 100;
+// Work in whole cents so the printed lines, subtotal, GST and total always add up. The product is cleaned to 6
+// decimals first, so float error can't pull an exact half cent (1 × $1.005) below .5 and round it down.
+const lineCents = (l) => Math.round(Number(((parseAmount(l.qty) || 0) * (parseAmount(l.rate) || 0) * 100).toFixed(6)));
 
+// GST is 10% of the subtotal, rounded once (half a cent rounds up). `lines` (same order as inv.lines) splits
+// that GST across the lines for the tax invoice: each line's GST rounded down, and the cents left over go to
+// the lines with the largest remainders, so the GST column adds up to exactly the GST total.
 export function invoiceTotals(inv) {
-  const sub = inv.lines.reduce((t, l) => t + lineCents(l), 0);
-  const gst = Math.round(sub / 10); // 10% GST, half a cent rounds up
-  return { subtotal: sub / 100, gst: gst / 100, total: (sub + gst) / 100 };
+  const cents = inv.lines.map(lineCents);
+  const sub = cents.reduce((t, x) => t + x, 0);
+  const gst = Math.round(sub / 10);
+  const rem = cents.map((x) => ((x % 10) + 10) % 10); // tenths of a cent, 0–9 (also for credit lines)
+  const share = cents.map((x, i) => (x - rem[i]) / 10);
+  let left = gst - share.reduce((t, x) => t + x, 0);
+  rem.map((r, i) => [r, i]).sort((a, b) => b[0] - a[0] || a[1] - b[1]).forEach(([r, i]) => {
+    if (left > 0 && r > 0) { share[i] += 1; left -= 1; }
+  });
+  return {
+    subtotal: sub / 100, gst: gst / 100, total: (sub + gst) / 100,
+    lines: cents.map((x, i) => ({ ex: x / 100, gst: share[i] / 100, inc: (x + share[i]) / 100 })),
+  };
+}
+
+// ABN as the ATO prints it (12 345 678 901) and BSB as 000-000; anything else is shown as typed.
+const digitsOf = (v) => String(v ?? '').replace(/\D/g, '');
+export function formatAbn(v) {
+  const d = digitsOf(v);
+  return d.length === 11 ? d.replace(/^(\d{2})(\d{3})(\d{3})(\d{3})$/, '$1 $2 $3 $4') : String(v ?? '').trim();
+}
+export function formatBsb(v) {
+  const d = digitsOf(v);
+  return d.length === 6 ? `${d.slice(0, 3)}-${d.slice(3)}` : String(v ?? '').trim();
 }
