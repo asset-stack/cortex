@@ -43,6 +43,20 @@ export function daysBetween(from, to) {
 // YYYY-MM-DD in local time (toISOString gives the UTC day, which is yesterday on Australian mornings).
 export const localYmd = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
+// The business time zone: invoice dates and other team-wide "today"s (public.team_today() in the database).
+export const TEAM_TIMEZONE = 'Australia/Sydney';
+
+// The date (YYYY-MM-DD) in a time zone; this browser's date for an unknown zone.
+export function ymdIn(timezone, d = new Date()) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-AU', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d);
+    const part = (type) => parts.find((p) => p.type === type).value;
+    return `${part('year')}-${part('month')}-${part('day')}`;
+  } catch {
+    return localYmd(d);
+  }
+}
+
 // Blank or unparseable (a contact never emailed) reads as a dash, not "NaNd".
 export function ago(iso) {
   const t = iso ? new Date(iso).getTime() : NaN;
@@ -146,3 +160,29 @@ export const paidTowards = (payments, invoiceId) => (payments || [])
 
 // What is still owing on an invoice (inc GST) after its payments; never below zero.
 export const owingOn = (inv, payments) => Math.max(0, Math.round(invoiceTotals(inv).total * 100 - paidTowards(payments, inv.id) * 100) / 100);
+
+// This browser's IANA time zone ('' if the browser won't say; some report Etc/Unknown, which Postgres refuses).
+export function browserTimezone() {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    return zone === 'Etc/Unknown' ? '' : zone;
+  } catch {
+    return '';
+  }
+}
+
+// The current time in a time zone, e.g. "9:12 am" ('' for an unknown zone).
+export function localTime(timezone, at = new Date()) {
+  if (!timezone) return '';
+  try {
+    return at.toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', timeZone: timezone });
+  } catch {
+    return '';
+  }
+}
+
+// A person's city and current local time, e.g. "Tbilisi · 9:12 am" ('' for an unknown zone).
+export function localClock(timezone, at = new Date()) {
+  const time = localTime(timezone, at);
+  return time && `${timezone.split('/').pop().replace(/_/g, ' ')} · ${time}`;
+}

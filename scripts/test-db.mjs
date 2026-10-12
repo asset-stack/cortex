@@ -1,7 +1,8 @@
 // Runs supabase/migrations/0001_cortex.sql in PGlite (Postgres compiled to WASM, no network) on top
 // of a minimal Supabase stub and checks the sign-up gate, triggers and row-level security as
 // different users; then applies 0002_team_workflow.sql on top of the rows those checks leave behind (as on
-// the live database) and checks roles, module access, the board merge, automations, finance and storage.
+// the live database) and checks roles, module access, the board merge, automations, finance and storage; then
+// 0003_timezones_projects_view.sql (Sydney business day, per-person time zones, Projects view-only for staff).
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -12,6 +13,7 @@ import { TABLES, flatten, normalizeRow } from '../src/data/backend/schema.js';
 const root = new URL('../', import.meta.url);
 const migration = await readFile(new URL('supabase/migrations/0001_cortex.sql', root), 'utf8');
 const migration2 = await readFile(new URL('supabase/migrations/0002_team_workflow.sql', root), 'utf8');
+const migration3 = await readFile(new URL('supabase/migrations/0003_timezones_projects_view.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -1229,12 +1231,149 @@ async function phase2({ alice, boss, early, carol, client, item, invoice, projec
     { anonDenied, rpcGrants });
 
   await as(null);
+  return { alice, boss, david, hello, carol, projectsActive, marketingGroup, staffItem };
+}
+
+// Phase 3: 0003_timezones_projects_view.sql on top of 0002 and the rows above ------------------------------
+
+async function applyMigration3() {
+  await as(null);
+  try {
+    await db.exec(migration3);
+    return null;
+  } catch (e) {
+    await db.exec('rollback').catch(() => {});
+    return e.message;
+  }
+}
+
+async function phase3({ alice, boss, david, hello, carol, projectsActive, marketingGroup, staffItem }) {
+  // 24. 0003 on a database that already holds rows -----------------------------------------------------------
+
+  const first = await applyMigration3();
+  const body = migration3.replace(/--.*$/gm, '').trim();
+  check('24. 0003 runs on top of 0002 and its rows, as one transaction', first === null && /^begin;/i.test(body) && /commit;$/i.test(body), first);
+  if (first) return;
+  const second = await applyMigration3();
+  check('24. 0003 re-runs cleanly', second === null, second);
+  if (second) return;
+
+  const zones = await rows('select timezone, count(*)::int as n from profiles group by timezone');
+  const newcomer = await signUp('new.example@assetstackai.com', 'New Example');
+  const newZone = (await one('select timezone from profiles where id = $1', [newcomer])).timezone;
+  check('24. existing profiles and new sign-ups start in Australia/Sydney',
+    zones.length === 1 && zones[0].timezone === 'Australia/Sydney' && newZone === 'Australia/Sydney', { zones, newZone });
+
+  // 25. Time zones ---------------------------------------------------------------------------------------------
+
+  // The sync engine saves a profile as an update of the whole row (src/data/backend/sync.js).
+  const saveProfile = async (user, patch) => error(`update profiles set ${Object.keys(patch).map((k, i) => `${k} = $${i + 2}`).join(', ')}
+    where id = $1`, [user, ...Object.values(patch)]);
+  await as(alice);
+  const own = await saveProfile(alice, { name: 'Alice Example', timezone: 'Asia/Manila' });
+  const unknown = await saveProfile(alice, { timezone: 'Mars/Olympus' });
+  const blank = await saveProfile(alice, { timezone: '' });
+  const othersZone = await affected("update profiles set timezone = 'Asia/Tbilisi' where id = $1", [boss]);
+  await as(boss);
+  const byAdmin = await saveProfile(boss, { timezone: 'Asia/Tbilisi' });
+  const read = Object.fromEntries((await rows('select id, timezone from profiles where id = any($1)', [[alice, boss]])).map((r) => [r.id, r.timezone]));
+  const back = normalizeRow('profiles', (await one('select row_to_json(p) as r from profiles p where id = $1', [alice])).r);
+  check('25. everyone sets their own time zone (a real IANA name only); staff cannot set anyone else\'s',
+    own === null && typeof unknown === 'string' && typeof blank === 'string' && othersZone === 0 && byAdmin === null
+      && read[alice] === 'Asia/Manila' && read[boss] === 'Asia/Tbilisi' && back.timezone === 'Asia/Manila',
+    { own, unknown, blank, othersZone, byAdmin, read, back });
+
+  // Sessions run in UTC (Supabase) or anywhere else; the business day is Sydney's either way.
+  const teamDay = [];
+  for (const zone of ['UTC', 'America/Los_Angeles', 'Pacific/Kiritimati']) {
+    await db.exec(`set timezone = '${zone}'`);
+    teamDay.push(await one(`select public.team_today()::text as day, (now() at time zone 'Australia/Sydney')::date::text as sydney`));
+  }
+  await db.exec('reset timezone');
+  check("25. the business day (team_today(), invoice dates) is Sydney's, whatever the session's time zone",
+    teamDay.every((r) => r.day === r.sydney), teamDay);
+
+  // UTC+14 and UTC-11 are never on the same date, so these show whose zone a date came from.
+  await as(null);
+  await db.query("update profiles set timezone = 'Pacific/Kiritimati' where id = $1", [alice]);
+  await db.query("update profiles set timezone = 'Pacific/Pago_Pago' where id = $1", [boss]);
+  const days = await one(`select public.user_today($1)::text as alice, public.user_today($2)::text as boss, public.user_today($3)::text as nobody,
+      (now() at time zone 'Pacific/Kiritimati')::date::text as kiritimati, (now() at time zone 'Pacific/Pago_Pago')::date::text as pago,
+      (now() at time zone 'Australia/Sydney')::date::text as sydney`, [alice, boss, uid()]);
+  const grants = await one(`select has_function_privilege('anon', 'public.user_today(uuid)', 'execute') as anon,
+    has_function_privilege('authenticated', 'public.user_today(uuid)', 'execute') as authenticated`);
+  check("25. user_today() is the person's own date (Sydney when unknown), for the automations only",
+    days.alice === days.kiritimati && days.boss === days.pago && days.alice !== days.boss && days.nobody === days.sydney
+      && grants.anon === false && grants.authenticated === false,
+    { days, grants });
+
+  await as(boss);
+  const ownedBy = async (owner, name) => (await one(`insert into contacts (name, org, status, owner_id) values ($1, 'Example Co', 'Replied', $2)
+    returning id`, [name, owner])).id;
+  const forAlice = await ownedBy(alice, 'Ari Example');
+  const forBoss = await ownedBy(boss, 'Bo Example');
+  const followUps = Object.fromEntries((await rows('select ref, day::text as day from todos where ref = any($1)',
+    [[`contact:${forAlice}`, `contact:${forBoss}`]])).map((r) => [r.ref, r.day]));
+  check("25. contact_pipeline dates the follow-up to-do in its owner's time zone",
+    followUps[`contact:${forAlice}`] === days.kiritimati && followUps[`contact:${forBoss}`] === days.pago, { followUps, days });
+  await as(null);
+  await db.query("update profiles set timezone = 'Australia/Sydney' where id = any($1)", [[alice, boss]]);
+
+  // 26. Projects is view-only for staff by default -------------------------------------------------------------
+
+  const levels = async (user) => {
+    await as(user);
+    return one(`select public.module_level('projects') as projects, public.module_level('marketing') as marketing,
+      public.module_level('outreach') as outreach, public.module_level('pipeline') as pipeline`);
+  };
+  const staffLevels = await levels(newcomer);
+  const helloLevels = await levels(hello); // overrides from 13: projects none, marketing view
+  const adminLevels = await levels(boss);
+  const inactiveLevels = await levels(carol);
+  check('26. module_level: staff default for projects is now view (marketing still edit); overrides still win; admins edit',
+    stable(staffLevels) === stable({ projects: 'view', marketing: 'edit', outreach: 'none', pipeline: 'view' })
+      && helloLevels.projects === 'none' && helloLevels.marketing === 'view'
+      && Object.values(adminLevels).every((l) => l === 'edit') && Object.values(inactiveLevels).every((l) => l === 'none'),
+    { staffLevels, helloLevels, adminLevels, inactiveLevels });
+
+  await as(boss);
+  const assigned = (await one(`insert into items (board_key, group_id, name, "values") values ('projects', $1, 'Site visit', $2)
+    returning id`, [projectsActive, { people: [alice] }])).id;
+  await as(alice); // no projects override
+  const sees = await one('select (select count(*)::int from items where id = $1) as assigned, (select count(*)::int from items where id = $2) as own',
+    [assigned, staffItem]);
+  const attempts = {
+    insert: await error("insert into items (board_key, group_id, name) values ('projects', $1, 'Nope')", [projectsActive]),
+    rename: await affected("update items set name = 'Renamed' where id = $1", [assigned]),
+    tick: await affected('update items set done = true where id = $1', [assigned]),
+    remove: await affected('delete from items where id = $1', [staffItem]),
+    subtask: await error("insert into subtasks (item_id, text) values ($1, 'Nope')", [assigned]),
+    comment: await error("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Nope')", [assigned, alice]),
+    group: await error("insert into board_groups (board_key, name) values ('projects', 'Nope')"),
+  };
+  const marketingItem = await error("insert into items (board_key, group_id, name) values ('marketing', $1, 'Still mine')", [marketingGroup]);
+  check('26. by default staff see Projects (their assigned items too) but cannot add, change, tick, delete or comment; Marketing stays editable',
+    sees.assigned === 1 && sees.own === 1 && typeof attempts.insert === 'string' && attempts.rename === 0 && attempts.tick === 0
+      && attempts.remove === 0 && typeof attempts.subtask === 'string' && typeof attempts.comment === 'string'
+      && typeof attempts.group === 'string' && marketingItem === null,
+    { sees, attempts, marketingItem });
+
+  await as(david);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', 'edit')", [alice]);
+  await as(alice);
+  const granted = await affected("update items set name = 'Site visit (booked)' where id = $1", [assigned]);
+  await as(david);
+  await db.query("delete from module_access where user_id = $1 and module = 'projects'", [alice]);
+  check('26. the SuperAdmin can still give one staff member edit on Projects', granted === 1, granted);
+
+  await as(null);
 }
 
 // An unexpected exception (e.g. a policy now raising where a check expected 0 rows) is a failure too.
 try {
   const ctx = await main();
-  if (ctx) await phase2(ctx);
+  const ctx2 = ctx && await phase2(ctx);
+  if (ctx2) await phase3(ctx2);
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);
 }

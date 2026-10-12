@@ -3,7 +3,7 @@
 // (d) roles and module access, the demo automations, the seed and the demo-data migration (docs/PHASE2.md).
 // Exits non-zero when any check fails.
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { register } from 'node:module';
 import { TABLES, flatten, assemble, diff, normalizeRow } from '../src/data/backend/schema.js';
 import { createSync } from '../src/data/backend/sync.js';
@@ -46,8 +46,8 @@ const fixture = () => ({
   mode: 'live',
   me: U1,
   users: [
-    { id: U1, name: 'Ana', initials: 'AN', color: '#579bfc', email: 'ana@example.com', role: 'superadmin', active: true },
-    { id: U2, name: 'Ben', initials: 'BE', color: '#ff7575', email: 'ben@example.com', role: 'staff', active: false },
+    { id: U1, name: 'Ana', initials: 'AN', color: '#579bfc', email: 'ana@example.com', role: 'superadmin', active: true, timezone: 'Australia/Sydney' },
+    { id: U2, name: 'Ben', initials: 'BE', color: '#ff7575', email: 'ben@example.com', role: 'staff', active: false, timezone: 'Asia/Manila' },
   ],
   moduleAccess: [{ userId: U2, module: 'outreach', level: 'view' }, { userId: U2, module: 'pipeline', level: 'none' }],
   org: {
@@ -264,6 +264,17 @@ await check('assemble: order and state fields', () => {
   assert.deepEqual(back.clients[0].usage, s.clients[0].usage); // newest month first
   assert.deepEqual(back.clients[0].invoices.map(({ lines: _l, ...inv }) => inv), s.clients[0].invoices.map(({ lines: _l, ...inv }) => inv));
   assert.deepEqual(back.deals, s.deals.map((d) => ({ ...d, value: Number(String(d.value).replace(/,/g, '')) })));
+});
+
+await check('profiles: time zones round trip; a blank or missing one is Sydney (0003)', () => {
+  const s = fixture();
+  assert.deepEqual([...flatten(s).profiles.values()].map((r) => r.timezone), ['Australia/Sydney', 'Asia/Manila']);
+  s.users[1].timezone = '';
+  delete s.users[0].timezone;
+  assert.deepEqual([...flatten(s).profiles.values()].map((r) => r.timezone), ['Australia/Sydney', 'Australia/Sydney'], 'never sends a blank');
+  const rows = flatten(fixture());
+  rows.profiles.get(U2).timezone = null;
+  assert.deepEqual(assemble(rows, { me: U1 }).users.map((u) => u.timezone), ['Australia/Sydney', 'Australia/Sydney'], 'read before 0003 ran');
 });
 
 await check('assemble: empty rows give a usable state', () => {
@@ -1113,7 +1124,7 @@ const team = () => ({
 
 await check('access: modules, staff defaults and roles', () => {
   assert.deepEqual(access.MODULES, ['projects', 'marketing', 'outreach', 'pipeline', 'clients']);
-  assert.deepEqual(access.STAFF_DEFAULTS, { projects: 'edit', marketing: 'edit', outreach: 'none', pipeline: 'view', clients: 'view' });
+  assert.deepEqual(access.STAFF_DEFAULTS, { projects: 'view', marketing: 'edit', outreach: 'none', pipeline: 'view', clients: 'view' });
   const st = team();
   assert.deepEqual(['sue', 'al', 'stu', 'mem', 'nobody'].map((u) => access.roleOf(st, u)), ['superadmin', 'admin', 'staff', 'staff', '']);
   assert.equal(access.roleOf(st), 'superadmin', 'defaults to me');
@@ -1128,8 +1139,8 @@ await check('access: effective module level (admins edit, staff override else de
   const levels = (u) => access.MODULES.map((m) => access.moduleLevel(st, m, u));
   assert.deepEqual(levels('sue'), ['edit', 'edit', 'edit', 'edit', 'edit']);
   assert.deepEqual(levels('al'), ['edit', 'edit', 'edit', 'edit', 'edit'], 'overrides never apply to admins');
-  assert.deepEqual(levels('mem'), ['edit', 'edit', 'none', 'view', 'view'], 'phase 1 member gets the staff defaults');
-  assert.deepEqual(levels('stu'), ['edit', 'edit', 'edit', 'none', 'view'], 'overrides; an invalid level is ignored');
+  assert.deepEqual(levels('mem'), ['view', 'edit', 'none', 'view', 'view'], 'phase 1 member gets the staff defaults');
+  assert.deepEqual(levels('stu'), ['view', 'edit', 'edit', 'none', 'view'], 'overrides; an invalid level is ignored');
   assert.deepEqual(levels('off'), ['none', 'none', 'none', 'none', 'none']);
   assert.deepEqual(levels('ex'), ['none', 'none', 'none', 'none', 'none']);
   assert.equal(access.moduleLevel(st, 'projects', 'nobody'), 'none');
@@ -1140,12 +1151,16 @@ await check('access: effective module level (admins edit, staff override else de
   assert.deepEqual([access.canView({ ...st, moduleAccess: undefined }, 'clients', 'stu')], [true]);
 });
 
-const migration2 = new URL('../supabase/migrations/0002_team_workflow.sql', import.meta.url);
-if (existsSync(migration2)) {
-  await check('access: STAFF_DEFAULTS match public.module_level() in 0002', () => {
-    const sql = readFileSync(migration2, 'utf8');
-    const fn = sql.slice(sql.indexOf('function public.module_level'), sql.indexOf('function public.can_view'));
-    const pairs = Object.fromEntries([...fn.matchAll(/when '(\w+)' then '(\w+)'/g)].map((m) => [m[1], m[2]]));
+// The staff defaults live in the newest migration that (re)defines public.module_level().
+const migrationsDir = new URL('../supabase/migrations/', import.meta.url);
+const levelsSql = existsSync(migrationsDir) && readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()
+  .map((f) => [f, readFileSync(new URL(f, migrationsDir), 'utf8')]).filter(([, sql]) => sql.includes('function public.module_level')).at(-1);
+if (levelsSql) {
+  await check(`access: STAFF_DEFAULTS match public.module_level() in ${levelsSql[0]}`, () => {
+    const sql = levelsSql[1];
+    const fn = sql.slice(sql.indexOf('function public.module_level'));
+    const body = fn.slice(0, fn.indexOf('$$;'));
+    const pairs = Object.fromEntries([...body.matchAll(/when '(\w+)' then '(\w+)'/g)].map((m) => [m[1], m[2]]));
     assert.ok(Object.keys(pairs).length, 'module_level defaults not found');
     const expected = Object.fromEntries(Object.entries(access.STAFF_DEFAULTS).filter(([, level]) => level !== 'none'));
     assert.deepEqual(pairs, expected); // anything else falls through to 'none'
@@ -1249,6 +1264,33 @@ const outreachState = () => ({
   ],
   deals: [{ id: 'd0', name: 'Existing', sector: '', value: 5, priority: 'P1', stage: 'Opportunities', contact: 'al', next: '', contactId: '' }],
   todos: [],
+});
+
+const format = await import('../src/lib/format.js');
+
+await check('format: dates and clocks in a time zone', () => {
+  const at = new Date('2026-10-12T13:30:00Z'); // Tue 00:30 in Sydney (AEDT), 17:30 Mon in Tbilisi, 21:30 Mon in Manila
+  assert.equal(format.TEAM_TIMEZONE, 'Australia/Sydney');
+  assert.deepEqual(['Australia/Sydney', 'Asia/Tbilisi', 'Asia/Manila', 'UTC'].map((z) => format.ymdIn(z, at)),
+    ['2026-10-13', '2026-10-12', '2026-10-12', '2026-10-12']);
+  assert.equal(format.ymdIn('Mars/Olympus', at), format.localYmd(at), 'unknown zone: this machine\'s date');
+  assert.match(format.localClock('Asia/Tbilisi', at), /^Tbilisi · 5:30\s?pm$/i);
+  assert.match(format.localClock('America/Los_Angeles', at), /^Los Angeles · 6:30\s?am$/i);
+  assert.match(format.localTime('Asia/Manila', at), /^9:30\s?pm$/i);
+  assert.deepEqual([format.localClock('', at), format.localClock('Mars/Olympus', at), format.localTime(undefined, at)], ['', '', '']);
+  assert.equal(typeof format.browserTimezone(), 'string');
+});
+
+await check("automations: contactPipelineLocal dates the follow-up on its owner's today (user_today()), Sydney when unknown", () => {
+  const st = outreachState();
+  st.users = [{ ...person('al', 'admin'), timezone: 'Pacific/Pago_Pago' }, { ...person('stu', 'staff'), timezone: 'Pacific/Kiritimati' }];
+  const forStu = auto.contactPipelineLocal(st, 'c1', 'Sent'); // owner stu
+  const forAl = auto.contactPipelineLocal(st, 'c2', ''); // no owner: whoever saved it (al)
+  assert.equal(forStu.todo.day, format.ymdIn('Pacific/Kiritimati'));
+  assert.equal(forAl.todo.day, format.ymdIn('Pacific/Pago_Pago'));
+  assert.notEqual(forStu.todo.day, forAl.todo.day, 'UTC+14 and UTC-11 are never on the same date');
+  const plain = outreachState(); // people without a time zone
+  assert.equal(auto.contactPipelineLocal(plain, 'c1', 'Sent').todo.day, format.ymdIn('Australia/Sydney'));
 });
 
 await check('automations: contactPipelineLocal creates the deal and the follow-up once', () => {
@@ -1355,7 +1397,8 @@ if (createSeed) {
   await check('seed: the team, phase 2 demo data, and only placeholder emails', () => {
     const s = createSeed();
     const today = s.todos.find((t) => t.source === 'automation').day;
-    assert.deepEqual(s.users.map((u) => [u.id, u.name, u.role]), [['david', 'David', 'superadmin'], ['josh', 'Josh', 'admin'], ['hello', 'Hello', 'staff']]);
+    assert.deepEqual(s.users.map((u) => [u.id, u.name, u.role, u.timezone]), [['david', 'David', 'superadmin', 'Australia/Sydney'],
+      ['josh', 'Josh', 'admin', 'Asia/Tbilisi'], ['hello', 'Hello', 'staff', 'Asia/Manila']]);
     const emails = JSON.stringify(s).match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g) || [];
     assert.ok(emails.length && emails.every((e) => e.endsWith('@example.com')), emails.filter((e) => !e.endsWith('@example.com')).join(', '));
     assert.deepEqual(Object.keys(s.boards), ['projects', 'marketing']);
@@ -1425,8 +1468,9 @@ if (migrate) {
 
   await check('migrate: phase 1 demo data gets roles, the merged board, people and the new lists', () => {
     const m = migrate(phase1());
-    assert.deepEqual(m.users.map((u) => [u.id, u.role, u.email, u.active]), [
-      ['david', 'superadmin', 'david@example.com', true], ['dale', 'staff', 'dale@example.com', true], ['sam', 'staff', 'sam@example.com', true],
+    assert.deepEqual(m.users.map((u) => [u.id, u.role, u.email, u.active, u.timezone]), [
+      ['david', 'superadmin', 'david@example.com', true, 'Australia/Sydney'], ['dale', 'staff', 'dale@example.com', true, 'Australia/Sydney'],
+      ['sam', 'staff', 'sam@example.com', true, 'Australia/Sydney'],
     ]);
     assert.deepEqual(Object.keys(m.boards), ['projects', 'marketing']);
     assert.deepEqual(m.boards.projects.groups.map((g) => [g.id, g.name]), [['g1', 'Active'], ['g2', 'Admin'], ['g3', 'This quarter']]);
@@ -1464,7 +1508,9 @@ if (migrate) {
   await check('migrate: an existing superadmin is kept, and the seed is already current', () => {
     const p = phase1();
     p.users[1].role = 'superadmin';
-    assert.deepEqual(migrate(p).users.map((u) => u.role), ['admin', 'superadmin', 'staff']);
+    p.users[2].timezone = 'Asia/Manila';
+    assert.deepEqual(migrate(p).users.map((u) => [u.role, u.timezone]),
+      [['admin', 'Australia/Sydney'], ['superadmin', 'Australia/Sydney'], ['staff', 'Asia/Manila']], 'a time zone already set is kept');
     const s = createSeed();
     assert.deepEqual(migrate(structuredClone(s)), s);
   });

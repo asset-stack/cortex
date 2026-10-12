@@ -44,6 +44,8 @@ Keep the values below in the company password manager, never in the repo, an iss
 4. **+** → **Create a new snippet**, paste `supabase/migrations/0002_team_workflow.sql` the same way and **Run**.
    It adds roles, module access, My Work, billing, money in, expenses, timesheets and the `finance` storage
    bucket. From now on never run `0001` again: it would put back the phase 1 roles and policies.
+   Then do the same with `supabase/migrations/0003_timezones_projects_view.sql`: Sydney as the business time
+   zone, each person's own time zone, and Projects view-only for staff.
 5. **+** → **Create a new snippet** again and paste `supabase/setup-admins.sql`. Replace the placeholder
    addresses with the real ones, one `('name@assetstackai.com', 'role')` per line, separated by commas, in lower
    case. The role is `'superadmin'` or `'admin'`:
@@ -67,8 +69,14 @@ Keep the values below in the company password manager, never in the repo, an iss
 change or delete its files; Cortex opens a file through a link that expires after five minutes. Never switch it
 to **Public**, and don't add policies to it in the dashboard.
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0003_…`). Run each new file
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0004_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one.
+
+**0003 on a database that already has 0002**: **SQL Editor** → **+** → **Create a new snippet**, paste
+`supabase/migrations/0003_timezones_projects_view.sql` and **Run** *before* deploying the code that needs it (the
+app saves `profiles.timezone`, which doesn't exist until then). It is one transaction and safe to re-run.
+Afterwards staff view Projects instead of editing it (give one person edit in **Settings → Team**), invoice dates
+follow Sydney, and each person's time zone is set the next time they open Cortex.
 
 ### Upgrading an existing project
 

@@ -3,6 +3,7 @@ import { ALLOWED_DOMAIN } from '@/data/backend/client';
 import { Avatar } from '@/components/ui';
 import { LEVELS, MODULES, ROLES, ROLE_LABELS, STAFF_DEFAULTS, roleOf, useAccess } from '@/lib/access';
 import { cn } from '@/lib/cn';
+import { localClock } from '@/lib/format';
 import { Switch } from './controls';
 
 const MODULE_LABELS = { projects: 'Projects', marketing: 'Marketing', outreach: 'Outreach', pipeline: 'Pipeline', clients: 'Clients' };
@@ -62,6 +63,7 @@ export default function Team() {
                     <div className="flex items-center gap-2 font-semibold"><span className="truncate">{u.name}</span>
                       {self && <span className="rounded-full chip px-2 py-0.5 text-[11px]">You</span>}</div>
                     <div className="text-[12.5px] dimmer truncate">{u.email || '—'}</div>
+                    {u.timezone && <div className="text-[12.5px] dimmer truncate" title={u.timezone}>{localClock(u.timezone)}</div>}
                   </div>
                 </div>
                 <div className="ml-auto flex items-center gap-4">

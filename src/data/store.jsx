@@ -15,7 +15,7 @@ import {
   PLAN_MONTHS, addDays, addMonths, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isPlanDate, isYmd, makeTodo,
   mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
 } from '@/lib/automations';
-import { daysBetween, emailSnippet, invoiceTotals, localYmd, parseAmount } from '@/lib/format';
+import { browserTimezone, daysBetween, emailSnippet, invoiceTotals, localYmd, parseAmount } from '@/lib/format';
 import { mentionedUserIds } from '@/lib/mentions';
 import { GMAIL_CONNECTED, sendInvoice } from '@/integrations/gmail';
 
@@ -1165,6 +1165,25 @@ function LiveProvider({ userId, children }) {
   }, []);
 
   const mutate = useCallback((fn) => engine.current?.mutate(fn), []);
+
+  // Keep my profile's time zone in step with this browser, so my follow-up to-dos land on my own "today"
+  // (the database dates them with profiles.timezone) and teammates see my local time. Once per sign-in, so two
+  // open devices set to different zones don't keep overwriting each other.
+  const myZone = state?.users?.find((u) => u.id === userId)?.timezone;
+  const zoneChecked = useRef(false);
+  useEffect(() => {
+    if (phase.status !== 'ready' || !myZone || zoneChecked.current) return;
+    zoneChecked.current = true;
+    const zone = browserTimezone();
+    if (!zone || myZone === zone) return;
+    engine.current?.mutate((d) => {
+      const u = d.users.find((x) => x.id === userId);
+      if (!u) return false;
+      u.timezone = zone;
+      return true;
+    });
+  }, [phase.status, myZone, userId]);
+
   const actions = useMemo(() => {
     const fail = (message) => { setSync({ state: 'error', message }); };
     return createActions(mutate, {

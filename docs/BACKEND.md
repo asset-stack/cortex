@@ -3,15 +3,16 @@
 ## Phase 2: team workflow
 
 The full contract is [`docs/PHASE2.md`](PHASE2.md); migration `supabase/migrations/0002_team_workflow.sql` runs
-once on top of `0001` (applied in production, never edited). The rest of this file is phase 1, corrected
-where 0002 changed it.
+once on top of `0001` (applied in production, never edited), and `0003_timezones_projects_view.sql` on top of
+`0002` ([PHASE2.md §8](PHASE2.md#8-0003-time-zones-and-projects-view-only)). The rest of this file is phase 1,
+corrected where 0002 and 0003 changed it.
 
 - **Roles**: `superadmin | admin | staff` (phase 1's `member` became `staff`). Admins (superadmin or admin) edit
   every module and see finance; only the SuperAdmin changes roles, active flags and module access, and the last
   active SuperAdmin can't be demoted or deactivated. `admin_emails.role` sets the role at sign-up (else staff).
 - **Module access**: modules `projects`, `marketing`, `outreach`, `pipeline`, `clients`, each `none | view | edit`.
-  Admins always edit; staff get a `module_access` override or the default (projects and marketing edit, pipeline
-  and clients view, outreach none). One rule set on each side: SQL `module_level` / `can_view` / `can_edit`
+  Admins always edit; staff get a `module_access` override or the default (marketing edit, projects, pipeline
+  and clients view (projects since 0003), outreach none). One rule set on each side: SQL `module_level` / `can_view` / `can_edit`
   (every module table's RLS), JS `src/lib/access.js` (`useAccess()`; nav, read-only screens, store actions).
   My Work, team chat and the timesheet are always available; Settings is admins only.
 - **Boards**: the Admin board merged into **Projects** (`board_key in ('projects','marketing')`; the seeded
@@ -26,8 +27,9 @@ where 0002 changed it.
 - **Automation**: RPCs `ensure_todos(day)` (daily routines, Monday bank-screenshot reminder) and
   `generate_due_invoices()` (admins); trigger `contact_pipeline` (Replied / Meeting booked → deal + follow-up
   to-do); triggers `protect_invoice_status` / `protect_invoice_insert` (only admins approve, send, void or mark
-  paid). Their "today" is `team_today()` (Australia/Perth). Demo mode runs the same rules in
-  `src/lib/automations.js` on each person's local day.
+  paid). Business dates (invoices) use `team_today()`, Sydney's day (0003; was Perth); a follow-up to-do lands on
+  its owner's own day, `user_today(owner)` from `profiles.timezone` (0003). Demo mode runs the same rules in
+  `src/lib/automations.js`.
 - **Storage**: private bucket `finance` (bank screenshots, receipts), admins only.
 - **Demo team**: David (superadmin), Josh (admin), Hello (staff), all `@example.com`.
 
@@ -95,7 +97,7 @@ maintained by a `touch()` trigger (the sync engine never sends these two columns
 
 | table | columns (besides id/updated_*) | state source |
 |---|---|---|
-| `profiles` | `id uuid pk → auth.users on delete cascade`, `email text unique not null`, `name text not null`, `initials text not null`, `color text not null`, `role text not null default 'staff' check in ('superadmin','admin','staff')` (0002; was `'member'`, `('admin','member')`), `active bool not null default true`, `created_at timestamptz default now()` | `users[]` |
+| `profiles` | `id uuid pk → auth.users on delete cascade`, `email text unique not null`, `name text not null`, `initials text not null`, `color text not null`, `role text not null default 'staff' check in ('superadmin','admin','staff')` (0002; was `'member'`, `('admin','member')`), `active bool not null default true`, `created_at timestamptz default now()`, `timezone text not null default 'Australia/Sydney'` (0003; a real IANA name, checked by a trigger) | `users[]` |
 | `admin_emails` | `email text pk`, `role text not null default 'admin' check in ('superadmin','admin')` (0002) (setup only; not synced) | — |
 | `org_settings` | `id int pk default 1 check (id = 1)`, `business_name, abn, address, email, phone, bank_account_name, bsb, account_number, invoice_prefix text not null default ''` (`invoice_prefix` default `'INV-'`), `payment_terms_days int not null default 30` | `org` |
 | `board_groups` | `board_key text not null check in ('projects','marketing')` (0002 merged `admin` into `projects`), `name text`, `color text`, `position int` | `boards[k].groups[]` |

@@ -1,8 +1,8 @@
-// Demo-mode copies of the database automations in supabase/migrations/0002_team_workflow.sql: ensure_todos,
+// Demo-mode copies of the database automations in supabase/migrations/0002_team_workflow.sql (and 0003): ensure_todos,
 // generate_due_invoices and the contact_pipeline trigger, applied to a state draft with the same rules. Live mode
 // never runs these (the database does). Also the invoice numbering and date helpers both modes share.
 // Pure: no React and no store, so scripts/test-sync.mjs runs this file in Node.
-import { localYmd } from './format.js';
+import { TEAM_TIMEZONE, localYmd, ymdIn } from './format.js';
 
 // Runtime ids are uuids in both modes (live rows use them as primary keys). randomUUID needs a secure
 // context, so a plain-http preview (a phone on the LAN) falls back to getRandomValues.
@@ -66,8 +66,8 @@ export const PLAN_CATCH_UP_MONTHS = 24;
 // missed period (Awaiting approval, issued on the period date, due after the payment terms, one line for the plan),
 // oldest plan date first. Periods fall on the plan's billing day, or the month's last day when it is shorter, so a
 // plan on the 31st is back on the 31st after a short month; its next date moves on until it is in the future.
-// → invoices created.
-export function generateDueInvoicesLocal(state, today = localYmd(), { uid: newId = uid } = {}) {
+// "Today" is Sydney's, as team_today(). → invoices created.
+export function generateDueInvoicesLocal(state, today = ymdIn(TEAM_TIMEZONE), { uid: newId = uid } = {}) {
   const due = [];
   const oldest = addMonths(today, -PLAN_CATCH_UP_MONTHS);
   (state.clients || []).forEach((client) => (client.plans || []).forEach((plan, position) => {
@@ -165,9 +165,10 @@ export const PIPELINE_STATUSES = ['Replied', 'Meeting booked'];
 
 // The contact_pipeline trigger, for a contact whose status was `prevStatus` ('' for a new contact). When it becomes
 // Replied or Meeting booked: a deal for it (named after the organisation, owned by the contact's owner or `me`), or
-// its deal moves from Opportunities to First meetings on a booking; and the owner gets a follow-up to-do for `day`
-// (once per contact and day). → { deal, todo } (todo null when it already existed), or null when nothing applies.
-export function contactPipelineLocal(state, contactId, prevStatus = '', { day = localYmd(), me = state.me, uid: newId = uid } = {}) {
+// its deal moves from Opportunities to First meetings on a booking; and the owner gets a follow-up to-do for `day`,
+// by default the owner's own today (user_today()), once per contact and day. → { deal, todo } (todo null when it
+// already existed), or null when nothing applies.
+export function contactPipelineLocal(state, contactId, prevStatus = '', { day, me = state.me, uid: newId = uid } = {}) {
   const c = (state.contacts || []).find((x) => x.id === contactId);
   if (!c || !PIPELINE_STATUSES.includes(c.status) || c.status === prevStatus) return null;
   state.deals ||= [];
@@ -175,6 +176,7 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day = 
   const booked = c.status === 'Meeting booked';
   const name = String(c.name ?? '').trim() || String(c.org ?? '').trim() || 'contact';
   const owner = c.owner || me;
+  day ||= ymdIn((state.users || []).find((u) => u.id === owner)?.timezone || TEAM_TIMEZONE);
 
   let deal = state.deals.find((x) => x.contactId === c.id);
   if (!deal) {

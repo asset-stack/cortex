@@ -14,8 +14,8 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
 - Keep demo mode working. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` the app runs on localStorage
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
-  migration that has been applied** (`0001` is live in production; treat `0002` the same once it has run): fix
-  forward in the next file. Every table keeps row-level security on with policies that require `is_staff()`
+  migration that has been applied** (`0001` and `0002` are live in production; treat `0003` the same once it has
+  run): fix forward in the next file. Every table keeps row-level security on with policies that require `is_staff()`
   (directly or through `is_admin()` / `can_view()` / `can_edit()`), and is added to the `supabase_realtime`
   publication if it is synced. Extend `scripts/test-db.mjs` to cover it.
 - Roles are `superadmin | admin | staff`. Admins (superadmin or admin) always have edit; only the SuperAdmin
@@ -31,6 +31,10 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
 - Automations run in the database in live mode (`contact_pipeline` trigger, `ensure_todos` and
   `generate_due_invoices` RPCs) and in `src/lib/automations.js` in demo mode. Change both together; live mode
   never creates those rows client-side.
+- Time zones: business dates (invoices, plan due dates) are Sydney's (`team_today()` / `TEAM_TIMEZONE` in
+  `src/lib/format.js`); personal dates (My Work, follow-up to-dos, the 16:30 timesheet prompt) are the person's own
+  (`profiles.timezone`, `user_today()`; the browser's day in the app). Josh is in `Asia/Tbilisi`, ops staff in
+  `Asia/Manila`.
 - Finance files (bank screenshots, receipts) live in the private `finance` storage bucket and are opened through
   the store's `fileUrl()` (short-lived signed links). Never make the bucket public.
 - `npm test` must pass (sync mapping and database checks, no network).

@@ -6,7 +6,7 @@
 import {
   addDays, addMonths, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isoDow, makeTodo,
 } from '../lib/automations.js';
-import { localYmd } from '../lib/format.js';
+import { TEAM_TIMEZONE, localYmd } from '../lib/format.js';
 import { withPeople } from './boards.js';
 
 let n = 0;
@@ -14,13 +14,13 @@ const id = (p) => `${p}_${(++n).toString(36)}`;
 let now = Date.now(); // refreshed by createSeed, so Reset gives fresh relative times
 const hoursAgo = (h) => new Date(now - h * 3600e3).toISOString();
 
-const person = (id, name, initials, color, role) => ({ id, name, initials, color, email: `${id}@example.com`, role, active: true });
+const person = (id, name, initials, color, role, timezone) => ({ id, name, initials, color, email: `${id}@example.com`, role, active: true, timezone });
 
 // SuperAdmin, Admin and Staff (the ops mailbox). Real names and emails live only in the database.
 export const USERS = [
-  person('david', 'David', 'DV', '#9cd326', 'superadmin'),
-  person('josh', 'Josh', 'JS', '#579bfc', 'admin'),
-  person('hello', 'Hello', 'HE', '#a78bfa', 'staff'),
+  person('david', 'David', 'DV', '#9cd326', 'superadmin', TEAM_TIMEZONE),
+  person('josh', 'Josh', 'JS', '#579bfc', 'admin', 'Asia/Tbilisi'),
+  person('hello', 'Hello', 'HE', '#a78bfa', 'staff', 'Asia/Manila'),
 ];
 
 // Business details for invoices. Left blank in the demo: the real ones are entered in Settings.
@@ -331,6 +331,7 @@ export function migrate(data) {
   data.users = data.users.map((u) => {
     const seed = USERS.find((x) => x.id === u.id);
     const user = { email: seed?.email ?? `${u.id}@example.com`, role: seed?.role ?? 'staff', active: true, ...u };
+    if (!user.timezone) user.timezone = seed?.timezone || TEAM_TIMEZONE; // added in 0003
     if (!['superadmin', 'admin', 'staff'].includes(user.role)) user.role = 'staff'; // ROLES in src/lib/access.js
     return user;
   });

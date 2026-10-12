@@ -20,7 +20,8 @@ One workspace for the team's daily work, the departments and team chat:
 
 | | SuperAdmin / Admin | Staff (default) |
 |---|---|---|
-| Projects, Marketing | Edit | Edit |
+| Projects | Edit | View |
+| Marketing | Edit | Edit |
 | Outreach | Edit | None |
 | Pipeline | Edit | View |
 | Clients | Edit | View: no money in, expenses or software costs; can't approve, send or mark paid |
@@ -30,6 +31,9 @@ One workspace for the team's daily work, the departments and team chat:
 The SuperAdmin changes roles, active flags and each staff member's access (None / View / Edit per module) in
 **Settings** → **Team**. The same rules run in the database (row-level security) and in the screens, which hide
 modules at None and turn read-only at View. The demo team is David (SuperAdmin), Josh (Admin) and Hello (Staff).
+
+Invoice and other business dates follow Sydney time; each person's own day (My Work, follow-ups, the timesheet
+prompt) follows their own time zone, which **Settings** → **Team** shows next to their local time.
 
 ## Demo and live mode
 
@@ -74,15 +78,17 @@ Fill in the project URL and the anon (publishable) key from the Supabase dashboa
 - `scripts/test-sync.mjs` checks the state ⇄ row mapping round trip for every table, the diff for common
   edits, the sync queue (coalescing, ordering, retry) against a fake Supabase client, the access helpers, the
   timesheet suggestions and the demo-mode automations.
-- `scripts/test-db.mjs` runs `0001_cortex.sql` and then `0002_team_workflow.sql` in PGlite (Postgres in WASM),
-  as on the live database, and checks the sign-up domain gate, roles and module access, the board merge, the
-  automations, invoice generation, finance privacy and row-level security as different users.
+- `scripts/test-db.mjs` runs `0001_cortex.sql`, `0002_team_workflow.sql` and `0003_timezones_projects_view.sql` in
+  PGlite (Postgres in WASM), as on the live database, and checks the sign-up domain gate, roles and module access,
+  the board merge, the automations, invoice generation, time zones, finance privacy and row-level security as
+  different users.
 
 ## Deploying
 
 [`DEPLOY.md`](DEPLOY.md) has the click-by-click setup: Supabase (Sydney), Google sign-in, Cloudflare Pages,
 the custom domain, inviting staff, importing old data, and a security checklist. A database set up before the
-team workflow needs one upgrade step (`0002_team_workflow.sql`, see *Upgrading an existing project*). Security
+team workflow needs one upgrade step (`0002_team_workflow.sql`, see *Upgrading an existing project*), and one
+with `0002` needs `0003_timezones_projects_view.sql`. Security
 headers for Cloudflare Pages are in `public/_headers`.
 
 ## Still stubbed

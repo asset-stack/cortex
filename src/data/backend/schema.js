@@ -1,5 +1,6 @@
 // Pure mapping between the app state and Supabase rows (docs/BACKEND.md §1–3, docs/PHASE2.md §2 and §4).
 // No Supabase or Vite imports: scripts/test-sync.mjs runs this file directly in Node.
+import { TEAM_TIMEZONE } from '../../lib/format.js';
 
 const BOARD_KEYS = ['projects', 'marketing']; // the board_groups.board_key check constraint (0002 merged admin into projects)
 
@@ -44,7 +45,7 @@ const t = 'text';
 // Synced columns per table. updated_at / updated_by (and channels.created_by, profiles.created_at) are left
 // to Postgres defaults and triggers, so they are never sent and are dropped from rows read back.
 const COLUMNS = {
-  profiles: { id: 'id', email: t, name: t, initials: t, color: t, role: t, active: 'bool' },
+  profiles: { id: 'id', email: t, name: t, initials: t, color: t, role: t, active: 'bool', timezone: t },
   module_access: { user_id: 'id', module: t, level: t },
   org_settings: {
     id: 'int', business_name: t, abn: t, address: t, email: t, phone: t, bank_account_name: t, bsb: t,
@@ -178,6 +179,7 @@ export function flatten(state) {
 
   (state.users || []).forEach((u) => put('profiles', {
     id: u.id, email: u.email, name: u.name, initials: u.initials, color: u.color, role: u.role || 'staff', active: u.active !== false,
+    timezone: u.timezone || TEAM_TIMEZONE, // the database refuses '' (it checks real IANA names)
   }));
   (state.moduleAccess || []).forEach((a) => put('module_access', { user_id: a.userId, module: a.module, level: a.level }));
 
@@ -377,7 +379,7 @@ export function assemble(rowsByTable, { me } = {}) {
   return {
     users: all('profiles')
       .sort((a, b) => cmp(a.name.toLowerCase(), b.name.toLowerCase()) || cmp(a.id, b.id))
-      .map((u) => ({ id: u.id, name: u.name, initials: u.initials, color: u.color, email: u.email, role: u.role, active: u.active })),
+      .map((u) => ({ id: u.id, name: u.name, initials: u.initials, color: u.color, email: u.email, role: u.role, active: u.active, timezone: u.timezone || TEAM_TIMEZONE })),
     moduleAccess: all('module_access')
       .sort((a, b) => cmp(a.user_id, b.user_id) || cmp(a.module, b.module))
       .map((a) => ({ userId: a.user_id, module: a.module, level: a.level })),

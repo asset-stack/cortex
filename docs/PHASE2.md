@@ -12,8 +12,9 @@ RLS on every table, repo is public (no real people/client data, keys or bank det
 - **My Work** is each person's own daily to-do list: work assigned by admins, board items they are on,
   daily marketing routines generated automatically, and automation items. Admins can view and add to
   anyone's schedule.
-- **Projects** and **Admin** boards merge into one **Projects** board, editable by everyone; work is
-  assigned by tagging people (multi-person column, and an `@Name` in a task update adds that person).
+- **Projects** and **Admin** boards merge into one **Projects** board; work is assigned by tagging people
+  (multi-person column, and an `@Name` in a task update adds that person). Staff edited it until `0003`; since
+  then they **view** it (§8).
 - **Marketing** board: shared, everyone edits ("marketing machine" detail comes later).
 - **Outreach**: admins only by default; the SuperAdmin can switch it on (view/edit) per staff member.
 - **Pipeline**: everyone views, admins edit. **Automation**: a contact moving to *Replied* or
@@ -36,7 +37,7 @@ Modules with access levels `'none' | 'view' | 'edit'`:
 
 | module | superadmin / admin | staff default |
 |---|---|---|
-| `projects` | edit | edit |
+| `projects` | edit | **view** (0003; was edit) |
 | `marketing` | edit | edit |
 | `outreach` | edit | **none** |
 | `pipeline` | edit | **view** |
@@ -132,13 +133,14 @@ Additive and safe to run once on the live database (which may already hold rows)
 - RPCs (security definer, `set search_path = public`, granted to `authenticated`):
   - `ensure_todos(p_day date) returns int`: for the caller's active routines whose `weekdays` contain `isodow(p_day)` and that haven't run for the caller that day (`routine_runs`, so a deleted or moved to-do doesn't come back), record the run and insert a `routine` to-do (title/category/minutes/start from the routine) `on conflict do nothing`. If the caller is an admin, `p_day` is a Monday and no `bank_statements.week_start = p_day` exists, insert automation to-do *Upload this week's bank screenshot* (`ref 'bank:<p_day>'`, category `Admin`). Returns rows inserted.
   - `generate_due_invoices() returns int` (admins only, raises otherwise): locks `invoices`; for each active plan with `next_date <= team_today()` and no more than two years behind (further back is a mistyped date, left alone), repeatedly create an invoice (status `Awaiting approval`, number = org prefix + next number for that prefix, min 1001, one line `description`, qty `'1'`, rate = amount as text, `plan_id`) for each period not already in `billed_periods`, and advance `next_date` by 1/3/12 months on the plan's billing day (`anchor_day`, else `next_date`'s; the month's last day when shorter) until it is in the future.
-  - `team_today()`: the team's calendar day (`Australia/Perth`) for the automations; sessions run in UTC.
+  - `team_today()`: the team's calendar day for the automations; sessions run in UTC. `Australia/Perth` in 0002,
+    `Australia/Sydney` since 0003 (§8).
 - Trigger `contact_pipeline` (after insert or update of `status` on `contacts`, security definer): when status becomes
   `Replied` or `Meeting booked`: if no deal has `contact_id = new.id`, insert one (`name` = org if set else name,
   stage `Opportunities` for Replied / `First meetings` for Meeting booked, `owner_id` = contact owner or `auth.uid()`,
   `priority 'P2'`, `next_step` 'Reply to <name>' / 'Prepare meeting with <name>', position at the end);
   if one exists and the new status is `Meeting booked` while the deal is in `Opportunities`, move it to `First meetings`.
-  Then insert an automation to-do for that owner for `team_today()` (`ref 'contact:<id>'`, category `Outreach`,
+  Then insert an automation to-do for that owner for `team_today()` (`user_today(owner)` since 0003) (`ref 'contact:<id>'`, category `Outreach`,
   title 'Follow up: <name> replied' / 'Prepare: meeting with <name>') `on conflict do nothing`.
 - Storage: private bucket `finance` (`insert into storage.buckets … on conflict do nothing`); `storage.objects`
   policies for `bucket_id = 'finance'`: select/insert/update/delete only `is_admin()`. Paths: `statements/<uuid>-<file>`,
@@ -219,3 +221,26 @@ The round-trip property must hold for every table. Rows the user can't read simp
   numbers sequentially; todos/time_entries privacy; superadmin-only access/role changes; last superadmin protected;
   board merge and `owner`→`people`.
 - `scripts/test-sync.mjs`: round trip for every new table; access helpers; `suggestBlocks`; demo automations.
+
+## 8. 0003: time zones and Projects view-only
+
+`supabase/migrations/0003_timezones_projects_view.sql` runs once on top of `0002` (one transaction, safe to re-run).
+
+- **Owner's decisions**: the team's main time zone is **Sydney** (David); Josh works from Georgia
+  (`Asia/Tbilisi`) and the ops staff member from the Philippines (`Asia/Manila`). Staff **view** Projects but
+  don't change it. Invoices are unchanged.
+- **Business dates** (invoice generation, plan due dates) use `team_today()` = Sydney's date.
+  **Personal dates** use the person's own zone: `user_today(uid)` (from `profiles.timezone`, Sydney when unknown;
+  internal, not granted to `authenticated`) dates `contact_pipeline`'s follow-up to-do; My Work, `ensure_todos`
+  and the 16:30 timesheet prompt already use the browser's own day.
+- `profiles.timezone text not null default 'Australia/Sydney'`; trigger `check_profile_timezone` refuses a name
+  missing from `pg_timezone_names` (errcode 22023). Live mode sets your own from the browser once per sign-in
+  (`LiveProvider` in `src/data/store.jsx`); everyone may update their own row (0001's policy), so nothing else changes.
+  State: `users[].timezone` (IANA name; the demo seed gives David Sydney, Josh Tbilisi, Hello Manila).
+- `module_level()`: staff default for `projects` is `view`; `module_access` overrides still win, so the
+  SuperAdmin can give one person edit in **Settings → Team**. `STAFF_DEFAULTS` in `src/lib/access.js` matches
+  (`scripts/test-sync.mjs` compares it with the newest migration that defines `module_level`).
+- **Screens**: Settings → Team shows each person's city and local time; the admin person picker in My Work shows
+  the selected person's local time.
+- **Tests**: `scripts/test-db.mjs` applies 0003 after the 0002 checks and checks the default, the per-person and
+  Sydney dates, the follow-up's date, the time-zone guard and that staff can read but not write Projects.
