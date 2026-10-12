@@ -1,9 +1,11 @@
 import { Fragment, useMemo, useRef, useState } from 'react';
 import { Clock, ExternalLink, KeyRound, Landmark, LayoutGrid, List, NotebookPen, Plus, Printer, Receipt, Trash2, UserRound } from 'lucide-react';
-import { useStore, useUsers } from '@/data/store';
-import { CLIENT_GROUPS, CLIENT_STATUSES, INVOICE_STATUS, SUPPLIER } from '@/data/boards';
+import { useIsAdmin, useStore, useUsers } from '@/data/store';
+import { CLIENT_GROUPS, CLIENT_STATUSES, INVOICE_STATUS } from '@/data/boards';
 import { Avatar, Drawer, KpiRow, LabelPicker, Modal, PageHeader, PersonPicker, QuickAdd, SearchField, Segmented } from '@/components/ui';
-import { ago, compactMoney, fullDate, invoiceTotals, isBadAmount, lineAmount, money, money2, parseAmount, shortDate } from '@/lib/format';
+import {
+  ago, compactMoney, daysBetween, formatAbn, formatBsb, fullDate, invoiceTotals, isBadAmount, money, money2, parseAmount, shortDate, unitMoney,
+} from '@/lib/format';
 import { cn } from '@/lib/cn';
 
 const TABS = [{ id: 'overview', label: 'Overview' }, { id: 'invoices', label: 'Invoices' }, { id: 'access', label: 'Access' }];
@@ -92,6 +94,10 @@ function Overview({ c }) {
           <label key={k} className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">{l}</span><input className="field" value={c[k] || ''} onChange={upd(k)} /></label>
         ))}
         <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Last contact</span><input type="date" className="field" value={c.lastContact || ''} onChange={upd('lastContact')} /></label>
+        <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">ABN</span><input className="field" inputMode="numeric" autoComplete="off" value={c.abn || ''} onChange={upd('abn')} /></label>
+        <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Billing address</span>
+          <textarea className="field resize-none !rounded-[18px]" rows={3} autoComplete="off" value={c.billingAddress || ''} onChange={upd('billingAddress')} />
+        </label>
       </div>
       <section>
         <h3 className="font-bold">Tasks</h3>
@@ -120,17 +126,89 @@ function Overview({ c }) {
   );
 }
 
-const PRINT_COLS = 'grid-cols-[1fr_56px_96px_96px]';
+const str = (v) => String(v ?? '').trim();
+
+// The printed copy (Print / PDF): an Australian tax invoice. Hidden on screen and in an ordinary browser print;
+// shown only for its own Print / PDF (html.printing-invoice in index.css, which also styles .tax-invoice).
+function TaxInvoice({ c, inv, org, t }) {
+  const abn = str(org.abn);
+  const kind = abn ? 'Tax invoice' : 'Invoice'; // without the supplier's ABN it isn't a valid tax invoice
+  // Terms come from the invoice's own dates, so the printed copy can't contradict itself if Settings change later.
+  const orgDays = parseInt(org.paymentTermsDays, 10);
+  const days = daysBetween(inv.issued, inv.due) ?? (orgDays >= 0 ? orgDays : 30);
+  const contact = [str(org.email), str(org.phone)].filter(Boolean).join(' · ');
+  const bank = [['Account name', str(org.bankAccountName)], ['BSB', formatBsb(org.bsb)], ['Account number', str(org.accountNumber)]].filter(([, v]) => v);
+  return (
+    <div className="tax-invoice hidden">
+      <header className="ti-row">
+        <h1>{inv.status === 'Draft' ? `Draft ${kind.toLowerCase()}` : kind}</h1>
+        <div className="ti-supplier">
+          <div className="ti-name">{str(org.businessName) || 'AssetStack'}</div>
+          {abn && <div>ABN {formatAbn(abn)}</div>}
+          {str(org.address) && <div className="ti-pre">{str(org.address)}</div>}
+          {contact && <div>{contact}</div>}
+        </div>
+      </header>
+      <section className="ti-row ti-parties">
+        <div>
+          <h2>Bill to</h2>
+          <div className="ti-name">{c.name}</div>
+          {str(c.abn) && <div>ABN {formatAbn(c.abn)}</div>}
+          {str(c.billingAddress) && <div className="ti-pre">{str(c.billingAddress)}</div>}
+        </div>
+        <dl className="ti-meta">
+          <dt>Invoice number</dt><dd>{inv.number}</dd>
+          <dt>Issue date</dt><dd>{fullDate(inv.issued)}</dd>
+          <dt>Due date</dt><dd>{fullDate(inv.due)}</dd>
+          {(inv.status === 'Paid' || inv.status === 'Overdue') && <><dt>Status</dt><dd>{inv.status}</dd></>}
+        </dl>
+      </section>
+      <table className="ti-lines">
+        <thead>
+          <tr><th>Description</th><th className="num">Qty</th><th className="num">Unit price (ex GST)</th><th className="num">GST</th><th className="num">Amount (inc GST)</th></tr>
+        </thead>
+        <tbody>
+          {inv.lines.map((l, i) => (
+            <tr key={l.id}>
+              <td className="ti-pre">{l.desc}</td><td className="num">{str(l.qty)}</td><td className="num">{unitMoney(parseAmount(l.rate) || 0)}</td>
+              <td className="num">{money2(t.lines[i].gst)}</td><td className="num">{money2(t.lines[i].inc)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <table className="ti-totals">
+        <tbody>
+          <tr><th>Subtotal (ex GST)</th><td className="num">{money2(t.subtotal)}</td></tr>
+          <tr><th>GST 10%</th><td className="num">{money2(t.gst)}</td></tr>
+          <tr className="ti-total"><th>Total (inc GST)</th><td className="num">{money2(t.total)}</td></tr>
+        </tbody>
+      </table>
+      <p className="ti-gst-note">Total includes GST of {money2(t.gst)}</p>
+      <section className="ti-pay">
+        <h2>Payment</h2>
+        <dl className="ti-meta">
+          {bank.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}
+          <dt>Reference</dt><dd>{inv.number}</dd>
+          <dt>Terms</dt><dd>{days === 0 ? 'Due on receipt' : `Due in ${days} ${days === 1 ? 'day' : 'days'}`}</dd>
+        </dl>
+      </section>
+    </div>
+  );
+}
 
 function InvoiceEditor({ c, inv }) {
-  const { actions } = useStore();
+  const { state, actions } = useStore();
+  const isAdmin = useIsAdmin();
   const ref = useRef(null);
+  const org = state.org || {};
   const t = invoiceTotals(inv);
+  // An amount that doesn't parse counts as $0, so the printed copy would contradict its own totals.
+  const badAmounts = inv.lines.some((l) => isBadAmount(l.qty) || isBadAmount(l.rate));
   // Print just this invoice: flag it and the page for the print CSS, and clear the flags afterwards.
   // (A data attribute, so React's className updates can't drop it mid-print.)
   const printThis = () => {
     const el = ref.current;
-    if (!el) return;
+    if (!el || badAmounts) return;
     el.setAttribute('data-print-target', '');
     document.documentElement.classList.add('printing-invoice');
     window.addEventListener('afterprint', () => {
@@ -141,45 +219,40 @@ function InvoiceEditor({ c, inv }) {
   };
   return (
     <div ref={ref} className="invoice-card rounded-2xl chip p-4">
-      <div className="hidden print:block mb-4">
-        <div className="text-[20px] font-extrabold">{inv.status === 'Draft' ? 'Draft invoice' : SUPPLIER.abn ? 'Tax invoice' : 'Invoice'}</div>
-        <div>{SUPPLIER.name}{SUPPLIER.abn && ` · ABN ${SUPPLIER.abn}`}</div>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <div className="font-extrabold">{inv.number}<span className="hidden print:inline"> · {inv.status}</span></div>
-          <div className="text-[12px] dimmer">{c.name} · Issued {fullDate(inv.issued)} · Due {fullDate(inv.due)}</div>
+      <div className="no-print">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="font-extrabold">{inv.number}</div>
+            <div className="text-[12px] dimmer">{c.name} · Issued {fullDate(inv.issued)} · Due {fullDate(inv.due)}</div>
+          </div>
+          <div className="w-[120px]">
+            <LabelPicker label={`${inv.number} status`} value={inv.status} options={INVOICE_STATUS} allowEmpty={false} onChange={(v) => actions.updateInvoice(c.id, inv.id, { status: v })} />
+          </div>
         </div>
-        <div className="w-[120px] no-print">
-          <LabelPicker label={`${inv.number} status`} value={inv.status} options={INVOICE_STATUS} allowEmpty={false} onChange={(v) => actions.updateInvoice(c.id, inv.id, { status: v })} />
-        </div>
-      </div>
-      <div className="mt-3 flex flex-col gap-2">
-        <div className={cn('hidden print:grid gap-2 text-[12px] font-bold', PRINT_COLS)}>
-          <span>Description</span><span className="text-right">Qty</span><span className="text-right">Rate (ex GST)</span><span className="text-right">Amount</span>
-        </div>
-        {inv.lines.map((l) => (
-          <Fragment key={l.id}>
-            <div className="grid grid-cols-[1fr_56px_96px_28px] gap-2 items-center print:hidden">
+        <div className="mt-3 flex flex-col gap-2">
+          {inv.lines.map((l) => (
+            <div key={l.id} className="grid grid-cols-[1fr_56px_96px_28px] gap-2 items-center">
               <input className="field !py-1.5" placeholder="Description" aria-label="Description" value={l.desc} onChange={(e) => actions.updateInvoiceLine(c.id, inv.id, l.id, { desc: e.target.value })} />
               <input className={cn('field !py-1.5 !px-2 text-right tnum', isBadAmount(l.qty) && '!border-rose-400')} aria-label="Quantity" aria-invalid={isBadAmount(l.qty) || undefined} inputMode="decimal" value={l.qty} onChange={(e) => actions.updateInvoiceLine(c.id, inv.id, l.id, { qty: e.target.value })} />
               <input className={cn('field !py-1.5 !px-2 text-right tnum', isBadAmount(l.rate) && '!border-rose-400')} aria-label="Rate (ex GST)" aria-invalid={isBadAmount(l.rate) || undefined} inputMode="decimal" value={l.rate} onChange={(e) => actions.updateInvoiceLine(c.id, inv.id, l.id, { rate: e.target.value })} />
-              <button type="button" aria-label="Remove line" onClick={() => actions.removeInvoiceLine(c.id, inv.id, l.id)} className="no-print dimmer hover:text-white"><Trash2 className="h-4 w-4" /></button>
+              <button type="button" aria-label="Remove line" onClick={() => actions.removeInvoiceLine(c.id, inv.id, l.id)} className="dimmer hover:text-white"><Trash2 className="h-4 w-4" /></button>
             </div>
-            <div className={cn('hidden print:grid gap-2 tnum', PRINT_COLS)}>
-              <span className="break-words">{l.desc}</span><span className="text-right">{l.qty}</span>
-              <span className="text-right">{money2(parseAmount(l.rate) || 0)}</span><span className="text-right">{money2(lineAmount(l))}</span>
-            </div>
-          </Fragment>
-        ))}
-        <button type="button" onClick={() => actions.addInvoiceLine(c.id, inv.id)} className="no-print self-start inline-flex items-center gap-1.5 rounded-full chip px-3 py-1 text-[12.5px]"><Plus className="h-3.5 w-3.5" />Line</button>
+          ))}
+          <button type="button" onClick={() => actions.addInvoiceLine(c.id, inv.id)} className="self-start inline-flex items-center gap-1.5 rounded-full chip px-3 py-1 text-[12.5px]"><Plus className="h-3.5 w-3.5" />Line</button>
+        </div>
+        <dl className="mt-3 grid grid-cols-[1fr_auto] gap-y-1 text-[13px] tnum">
+          <dt className="dimmer">Subtotal</dt><dd className="text-right">{money2(t.subtotal)}</dd>
+          <dt className="dimmer">GST 10%</dt><dd className="text-right">{money2(t.gst)}</dd>
+          <dt className="font-bold">Total</dt><dd className="text-right font-extrabold">{money2(t.total)}</dd>
+        </dl>
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <button type="button" onClick={printThis} disabled={badAmounts} title={badAmounts ? 'Fix the highlighted amounts first' : undefined} className="inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 text-[12.5px] font-semibold disabled:cursor-not-allowed disabled:opacity-50"><Printer className="h-3.5 w-3.5" />Print / PDF</button>
+          {!str(org.abn) && (isAdmin
+            ? <a href="#/settings?tab=business" className="text-[12px] text-amber-200 underline underline-offset-2 hover:text-white">Add your ABN in Settings to issue tax invoices</a>
+            : <span className="text-[12px] text-amber-200">Ask an admin to add the ABN in Settings to issue tax invoices</span>)}
+        </div>
       </div>
-      <dl className="mt-3 grid grid-cols-[1fr_auto] gap-y-1 text-[13px] tnum">
-        <dt className="dimmer">Subtotal</dt><dd className="text-right">{money2(t.subtotal)}</dd>
-        <dt className="dimmer">GST 10%</dt><dd className="text-right">{money2(t.gst)}</dd>
-        <dt className="font-bold">Total</dt><dd className="text-right font-extrabold">{money2(t.total)}</dd>
-      </dl>
-      <button type="button" onClick={printThis} className="no-print mt-3 inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 text-[12.5px] font-semibold"><Printer className="h-3.5 w-3.5" />Print / PDF</button>
+      <TaxInvoice c={c} inv={inv} org={org} t={t} />
     </div>
   );
 }

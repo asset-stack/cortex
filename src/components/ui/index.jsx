@@ -130,6 +130,7 @@ export function PersonPicker({ value, onChange, size = 28 }) {
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
   const owner = state.users.find((u) => u.id === value);
+  const people = state.users.filter((u) => u.active !== false || u.id === value); // deactivated staff can't be picked
   return (
     <>
       <button type="button" ref={setAnchor} onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
@@ -138,7 +139,7 @@ export function PersonPicker({ value, onChange, size = 28 }) {
       </button>
       <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={190}>
         <div className="flex flex-col">
-          {state.users.map((u) => (
+          {people.map((u) => (
             <button key={u.id} type="button" aria-pressed={value === u.id} onClick={() => { onChange(u.id); setOpen(false); }}
               className={cn('flex items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-white/10', value === u.id && 'bg-white/15')}>
               <Avatar userId={u.id} size={24} ring={false} />{u.name}

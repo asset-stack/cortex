@@ -1,8 +1,9 @@
-# AssetStack Ops
+# Cortex
 
-Repository: `asset-stack/cortex`. It is public, so the demo data uses placeholder people at `example.com`.
+AssetStack's internal operations platform. Repository: `asset-stack/cortex`. Treat it as public: demo data
+uses placeholder people at `example.com`, and no keys or `.env` files are ever committed.
 
-The internal operations tool for AssetStack staff. One workspace covers the six departments plus team chat:
+One workspace covers the six departments plus team chat:
 
 | Area | What it does |
 |---|---|
@@ -12,31 +13,65 @@ The internal operations tool for AssetStack staff. One workspace covers the six 
 | **Pipeline** | Deal Kanban: Opportunities → First meetings → Demos → Won, with *Make client* on won deals |
 | **Clients** | Client Tracker cards, plus a client drawer with overview, notes and tasks, **invoices** (line items, GST 10%, status, print/PDF) and **access** records |
 | **Team chat** | Slack-style dock at the bottom of every page: groups, create group, add members, @mentions with autocomplete and highlight, unread and mention counts |
+| **Settings** (admins) | Team roles and active flags, business and bank details for invoices, CSV import from the old platform |
+
+## Demo and live mode
+
+The mode is picked at build time from two environment variables (full design: [`docs/BACKEND.md`](docs/BACKEND.md)).
+
+| Mode | When | Data | Sign-in |
+|---|---|---|---|
+| **Demo** | `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` not set (CI, local by default) | The browser's `localStorage`, seeded from `src/data/seed.js` | None. The avatar menu switches who you are viewing as; *Reset demo data* restores the seed |
+| **Live** | Both set (Cloudflare Pages) | Supabase Postgres with realtime, so staff see each other's changes | Google, `@assetstackai.com` accounts only |
+
+Screens only ever call `useStore()` from `src/data/store.jsx`, with the same state shape in both modes. In live
+mode a sync engine (`src/data/backend/`) turns each change into row writes and applies other people's changes
+as they arrive; the dot on the Cortex logo shows saved / saving / error / offline. Access is enforced by
+row-level security in Postgres (`supabase/migrations/`), not by the frontend.
 
 ## Running it
 
 ```bash
 git clone https://github.com/asset-stack/cortex.git && cd cortex
 npm install
-npm run dev       # http://localhost:5173
+npm run dev       # demo mode on http://localhost:5173
+npm test          # sync-engine and database checks, no network needed
 npm run build     # static output in dist/
 npm run preview   # serves dist/ on http://localhost:4322
 ```
 
-The output is a static site and is ready for Cloudflare Pages.
+### Live mode locally
 
-## Current state: local prototype
+```bash
+cp .env.example .env.local   # git ignores it
+```
 
-- **Data** lives in the browser (`localStorage`) and is seeded with fictional example data shaped on the Client Tracker, the monday.com Posting Schedule and the master-layout whiteboard. *Reset demo data* in the sidebar restores the seed.
-- **Gmail and the Claude agent are stubbed** in `src/integrations/`. Drafts come from templates and "sent" emails are only logged to the feed.
-- **Team members** are a fixed list in `src/data/seed.js`. The avatar menu at the bottom of the sidebar switches who you are viewing as (demo only), so you can see tagging from both sides.
+Fill in the project URL and the anon (publishable) key from the Supabase dashboard, then `npm run dev`.
+`http://localhost:5173` must be in the project's Auth redirect URLs (see [`DEPLOY.md`](DEPLOY.md)). Delete
+`.env.local`, or empty both values, to go back to demo mode. Never put the `service_role` / secret key in it.
 
-## Next steps to production
+### Tests
 
-1. **Backend and auth.** Put the app behind Cloudflare Access (or similar) and move the store to Supabase or monday.com. All reads and writes go through `src/data/store.jsx`, so that is the only file that changes.
-2. **Gmail.** A server endpoint holds the Google OAuth client and per-user refresh tokens. Replace `listThreads` / `sendEmail` in `src/integrations/gmail.js`.
-3. **Claude agent.** A server endpoint calls the Anthropic Messages API with the AssetStack voice guide and the contact's history. Replace `draftOutreach` in `src/integrations/claudeAgent.js`. API keys never go in this frontend.
-4. **Chat in real time.** Swap the local message list for a realtime channel (Supabase Realtime, Pusher or Ably).
+`npm test` runs two scripts. CI runs it, then a demo-mode build, on pull requests and pushes to `main`:
+
+- `scripts/test-sync.mjs` checks the state ⇄ row mapping round trip, the diff for common edits, and the
+  sync queue (coalescing, ordering, retry) against a fake Supabase client.
+- `scripts/test-db.mjs` runs `supabase/migrations/0001_cortex.sql` in PGlite (Postgres in WASM) and checks
+  the sign-up domain gate, the triggers and row-level security as different users.
+
+## Deploying
+
+[`DEPLOY.md`](DEPLOY.md) has the click-by-click setup: Supabase (Sydney), Google sign-in, Cloudflare Pages,
+the custom domain, inviting staff, importing old data, and a security checklist. Security headers for
+Cloudflare Pages are in `public/_headers`.
+
+## Still stubbed
+
+- **Gmail.** A server endpoint holds the Google OAuth client and per-user refresh tokens. Replace
+  `listThreads` / `sendEmail` in `src/integrations/gmail.js`. Until then "sent" emails are only logged to the feed.
+- **Claude agent.** A server endpoint calls the Anthropic Messages API with the AssetStack voice guide and the
+  contact's history. Replace `draftOutreach` in `src/integrations/claudeAgent.js`. Drafts come from templates
+  for now. API keys never go in this frontend.
 
 ## Design
 

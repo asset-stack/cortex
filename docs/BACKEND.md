@@ -47,7 +47,9 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
 }
 ```
 
-Array order is meaningful and is stored as `position` (0-based index) where the table has one.
+Array order is meaningful and is stored as `position` (0-based index) where the table has one. Clients,
+contacts and a client's invoices are added at the top, so their positions count from the end
+(`length - 1 - index`) and adding one leaves the other rows untouched.
 Ids are `crypto.randomUUID()` for everything created at runtime (both modes). Seed ids are only
 ever used in demo mode.
 
@@ -92,8 +94,9 @@ Text columns default to `''` and are `not null` unless noted, so the state never
 - Default for business tables (boards, items, clients, deals, invoices, contacts, …): `select/insert/update/delete` to `authenticated` **using/with check `is_staff()`**.
 - `profiles`: select `is_staff()`; update: `is_admin()` or own row. A `protect_profile` trigger stops non-admins changing `role`, `active` or `email`. No insert/delete policy (rows come from the signup trigger).
 - `org_settings`: select `is_staff()`; update `is_admin()`; no insert/delete (seeded row id 1).
+- Upserts are checked against insert policies even when the row exists, so `profiles` (own row or admin) and `org_settings` (admin) carry narrow upsert-only policies that resolve to the update path; they never allow a row the rules above forbid. The sync engine writes `profiles` / `org_settings` with plain updates anyway. `channel_members` has no update policy: the sync engine upserts it with `ignoreDuplicates` (on conflict do nothing), and an update could otherwise move someone else's membership.
 - `channels`: select when `is_member(id)` or `created_by = auth.uid()`; insert with `created_by = auth.uid()` and `is_staff()`; update/delete `is_admin()` or creator.
-- `channel_members`: select when `is_staff()` and (`user_id = auth.uid()` or `is_member(channel_id)`); insert when `is_staff()` and (`is_member(channel_id)` or the caller created the channel); delete own row or `is_admin()`.
+- `channel_members`: select when `is_staff()` and (`user_id = auth.uid()` or `is_member(channel_id)` or the caller created the channel); insert when `is_staff()` and (`is_member(channel_id)` or the caller created the channel); delete own row or `is_admin()`. (Select needs the creator clause because PostgREST writes use `RETURNING`: a new channel's memberships go up in one upsert, before the creator counts as a member.)
 - `messages`: select `is_member(channel_id)`; insert `is_member(channel_id)` and `user_id = auth.uid()`; update/delete own.
 - `item_updates`, `client_notes`: select `is_staff()`; insert `user_id = auth.uid()`; update/delete own or admin.
 - `read_state`: all operations only where `user_id = auth.uid()`.
@@ -114,25 +117,30 @@ Text columns default to `''` and are `not null` unless noted, so the state never
 - `schema.js` (pure, no Supabase import):
   - `TABLES`: ordered parent → child, each `{ name, key: (row) => string, onConflict? }`
     (`channel_members` key `channel_id:user_id`, `read_state` key `user_id:channel_id`).
-  - `flatten(state) → { [table]: Map<key, row> }`: DB-column rows, snake_case, `''`→`null` for dates/uuid fks, positions from array index. `read_state` only for `state.me`. Never emits `updated_at/updated_by`.
+  - `flatten(state) → { [table]: Map<key, row> }`: DB-column rows, snake_case, `''`→`null` for dates/uuid fks, positions from array index (from the end for clients, contacts and invoices). `read_state` only for `state.me`. Never emits `updated_at/updated_by`.
   - `assemble(rowsByTable, { me }) → state fields` (everything except `version/mode/me`). Must satisfy **`flatten(assemble(flatten(s)))` deep-equals `flatten(s)`** for any valid state.
   - `diff(prev, next) → ops[]`: `{ table, op: 'upsert'|'delete', key, row }` comparing rows by `JSON.stringify` with sorted keys.
-- `sync.js`: `createSync({ supabase, onStatus })` →
+- `sync.js`: `createSync({ supabase, onStatus, onRealtime?, onRejected? })` →
   - `queue(ops)`: coalesce by `table+key` (last write wins, delete beats upsert), flush 400 ms after the last change.
-  - flush: upserts grouped per table in `TABLES` order (parents first), deletes in reverse order (children first); composite tables use `onConflict`. On error: `onStatus({ state: 'error', message })`, keep the failed ops queued and retry with backoff (2 s, 5 s, 10 s, max 30 s).
-  - `isPending(table, key)`.
+  - flush: upserts grouped per table in `TABLES` order (parents first), deletes in reverse order (children first); composite tables use `onConflict`. On error: `onStatus({ state: 'error', message })`, keep the failed ops queued and retry with backoff (2 s, 5 s, 10 s, max 30 s). New changes still go out 400 ms after the last one (with the failed ops) unless the failure was offline. A request refused for a row's data (constraint, RLS) is re-sent row by row so one bad row doesn't hold back the rest, and only deletes in that row's parent tables wait for its retry.
+  - A child refused for a missing parent (`23503`) that this client isn't still writing is dropped: someone else deleted the parent and the cascade took the row too. A row refused for its data 3 times (not counting a child waiting for its parent) is given up: `onRejected([{ table, op, key, row, error }])` is called once and the status shows `'error'` with the message until the next change. A newer change to the row starts its count again.
+  - `isPending(table, key)`, `hasPending()` (anything queued or in flight).
+  - `staleEcho(table, key, row | null)`: true when a realtime change is the echo of one of our writes that a newer write of ours has since replaced (sent rows are remembered per row, oldest first, for 30 s; matching uses them up).
+  - `dispose()`: nothing is scheduled afterwards, so a stopped engine stops writing.
   - `loadAll() → rowsByTable` (one `select *` per table).
-  - `subscribe(onChange)` one realtime channel, `postgres_changes` `*` on every table; calls `onChange({ table, eventType, row /* new or old */ })`.
+  - `subscribe(onChange)` one realtime channel, `postgres_changes` `*` on every table (`postgres_changes_options: { wait: true }`, so `SUBSCRIBED` means changes are streaming); calls `onChange({ table, eventType, row /* new or old */ })` and passes each channel status to `onRealtime(status)`.
   - `onStatus` states: `'saved' | 'saving' | 'error' | 'offline'`.
 
 ## 4. Store (`src/data/store.jsx`)
 
 - `mutate(fn)` runs **synchronously against a `stateRef`** (not inside a `setState` updater), so every action's logic runs once. Demo mode then saves to `localStorage` as today; live mode additionally does `ops = diff(rowsRef, flatten(next))`, `rowsRef = flatten(next)`, `sync.queue(ops)`.
-- Live realtime change: skip if `sync.isPending(table, key)`; otherwise apply to `rowsRef` (upsert/delete), `setState({ ...assemble(rowsRef, { me }), version: 1, mode: 'live', me })`.
+- Live realtime change: skip if `sync.staleEcho(…)` or `sync.isPending(table, key)`; otherwise apply to `rowsRef` (upsert/delete), `setState({ ...assemble(rowsRef, { me }), version: 1, mode: 'live', me })`.
+- Resync (reload every table and merge) after each realtime `SUBSCRIBED` (the first join can land after the first load's selects; a rejoin follows an outage) and after an offline status, once nothing is queued or in flight. Rows that change locally or over realtime while it loads keep their newer version; rows missing from the reload are dropped only when nothing local changed meanwhile.
+- `onRejected`: a duplicate invoice number or channel name (`23505`) gets the next free one; any other row goes back to what the database holds (or is removed if it never saved).
 - New actions (both modes): `updateProfile(userId, patch)`, `updateOrg(patch)`,
   `importRecords(kind, records, options) → { added, skipped }` with `kind` in `'clients' | 'contacts' | 'deals' | 'tasks'`
   (records already normalised to state shape by `src/lib/importers.js`; `options = { board, groupId, groupName }` for tasks; skips names that already exist, case-insensitive),
-  `signOut()` (live).
+  `signOut({ force }) → { unsaved }` (live): waits up to 3 s for edits to save; if some still haven't, returns `{ unsaved: true }` without signing out unless `force`.
 - `setMe` and `reset` are demo-only (no-ops in live).
 - Extra context value `sync: { state, message }` for a small status indicator.
 

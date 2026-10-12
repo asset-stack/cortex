@@ -1,20 +1,28 @@
 // Example data shaped on the Client Tracker, the monday.com Posting Schedule and the
-// master-layout whiteboard. Everything here is demo content until a real backend is wired in.
+// master-layout whiteboard. Demo mode only: live mode starts from what is in Supabase.
 // The repo is public: organisations, people, invoices and amounts are fictional and emails are
-// placeholders (example.com). Never put real client names or details in this file.
+// placeholders (example.com). Never put real client names, ABNs, bank or contact details in this file.
 
 let n = 0;
 const id = (p) => `${p}_${(++n).toString(36)}`;
 let now = Date.now(); // refreshed by createSeed, so Reset gives fresh relative times
 const hoursAgo = (h) => new Date(now - h * 3600e3).toISOString();
 
+const person = (id, name, initials, color, role = 'member') => ({ id, name, initials, color, email: `${id}@example.com`, role, active: true });
+
 export const USERS = [
-  { id: 'david', name: 'David', initials: 'DV', color: '#9cd326' },
-  { id: 'dale', name: 'Dale', initials: 'DL', color: '#579bfc' },
-  { id: 'stu', name: 'Stu', initials: 'ST', color: '#a78bfa' },
-  { id: 'nick', name: 'Nick', initials: 'NK', color: '#ff9a3c' },
-  { id: 'sam', name: 'Sam', initials: 'SM', color: '#ff7575' },
+  person('david', 'David', 'DV', '#9cd326', 'admin'),
+  person('dale', 'Dale', 'DL', '#579bfc'),
+  person('stu', 'Stu', 'ST', '#a78bfa'),
+  person('nick', 'Nick', 'NK', '#ff9a3c'),
+  person('sam', 'Sam', 'SM', '#ff7575'),
 ];
+
+// Business details for invoices. Left blank in the demo: the real ones are entered in Settings.
+export const ORG = {
+  businessName: 'AssetStack', abn: '', address: '', email: '', phone: '', bankAccountName: '', bsb: '', accountNumber: '',
+  paymentTermsDays: 30, invoicePrefix: 'INV-',
+};
 
 const item = (name, values, extra = {}) => ({
   id: id('it'), name, values, updates: [], subtasks: [], done: false, ...extra,
@@ -77,7 +85,7 @@ function clients() {
       id: id('c'), name: 'Westbay Council', group: 'Onboarding', status: 'Onboarding', priority: 'P1',
       next: 'David to finalise onboarding meeting', sector: 'Government', contact: 'dale', team: ['dale', 'david'],
       lastContact: '2026-05-19', demo: 'Live site with client', keyContact: 'Alex Taylor', email: 'alex.taylor@example.com',
-      demoUrl: 'https://demo.example.com', avatar: '#3b82f6',
+      demoUrl: 'https://demo.example.com', avatar: '#3b82f6', abn: '', billingAddress: '',
       notes: [
         { id: id('n'), user: 'david', text: 'Kick-off went well. Alex wants the asset register imported before training.', ts: hoursAgo(72) },
         { id: id('n'), user: 'dale', text: 'Sent the capability statement and onboarding plan.', ts: hoursAgo(120) },
@@ -98,21 +106,21 @@ function clients() {
     {
       id: id('c'), name: 'Northside Diocese', group: 'Active', status: 'Proposal sent', priority: 'P1',
       next: 'Dale to send scope', sector: 'Healthcare', contact: 'dale', team: ['stu', 'david', 'dale'],
-      lastContact: '2026-05-17', demo: 'Demo with client', keyContact: 'Jordan Price', email: 'jordan.price@example.com', demoUrl: '', avatar: '#6366f1',
+      lastContact: '2026-05-17', demo: 'Demo with client', keyContact: 'Jordan Price', email: 'jordan.price@example.com', demoUrl: '', avatar: '#6366f1', abn: '', billingAddress: '',
       notes: [], tasks: [{ id: id('t'), text: 'Send scope document', done: false }], invoices: [],
       access: [{ id: id('a'), name: 'Jordan Price', email: 'jordan.price@example.com', role: 'Client admin' }, { id: id('a'), name: 'Stu', email: 'stu@example.com', role: 'AssetStack' }],
     },
     {
       id: id('c'), name: 'Coastal Rail', group: 'Active', status: 'Passive', priority: 'P2',
       next: 'Re-send demo link (blocked on their network)', sector: 'Transport', contact: 'nick', team: ['nick'],
-      lastContact: '2026-08-11', demo: 'Re-send demo link', keyContact: 'Casey Ng', email: 'casey.ng@example.com', demoUrl: '', avatar: '#f59e0b',
+      lastContact: '2026-08-11', demo: 'Re-send demo link', keyContact: 'Casey Ng', email: 'casey.ng@example.com', demoUrl: '', avatar: '#f59e0b', abn: '', billingAddress: '',
       notes: [{ id: id('n'), user: 'nick', text: 'Spoke with their senior engineer. Previous demo link would not open on their network.', ts: hoursAgo(1400) }],
       tasks: [], invoices: [], access: [],
     },
     {
       id: id('c'), name: 'Harbour Construction', group: 'Active', status: 'Active', priority: 'P2',
       next: 'Pilot running on two sites', sector: 'Construction', contact: 'stu', team: ['stu'],
-      lastContact: '2026-10-02', demo: 'Pilot', keyContact: 'Jamie Park', email: 'jamie.park@example.com', demoUrl: '', avatar: '#ef4444',
+      lastContact: '2026-10-02', demo: 'Pilot', keyContact: 'Jamie Park', email: 'jamie.park@example.com', demoUrl: '', avatar: '#ef4444', abn: '', billingAddress: '',
       notes: [], tasks: [],
       invoices: [{ id: id('i'), number: 'INV-1014', issued: '2026-09-12', due: '2026-10-12', status: 'Paid', lines: [{ id: id('l'), desc: 'Pilot licence', qty: 1, rate: 7250 }] }],
       access: [{ id: id('a'), name: 'Jamie Park', email: 'jamie.park@example.com', role: 'Client admin' }],
@@ -166,7 +174,8 @@ export function createSeed() {
   return {
     version: 1,
     me: 'david',
-    users: USERS,
+    users: USERS.map((u) => ({ ...u })),
+    org: { ...ORG },
     boards: seedBoards,
     deals,
     clients: seedClients,
