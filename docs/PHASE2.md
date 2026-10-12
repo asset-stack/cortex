@@ -70,9 +70,11 @@ todos: [{ id, assignee, createdBy, title, notes, day /* 'YYYY-MM-DD' */, start /
           ref /* e.g. 'contact:<id>' | 'deal:<id>' | 'item:<id>' | 'bank:<YYYY-MM-DD>' | '' */,
           done, doneAt /* iso | '' */ }],
 routines: [{ id, title, category, minutes, assignee, weekdays /* [1..7], 1 = Monday */, start, active }],
+routineRuns: ['<day>|<routineId>|<userId>'],            // demo only: ensureTodosLocal's run log (live: routine_runs)
 contacts: [{ ..., owner /* userId | '' */ }],          // statuses: New, Sent, Opened, Replied, Meeting booked, No reply
 deals:    [{ ..., contactId /* '' | id */ }],
-clients:  [{ ..., plans: [{ id, description, amount, frequency /* 'monthly'|'quarterly'|'annually' */, nextDate, active }],
+clients:  [{ ..., plans: [{ id, description, amount, frequency /* 'monthly'|'quarterly'|'annually' */, nextDate,
+                         anchorDay /* 1..31 billing day, 0 = nextDate's day */, active }],
              usage: [{ id, month /* 'YYYY-MM-01' */, assets, sites, seats, notes }] }],
 //   invoice: { ..., status: 'Draft'|'Awaiting approval'|'Approved'|'Sent'|'Paid'|'Overdue'|'Void',
 //              planId: ''|id, sentAt: ''|iso, paidOn: ''|'YYYY-MM-DD' }
@@ -105,19 +107,22 @@ Additive and safe to run once on the live database (which may already hold rows)
   - clients: `clients, client_notes, client_tasks, invoices, invoice_lines, client_access, billing_plans, client_usage`
     → select `can_view('clients')`, write `can_edit('clients')`; `client_notes` keeps own-row update/delete rules.
   - boards: `board_groups, items` → by `board_key` (`projects`/`marketing` module); `item_updates, subtasks` →
-    via their item's board (helper `item_board(item uuid)` security definer).
+    via their item's board (helper `item_board(item uuid)` security definer). An item's `board_key` is its group's
+    (foreign key `(group_id, board_key)` → `board_groups (id, board_key)`, on update/delete cascade).
 - Board merge: `board_groups`/`items` with `board_key='admin'` move to `projects` (group renamed `Admin` when it
   was the seeded `To do`); new check `board_key in ('projects','marketing')`.
   `items.values`: `owner` (string) → `people` (json array of user ids; empty array when no owner).
 - `contacts.owner_id uuid null → profiles on delete set null`; `deals.contact_id uuid null → contacts on delete set null`.
 - `invoices`: add `plan_id uuid null → billing_plans on delete set null`, `sent_at timestamptz null`, `paid_on date null`.
-  Trigger `protect_invoice_status`: only admins may set status to `Approved`, `Sent`, `Paid` or `Void`, or change `paid_on`.
+  Function `protect_invoice_status`: only admins may set status to `Approved`, `Sent`, `Paid` or `Void`, or change `paid_on`;
+  trigger `protect_invoice_status` before update, `protect_invoice_insert` after insert (only rows really inserted).
 - New tables (all with `id uuid pk default gen_random_uuid()`, `updated_at/updated_by` + `touch()`, `position int` where listed):
   `todos (assignee_id → profiles cascade, created_by uuid default auth.uid(), title, notes text default '', day date not null, start_time time null, minutes int default 30, category text default 'Other', source text check in ('manual','routine','automation') default 'manual', routine_id uuid null → routines on delete set null, ref text default '', done bool default false, done_at timestamptz null, position int)` +
   unique index on `(routine_id, assignee_id, day) where routine_id is not null` and on `(assignee_id, ref, day) where source='automation'`.
   RLS: select/update own (`assignee_id = auth.uid()`) or `is_admin()`; insert own or `is_admin()`; delete creator or `is_admin()`.
   `routines (title, category, minutes int, assignee_id → profiles cascade, weekdays int[] not null default '{1,2,3,4,5}', start_time time null, active bool default true, position int)`; select `is_staff()`, write `is_admin()`.
-  `billing_plans (client_id → clients cascade, description, amount numeric, frequency check in ('monthly','quarterly','annually'), next_date date, active bool, position int)`; clients module.
+  `billing_plans (client_id → clients cascade, description, amount numeric, frequency check in ('monthly','quarterly','annually'), next_date date, anchor_day int default 0 check 0..31, billed_periods date[] default '{}' (generate_due_invoices only; never synced), active bool, position int)`; clients module.
+  `routine_runs (routine_id → routines cascade, assignee_id → profiles cascade, day date, pk (routine_id, assignee_id, day))`: `ensure_todos`' run log; RLS on, no policies or grants, not synced.
   `client_usage (client_id → clients cascade, month date, assets int, sites int, seats int, notes text, unique(client_id, month))`; clients module.
   `bank_statements (week_start date, file_path text, note text, uploaded_by uuid default auth.uid(), created_at timestamptz default now())`; **admins only**.
   `payments (invoice_id uuid null → invoices on delete set null, client_id → clients cascade, amount numeric, received_on date, reference text, statement_id uuid null → bank_statements on delete set null)`; **admins only**.
@@ -125,14 +130,15 @@ Additive and safe to run once on the live database (which may already hold rows)
   `subscriptions (name, vendor, category text, amount numeric, cycle check in ('monthly','annually'), renews_on date null, active bool, notes text, position int)`; **admins only**.
   `time_entries (user_id → profiles cascade, day date, start_time time, minutes int, category text, note text, source text check in ('manual','suggested'), position int)`; all ops own rows; admins select all.
 - RPCs (security definer, `set search_path = public`, granted to `authenticated`):
-  - `ensure_todos(p_day date) returns int`: for the caller's active routines whose `weekdays` contain `isodow(p_day)`, insert a `routine` to-do (title/category/minutes/start from the routine) `on conflict do nothing`. If the caller is an admin, `p_day` is a Monday and no `bank_statements.week_start = p_day` exists, insert automation to-do *Upload this week's bank screenshot* (`ref 'bank:<p_day>'`, category `Admin`). Returns rows inserted.
-  - `generate_due_invoices() returns int` (admins only, raises otherwise): locks `invoices`; for each active plan with `next_date <= current_date`, repeatedly create an invoice (status `Awaiting approval`, number = org prefix + next number for that prefix, min 1001, one line `description`, qty `'1'`, rate = amount as text, `plan_id`) and advance `next_date` by 1/3/12 months until it is in the future.
+  - `ensure_todos(p_day date) returns int`: for the caller's active routines whose `weekdays` contain `isodow(p_day)` and that haven't run for the caller that day (`routine_runs`, so a deleted or moved to-do doesn't come back), record the run and insert a `routine` to-do (title/category/minutes/start from the routine) `on conflict do nothing`. If the caller is an admin, `p_day` is a Monday and no `bank_statements.week_start = p_day` exists, insert automation to-do *Upload this week's bank screenshot* (`ref 'bank:<p_day>'`, category `Admin`). Returns rows inserted.
+  - `generate_due_invoices() returns int` (admins only, raises otherwise): locks `invoices`; for each active plan with `next_date <= team_today()` and no more than two years behind (further back is a mistyped date, left alone), repeatedly create an invoice (status `Awaiting approval`, number = org prefix + next number for that prefix, min 1001, one line `description`, qty `'1'`, rate = amount as text, `plan_id`) for each period not already in `billed_periods`, and advance `next_date` by 1/3/12 months on the plan's billing day (`anchor_day`, else `next_date`'s; the month's last day when shorter) until it is in the future.
+  - `team_today()`: the team's calendar day (`Australia/Perth`) for the automations; sessions run in UTC.
 - Trigger `contact_pipeline` (after insert or update of `status` on `contacts`, security definer): when status becomes
   `Replied` or `Meeting booked`: if no deal has `contact_id = new.id`, insert one (`name` = org if set else name,
   stage `Opportunities` for Replied / `First meetings` for Meeting booked, `owner_id` = contact owner or `auth.uid()`,
   `priority 'P2'`, `next_step` 'Reply to <name>' / 'Prepare meeting with <name>', position at the end);
   if one exists and the new status is `Meeting booked` while the deal is in `Opportunities`, move it to `First meetings`.
-  Then insert an automation to-do for that owner for `current_date` (`ref 'contact:<id>'`, category `Outreach`,
+  Then insert an automation to-do for that owner for `team_today()` (`ref 'contact:<id>'`, category `Outreach`,
   title 'Follow up: <name> replied' / 'Prepare: meeting with <name>') `on conflict do nothing`.
 - Storage: private bucket `finance` (`insert into storage.buckets … on conflict do nothing`); `storage.objects`
   policies for `bucket_id = 'finance'`: select/insert/update/delete only `is_admin()`. Paths: `statements/<uuid>-<file>`,

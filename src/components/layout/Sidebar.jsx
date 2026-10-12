@@ -1,30 +1,34 @@
 import { useState } from 'react';
-import { Building2, ClipboardList, FolderKanban, GitBranch, Loader2, LogOut, Mail, Megaphone, PanelLeftClose, PanelLeftOpen, RotateCcw, Settings, Sparkle } from 'lucide-react';
-import { useIsAdmin, useStore, useUsers } from '@/data/store';
+import { Building2, FolderKanban, GitBranch, Loader2, LogOut, Mail, Megaphone, PanelLeftClose, PanelLeftOpen, RotateCcw, Settings, Sparkle } from 'lucide-react';
+import { useStore, useUsers } from '@/data/store';
 import { Avatar, Modal, Popover } from '@/components/ui';
+import { ROLE_LABELS, roleOf, useAccess } from '@/lib/access';
 import { cn } from '@/lib/cn';
 
+// Everything a page can link to, in nav order. `module` pages show only when the user can at least view that module
+// (src/lib/access.js); the former Admin board is part of Projects.
 export const NAV = [
   { id: 'work', label: 'My Work', icon: Sparkle },
-  { id: 'projects', label: 'Projects', icon: FolderKanban },
-  { id: 'admin', label: 'Admin', icon: ClipboardList },
-  { id: 'outreach', label: 'Outreach', icon: Mail, badge: 'AI' },
-  { id: 'marketing', label: 'Marketing', icon: Megaphone },
-  { id: 'pipeline', label: 'Pipeline', icon: GitBranch },
-  { id: 'clients', label: 'Clients', icon: Building2 },
+  { id: 'projects', label: 'Projects', icon: FolderKanban, module: 'projects' },
+  { id: 'marketing', label: 'Marketing', icon: Megaphone, module: 'marketing' },
+  { id: 'outreach', label: 'Outreach', icon: Mail, badge: 'AI', module: 'outreach' },
+  { id: 'pipeline', label: 'Pipeline', icon: GitBranch, module: 'pipeline' },
+  { id: 'clients', label: 'Clients', icon: Building2, module: 'clients' },
 ];
 
-// Admin-only pages, kept out of NAV so the My Work shortcuts are the same for everyone.
+// Admin-only pages, kept out of NAV (page shortcuts list modules only).
 const ADMIN_NAV = [{ id: 'settings', label: 'Settings', icon: Settings }];
 
-function useNav() {
-  return useIsAdmin() ? [...NAV, ...ADMIN_NAV] : NAV;
+/** The signed-in user's nav: modules at 'none' are hidden, Settings is admins only. */
+export function useNav() {
+  const access = useAccess();
+  const nav = NAV.filter((n) => !n.module || access.canView(n.module));
+  return access.isAdmin ? [...nav, ...ADMIN_NAV] : nav;
 }
 
-const ROLE = { admin: 'Admin', member: 'Member' };
-
+// SuperAdmin / Admin / Staff (phase 1's 'member' reads as Staff).
 function RoleChip({ role, className }) {
-  return <span className={cn('inline-block rounded-full bg-white/15 px-1.5 text-[10.5px] font-semibold leading-[17px] dim', className)}>{ROLE[role] || ROLE.member}</span>;
+  return <span className={cn('inline-block rounded-full bg-white/15 px-1.5 text-[10.5px] font-semibold leading-[17px] dim', className)}>{ROLE_LABELS[role] || ROLE_LABELS.staff}</span>;
 }
 
 const SYNC = {
@@ -51,6 +55,7 @@ function AccountMenu({ showName = true, align = 'left' }) {
   const { state, actions } = useStore();
   const users = useUsers();
   const me = users[state.me];
+  const role = roleOf(state);
   const demo = state.mode !== 'live';
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
@@ -72,7 +77,7 @@ function AccountMenu({ showName = true, align = 'left' }) {
         {showName && (
           <span className="min-w-0 leading-tight">
             <span className="block truncate font-semibold">{me?.name}</span>
-            <RoleChip role={me?.role} className="mt-0.5" />
+            <RoleChip role={role} className="mt-0.5" />
           </span>
         )}
       </button>
@@ -84,7 +89,7 @@ function AccountMenu({ showName = true, align = 'left' }) {
               <button key={u.id} type="button" onClick={() => { actions.setMe(u.id); setOpen(false); }}
                 className={cn('flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-white/10', u.id === state.me && 'bg-white/15')}>
                 <Avatar userId={u.id} size={24} ring={false} /><span className="flex-1 truncate">{u.name}</span>
-                {u.role === 'admin' && <RoleChip role="admin" />}
+                <RoleChip role={roleOf(state, u.id)} />
               </button>
             ))}
           </>
@@ -95,7 +100,7 @@ function AccountMenu({ showName = true, align = 'left' }) {
               <div className="min-w-0">
                 <div className="truncate font-semibold">{me?.name}</div>
                 <div className="truncate text-[12.5px] dimmer">{me?.email}</div>
-                <RoleChip role={me?.role} className="mt-1" />
+                <RoleChip role={role} className="mt-1" />
               </div>
             </div>
             <button type="button" onClick={() => signOut(false)} disabled={busy}

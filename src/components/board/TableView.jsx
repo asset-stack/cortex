@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ChevronDown, MessageCircle, Plus } from 'lucide-react';
 import { useStore } from '@/data/store';
-import { LabelPicker, PersonPicker } from '@/components/ui';
+import { LabelPicker, PeoplePicker } from '@/components/ui';
 import { shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
@@ -32,7 +32,7 @@ function AddRow({ onAdd, colSpan }) {
   );
 }
 
-export default function TableView({ boardKey, schema, groups, onOpen, onAdd }) {
+export default function TableView({ boardKey, schema, groups, onOpen, onAdd, readOnly = false }) {
   const { actions } = useStore();
   const [collapsed, setCollapsed] = useState({});
 
@@ -59,9 +59,9 @@ export default function TableView({ boardKey, schema, groups, onOpen, onAdd }) {
                 {g.items.map((it) => (
                   <tr key={it.id} className="border-t rowline hover:bg-white/5">
                     <td className="p-3 text-center">
-                      <input type="checkbox" checked={it.done} aria-label={`Mark ${it.name} done`}
+                      <input type="checkbox" checked={it.done} aria-label={`Mark ${it.name} done`} disabled={readOnly}
                         onChange={() => actions.updateItem(boardKey, it.id, { done: !it.done, values: { status: it.done ? 'Not started' : 'Done' } })}
-                        className="h-4 w-4 accent-[#5fd4ff]" />
+                        className="h-4 w-4 accent-[#5fd4ff] disabled:opacity-60" />
                     </td>
                     <td className="p-3">
                       <button type="button" onClick={() => onOpen(it.id)} className={cn('text-left font-semibold hover:underline', it.done && 'line-through opacity-60')}>{it.name.trim() || 'Untitled task'}</button>
@@ -75,7 +75,17 @@ export default function TableView({ boardKey, schema, groups, onOpen, onAdd }) {
                     </td>
                     {schema.columns.map((c) => {
                       const val = it.values[c.key] ?? '';
-                      if (c.type === 'person') return <td key={c.key} className="text-center"><PersonPicker value={val} onChange={(v) => actions.updateItem(boardKey, it.id, { values: { owner: v } })} /></td>;
+                      if (c.type === 'people') {
+                        return (
+                          <td key={c.key} className="text-center">
+                            <PeoplePicker value={it.values.people || []} label={`${c.label} for ${it.name}`} readOnly={readOnly}
+                              onChange={(v) => actions.updateItem(boardKey, it.id, { values: { people: v } })} />
+                          </td>
+                        );
+                      }
+                      if (c.type === 'date' && readOnly) {
+                        return <td key={c.key} className="text-center dim tnum">{shortDate(val)}</td>;
+                      }
                       if (c.type === 'date') {
                         return (
                           <td key={c.key} className="text-center">
@@ -89,14 +99,14 @@ export default function TableView({ boardKey, schema, groups, onOpen, onAdd }) {
                       }
                       return (
                         <td key={c.key} className="px-1.5">
-                          <LabelPicker label={`${c.label} for ${it.name}`} value={val} options={c.options} allowEmpty={c.type !== 'status'}
+                          <LabelPicker label={`${c.label} for ${it.name}`} value={val} options={c.options} allowEmpty={c.type !== 'status'} readOnly={readOnly}
                             onChange={(v) => actions.updateItem(boardKey, it.id, { values: { [c.key]: v }, ...(c.key === 'status' ? { done: v === 'Done' } : {}) })} />
                         </td>
                       );
                     })}
                   </tr>
                 ))}
-                <AddRow colSpan={schema.columns.length + 2} onAdd={(name) => onAdd(g.id, name)} />
+                {!readOnly && <AddRow colSpan={schema.columns.length + 2} onAdd={(name) => onAdd(g.id, name)} />}
               </tbody>
             </table>
           </div>

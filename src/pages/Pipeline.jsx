@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { ArrowRight, Check } from 'lucide-react';
+import { ArrowRight, Check, Link2 } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { DEAL_STAGES } from '@/data/boards';
+import { useAccess } from '@/lib/access';
 import { Avatar, KpiRow, Modal, PageHeader, PersonPicker } from '@/components/ui';
 import { compactMoney } from '@/lib/format';
 import { go } from '@/lib/router';
@@ -55,17 +56,34 @@ function NewDeal({ open, onClose }) {
   );
 }
 
+// Small link icon on a deal that came from an outreach contact (named when the viewer can see contacts).
+function FromContact({ contactId }) {
+  const { state } = useStore();
+  const canSee = useAccess().canView('outreach'); // demo state holds every contact; live RLS hides them at none
+  const c = canSee ? state.contacts.find((x) => x.id === contactId) : null;
+  const label = c ? `From contact ${c.name}` : 'From an outreach contact';
+  return <span role="img" aria-label={label} title={label} className="dimmer"><Link2 className="h-3.5 w-3.5" /></span>;
+}
+
 export default function Pipeline() {
   const { state, actions } = useStore();
+  const access = useAccess();
+  const editable = access.canEdit('pipeline'); // view: no drag, stage select, New deal or Make client
+  const canConvert = editable && access.canEdit('clients'); // convertDeal needs both
   const [over, setOver] = useState(null);
   const [adding, setAdding] = useState(false);
   const deals = state.deals;
   const open = deals.filter((d) => d.stage !== 'Won');
   const value = open.reduce((t, d) => t + (d.value || 0), 0);
+  const drop = (stage) => (editable ? {
+    onDragOver: (e) => { e.preventDefault(); setOver(stage); },
+    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(null); },
+    onDrop: (e) => { e.preventDefault(); setOver(null); const id = e.dataTransfer.getData('text/plain'); if (id) actions.moveDeal(id, stage); },
+  } : {});
 
   return (
     <div>
-      <PageHeader title="Pipeline" action="New deal" onAction={() => setAdding(true)} />
+      <PageHeader title="Pipeline" action={editable ? 'New deal' : undefined} onAction={() => setAdding(true)} />
       <KpiRow items={[
         { value: open.length, label: 'Open deals', tint: '#334155' },
         { value: compactMoney(value), label: 'Pipeline value', tint: '#7c3aed' },
@@ -77,20 +95,18 @@ export default function Pipeline() {
           {DEAL_STAGES.map((stage) => {
             const items = deals.filter((d) => d.stage === stage);
             return (
-              <div key={stage}
-                className={cn('rounded-[24px] glass p-3', over === stage && 'drag-over')}
-                onDragOver={(e) => { e.preventDefault(); setOver(stage); }}
-                onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(null); }}
-                onDrop={(e) => { e.preventDefault(); setOver(null); const id = e.dataTransfer.getData('text/plain'); if (id) actions.moveDeal(id, stage); }}>
+              <div key={stage} className={cn('rounded-[24px] glass p-3', over === stage && 'drag-over')} {...drop(stage)}>
                 <div className="mb-3 flex items-center justify-between px-2 pt-1 font-bold">
                   {stage}<span className="rounded-full chip px-2 text-[12px] tnum">{items.length}</span>
                 </div>
                 <div className="flex flex-col gap-2 min-h-[90px]">
                   {items.map((d) => (
-                    <div key={d.id} draggable onDragStart={(e) => e.dataTransfer.setData('text/plain', d.id)}
-                      className="float cursor-grab rounded-[18px] chip p-3.5 active:cursor-grabbing">
+                    <div key={d.id} draggable={editable} onDragStart={editable ? (e) => e.dataTransfer.setData('text/plain', d.id) : undefined}
+                      className={cn('float rounded-[18px] chip p-3.5', editable && 'cursor-grab active:cursor-grabbing')}>
                       <div className="flex items-start justify-between gap-2">
-                        <div className="font-bold">{d.name}</div>
+                        <div className="flex min-w-0 items-center gap-1.5 font-bold">
+                          <span className="min-w-0">{d.name}</span>{d.contactId && <FromContact contactId={d.contactId} />}
+                        </div>
                         <span className={cn('rounded-full px-2 text-[11px] font-bold', PRIORITY_BG[d.priority])}>{d.priority}</span>
                       </div>
                       {d.next && <div className="mt-1 text-[12.5px] dim">{d.next}</div>}
@@ -99,21 +115,23 @@ export default function Pipeline() {
                           <span className="font-extrabold tnum text-[16px]">{compactMoney(d.value)}</span>
                           {d.contact && <Avatar userId={d.contact} size={22} />}
                         </div>
-                        {stage === 'Won' && (d.clientId ? (
+                        {stage === 'Won' && (d.clientId ? (access.canView('clients') && (
                           <button type="button" onClick={() => go('clients')} className="inline-flex items-center gap-1 rounded-full chip px-2.5 py-1 text-[12px] font-semibold">
                             <Check className="h-3.5 w-3.5" />Client
                           </button>
-                        ) : (
+                        )) : canConvert && (
                           <button type="button" onClick={() => actions.convertDeal(d.id)} className="inline-flex items-center gap-1 rounded-full chip-on px-2.5 py-1 text-[12px] font-semibold">
                             Make client<ArrowRight className="h-3.5 w-3.5" />
                           </button>
                         ))}
                       </div>
                       {/* Keyboard path for moving a deal; drag and drop stays as the mouse shortcut. */}
-                      <select className="field mt-2 !rounded-full !py-1 !px-2.5 text-[12px]" aria-label={`Stage for ${d.name}`} value={d.stage}
-                        draggable={false} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => actions.moveDeal(d.id, e.target.value)}>
-                        {DEAL_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
-                      </select>
+                      {editable && (
+                        <select className="field mt-2 !rounded-full !py-1 !px-2.5 text-[12px]" aria-label={`Stage for ${d.name}`} value={d.stage}
+                          draggable={false} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => actions.moveDeal(d.id, e.target.value)}>
+                          {DEAL_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -122,7 +140,7 @@ export default function Pipeline() {
           })}
         </div>
       </div>
-      <NewDeal open={adding} onClose={() => setAdding(false)} />
+      {editable && <NewDeal open={adding} onClose={() => setAdding(false)} />}
     </div>
   );
 }

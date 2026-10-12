@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Plus, Search, User, X } from 'lucide-react';
+import { Check, Plus, Search, User, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useStore, useUsers } from '@/data/store';
 
@@ -90,11 +90,19 @@ export function Popover({ anchor, open, onClose, children, width = 200, align = 
   );
 }
 
-/** Monday-style coloured cell; click to pick a value. `label` names the field for screen readers. */
-export function LabelPicker({ value, options, onChange, className, allowEmpty = true, label }) {
+/** Monday-style coloured cell; click to pick a value. `label` names the field for screen readers.
+ *  `readOnly` shows the same pill without the picker (view access). */
+export function LabelPicker({ value, options, onChange, className, allowEmpty = true, label, readOnly = false }) {
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
   const color = value ? options[value] : null;
+  if (readOnly) {
+    return (
+      <span className={cn('pill w-full', !value && 'pill-empty', className)} style={color ? { backgroundColor: color } : undefined}>
+        {label && <span className="sr-only">{label}: </span>}{value || <span className="sr-only">Not set</span>}
+      </span>
+    );
+  }
   return (
     <>
       <button
@@ -125,12 +133,20 @@ export function LabelPicker({ value, options, onChange, className, allowEmpty = 
   );
 }
 
-export function PersonPicker({ value, onChange, size = 28 }) {
+/** Single owner (deals, clients, contacts). `readOnly` shows just the avatar (view access). */
+export function PersonPicker({ value, onChange, size = 28, readOnly = false }) {
   const { state } = useStore();
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
   const owner = state.users.find((u) => u.id === value);
   const people = state.users.filter((u) => u.active !== false || u.id === value); // deactivated staff can't be picked
+  if (readOnly) {
+    return (
+      <span className="inline-flex rounded-full">
+        <Avatar userId={value} size={size} /><span className="sr-only">Owner: {owner?.name || 'Unassigned'}</span>
+      </span>
+    );
+  }
   return (
     <>
       <button type="button" ref={setAnchor} onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
@@ -146,6 +162,73 @@ export function PersonPicker({ value, onChange, size = 28 }) {
             </button>
           ))}
           <button type="button" aria-pressed={!value} onClick={() => { onChange(''); setOpen(false); }} className="rounded-xl px-2 py-1.5 text-left dimmer hover:bg-white/10">Unassigned</button>
+        </div>
+      </Popover>
+    </>
+  );
+}
+
+/** Overlapping avatars for a list of user ids, with a +N chip past `max`. Not interactive (safe inside a card button).
+ *  Unknown ids are skipped; nobody shows the dashed placeholder. */
+export function AvatarStack({ userIds, size = 28, max = 3, label, className }) {
+  const users = useUsers();
+  const ids = [...new Set(Array.isArray(userIds) ? userIds : [])].filter((id) => users[id]);
+  const shown = ids.length > max ? ids.slice(0, Math.max(1, max - 1)) : ids;
+  const extra = ids.length - shown.length;
+  const names = ids.map((id) => users[id].name).join(', ') || 'Unassigned';
+  return (
+    <span className={cn('inline-flex items-center', className)}>
+      <span aria-hidden="true" className="inline-flex items-center">
+        {ids.length === 0 && <Avatar userId="" size={size} />}
+        {shown.map((id, k) => <Avatar key={id} userId={id} size={size} className={k ? '-ml-2' : undefined} />)}
+        {extra > 0 && (
+          <span title={ids.slice(shown.length).map((id) => users[id].name).join(', ')}
+            className="chip-on -ml-2 inline-grid place-items-center rounded-full font-bold tnum ring-2 ring-white/40 shrink-0"
+            style={{ width: size, height: size, fontSize: size * 0.36 }}>+{extra}</span>
+        )}
+      </span>
+      <span className="sr-only">{label ? `${label}: ${names}` : names}</span>
+    </span>
+  );
+}
+
+/** Multi-person picker (the boards' people column): an avatar stack that opens a list of toggles. Only active people
+ *  can be added; a deactivated person already in `value` stays listed so they can be taken off. `onChange(ids)`.
+ *  Keyboard: Enter/Space opens, arrows/Home/End move, Enter/Space toggles, Escape or Tab closes. */
+export function PeoplePicker({ value, onChange, size = 28, max = 3, label = 'People', readOnly = false }) {
+  const { state } = useStore();
+  const [anchor, setAnchor] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [listed, setListed] = useState([]); // who was on it when opened, so a removed inactive person keeps their row
+  const ids = Array.isArray(value) ? value : [];
+  if (readOnly) return <AvatarStack userIds={ids} size={size} max={max} label={label} />;
+  const names = ids.map((id) => state.users.find((u) => u.id === id)?.name).filter(Boolean).join(', ');
+  const people = state.users.filter((u) => u.active !== false || ids.includes(u.id) || listed.includes(u.id));
+  const toggle = (id) => onChange(ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
+  return (
+    <>
+      <button type="button" ref={setAnchor} onClick={(e) => { e.stopPropagation(); if (!open) setListed(ids); setOpen((o) => !o); }}
+        aria-label={`${label}: ${names || 'Unassigned'}. Change people`} aria-haspopup="true" aria-expanded={open} className="rounded-full">
+        <AvatarStack userIds={ids} size={size} max={max} />
+      </button>
+      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={210}>
+        <div role="group" aria-label={label} className="flex flex-col">
+          {people.map((u) => {
+            const on = ids.includes(u.id);
+            const inactive = u.active === false;
+            return (
+              <button key={u.id} type="button" aria-pressed={on} onClick={() => toggle(u.id)}
+                className={cn('flex items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-white/10', on && 'bg-white/15')}>
+                <Avatar userId={u.id} size={24} ring={false} />
+                <span className={cn('min-w-0 flex-1 truncate', inactive && 'dimmer')}>{u.name}</span>
+                {inactive && <span className="text-[11px] dimmer">Inactive</span>}
+                <Check className={cn('h-4 w-4 shrink-0', !on && 'invisible')} aria-hidden="true" />
+              </button>
+            );
+          })}
+          {ids.length > 0 && (
+            <button type="button" onClick={() => { onChange([]); setOpen(false); }} className="rounded-xl px-2 py-1.5 text-left dimmer hover:bg-white/10">Clear</button>
+          )}
         </div>
       </Popover>
     </>

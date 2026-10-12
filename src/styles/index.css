@@ -134,6 +134,8 @@ select option { color: #111; }
 [tabindex="-1"]:focus { outline: none; }
 .drag-over { background: rgba(255,255,255,.14) !important; outline: 2px dashed rgba(255,255,255,.6); }
 .scroll-thin { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.3) transparent; }
+/* An invoice printed from the Invoices tab (PrintSheet in src/pages/clients/invoice.jsx): beside #root, never on screen. */
+.print-sheet { display: none; }
 
 @keyframes drift { 0% { transform: scale(1) translate3d(0,0,0); } 100% { transform: scale(1.06) translate3d(-1.5%,-1%,0); } }
 @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
@@ -155,11 +157,12 @@ select option { color: #111; }
     background: #fff !important; box-shadow: none !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
   }
   html.printing-invoice .invoice-card:not([data-print-target]) { display: none !important; }
+  html.printing-invoice .print-sheet[data-print-target] { display: block; }
   html.printing-invoice .invoice-card[data-print-target] .tax-invoice { display: block; } /* any other print shows none */
   .invoice-card[data-print-target] { padding: 0 !important; border: 0 !important; color: #000 !important; background: #fff !important; box-shadow: none !important; }
   .invoice-card[data-print-target] * { color: #000 !important; }
 
-  /* Tax invoice (the printed copy in Clients.jsx): A4, black on white, ruled line table. */
+  /* Tax invoice (the printed copy in src/pages/clients/invoice.jsx): A4, black on white, ruled line table. */
   @page { size: A4; margin: 16mm 15mm; }
   .tax-invoice { color: #000; font-size: 10pt; line-height: 1.45; letter-spacing: 0; }
   .tax-invoice h1 { margin: 0; font-size: 22pt; font-weight: 800; line-height: 1.1; letter-spacing: -.02em; }

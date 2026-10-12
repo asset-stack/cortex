@@ -13,8 +13,19 @@ export function mentionRegex(users) {
 }
 
 export function mentionsUser(text, user) {
+  if (!user?.name) return false;
   const re = new RegExp(`${LEAD}@(${escape(user.name)}|here)\\b`, 'i');
   return re.test(text);
+}
+
+// Ids of the active people @named in a text, in order of first mention, each once. "@here" names nobody in
+// particular, so it adds no one. The store uses this to add people tagged in a task update to the item.
+export function mentionedUserIds(text, users) {
+  const active = (users || []).filter((u) => u && u.id && u.active !== false && String(u.name || '').trim());
+  if (!active.length || !text) return [];
+  const byName = new Map(active.map((u) => [u.name.toLowerCase(), u.id]));
+  const ids = [...String(text).matchAll(mentionRegex(active))].map((m) => byName.get(m[2].toLowerCase())).filter(Boolean);
+  return [...new Set(ids)];
 }
 
 export function MessageText({ text, users, me }) {
@@ -25,7 +36,7 @@ export function MessageText({ text, users, me }) {
   while ((m = re.exec(text))) {
     const start = m.index + m[1].length;
     if (start > last) parts.push(text.slice(last, start));
-    const isMe = m[2].toLowerCase() === 'here' || m[2].toLowerCase() === me.name.toLowerCase();
+    const isMe = m[2].toLowerCase() === 'here' || m[2].toLowerCase() === String(me?.name || '').toLowerCase();
     parts.push(<span key={start} className={isMe ? 'mention mention-me' : 'mention'}>@{m[2]}</span>);
     last = m.index + m[0].length;
   }

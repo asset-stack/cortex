@@ -20,6 +20,14 @@ const ANCESTORS = Object.fromEntries(TABLES.map((t) => {
   return [t.name, out];
 }));
 const opId = (table, key) => `${table}|${key}`;
+// The columns a foreign-key error (23503) is about: PostgREST's details say "Key (plan_id)=(…) is not present in
+// table …"; without them, the default constraint name <table>_<column>_fkey. [] when neither says.
+function fkColumns(table, err) {
+  const key = /Key \(([^)]*)\)=/.exec(err.details || '')?.[1];
+  if (key) return key.split(',').map((c) => c.trim().replace(/^"|"$/g, ''));
+  const name = new RegExp(`"${table}_(\\w+)_fkey"`).exec(err.message || '')?.[1];
+  return name ? [name] : [];
+}
 // Last write wins, except a later upsert never brings back a deleted row.
 const coalesce = (older, newer) => (older?.op === 'delete' && newer.op === 'upsert' ? older : newer);
 const listOf = (m, k) => { if (!m.has(k)) m.set(k, []); return m.get(k); };
@@ -124,13 +132,13 @@ export function createSync({ supabase, onStatus = () => {}, onRealtime = () => {
     report();
   }
 
-  // Runs a request; a thrown error or { error } becomes { message, code, offline }.
+  // Runs a request; a thrown error or { error } becomes { message, code, details, offline }.
   async function attemptRequest(fn) {
     try {
       const res = (await fn()) || {};
       if (!res.error) return null;
       const offline = res.status === 0 || (typeof navigator !== 'undefined' && navigator.onLine === false);
-      return { message: res.error.message || 'Save failed', code: res.error.code, offline };
+      return { message: res.error.message || 'Save failed', code: res.error.code, details: res.error.details || '', offline };
     } catch (e) {
       return { message: e?.message || 'Save failed', offline: typeof navigator !== 'undefined' && navigator.onLine === false };
     }
@@ -163,14 +171,25 @@ export function createSync({ supabase, onStatus = () => {}, onRealtime = () => {
         }
       }
       const [parent, col] = table.parent || [];
+      const writing = (id) => Boolean(id) && (refused.has(id) || queued.has(id));
       rejected.forEach(([list, e]) => list.forEach((op) => {
+        const fk = e.code === '23503' ? fkColumns(table.name, e).filter((c) => c in op.row) : [];
         // A missing parent this client isn't still writing was deleted by someone else, and the cascade took this
         // row with it: the write can never succeed, so drop it instead of retrying (and holding deletes) forever.
-        const parentId = parent && opId(parent, String(op.row[col]));
-        const waiting = e.code === '23503' && Boolean(parentId) && (refused.has(parentId) || queued.has(parentId));
+        const parentId = parent && (!fk.length || fk.includes(col)) && opId(parent, String(op.row[col]));
+        // A link the database clears on delete (a billing plan, a routine) points at a row deleted elsewhere: the
+        // database set it null on the saved row, so this write goes again with it null too.
+        const link = fk.length === 1 && table.setNull?.[fk[0]] && op.row[fk[0]] ? fk[0] : '';
+        const linkId = link && opId(table.setNull[link], String(op.row[link]));
+        const waiting = e.code === '23503' && (writing(parentId) || writing(linkId));
         if (e.code === '23503' && parentId && !waiting) { dropped.push(op); return; }
         refused.add(opId(table.name, op.key));
-        failed.push({ op, err: e, waiting });
+        if (linkId && !waiting) {
+          op.row = { ...op.row, [link]: null };
+          failed.push({ op, err: null }); // sent again on the next flush, not counted as a refusal
+        } else {
+          failed.push({ op, err: e, waiting });
+        }
         // The failed row may be moving to a new parent, and deleting its old parent now would cascade it away.
         // A unique clash (23505) is the exception: a delete in this batch may be what frees the value.
         if (e.code !== '23505') ANCESTORS[table.name].forEach((name) => held.add(name));

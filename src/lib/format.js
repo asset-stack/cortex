@@ -114,3 +114,35 @@ export function formatBsb(v) {
   const d = digitsOf(v);
   return d.length === 6 ? `${d.slice(0, 3)}-${d.slice(3)}` : String(v ?? '').trim();
 }
+
+// ── Clients: months, GST, payments, subscriptions ──
+
+const countFmt = new Intl.NumberFormat('en-AU');
+// Counts with thousands separators (usage figures).
+export const count = (n) => countFmt.format(n || 0);
+
+// 'YYYY-MM-01' for any day in a month ('YYYY-MM' works too); '' when it isn't a date.
+export const monthStart = (ymd) => (/^\d{4}-\d{2}/.test(String(ymd || '')) ? `${String(ymd).slice(0, 7)}-01` : '');
+
+// The month of a 'YYYY-MM-DD' (or 'YYYY-MM') as 'Oct 2026'.
+export function monthLabel(ymd) {
+  const m = /^(\d{4})-(\d{2})/.exec(String(ymd || ''));
+  if (!m) return '—';
+  return new Date(+m[1], +m[2] - 1, 1).toLocaleDateString('en-AU', { month: 'short', year: 'numeric' });
+}
+
+// The GST inside an amount that includes it (one eleventh), to the cent. Same rule as the store's expenses.
+export const gstIncluded = (amount) => Math.round(((Number(amount) || 0) * 100) / 11) / 100;
+
+// A subscription's cost per month: annual plans count as a twelfth.
+export const monthlyCost = (sub) => {
+  const n = Number(sub?.amount) || 0;
+  return sub?.cycle === 'annually' ? n / 12 : n;
+};
+
+// Payments received against an invoice, in dollars (added in whole cents).
+export const paidTowards = (payments, invoiceId) => (payments || [])
+  .reduce((t, p) => (p.invoiceId === invoiceId ? t + Math.round((Number(p.amount) || 0) * 100) : t), 0) / 100;
+
+// What is still owing on an invoice (inc GST) after its payments; never below zero.
+export const owingOn = (inv, payments) => Math.max(0, Math.round(invoiceTotals(inv).total * 100 - paidTowards(payments, inv.id) * 100) / 100);

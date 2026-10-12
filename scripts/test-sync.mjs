@@ -1,9 +1,24 @@
 // Checks the live-mode mapping and sync engine without a network: node scripts/test-sync.mjs
-// (a) flatten/assemble round trip, (b) diff ops for common edits, (c) the sync queue against a fake Supabase.
+// (a) flatten/assemble round trip, (b) diff ops for common edits, (c) the sync queue against a fake Supabase,
+// (d) roles and module access, the demo automations, the seed and the demo-data migration (docs/PHASE2.md).
 // Exits non-zero when any check fails.
 import assert from 'node:assert/strict';
-import { TABLES, flatten, assemble, diff } from '../src/data/backend/schema.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { register } from 'node:module';
+import { TABLES, flatten, assemble, diff, normalizeRow } from '../src/data/backend/schema.js';
 import { createSync } from '../src/data/backend/sync.js';
+
+// src/lib/access.js reaches the store through Vite's '@/…' alias (for its React hook): Node gets a stub for
+// '@/data/store' (the hook isn't run here) and resolves other '@/…' imports to src/.
+const SRC = new URL('../src/', import.meta.url).href;
+const STORE_STUB = `data:text/javascript,${encodeURIComponent('export const useStore = () => { throw new Error("no store in Node"); };')}`;
+register(`data:text/javascript,${encodeURIComponent(`
+  export async function resolve(specifier, context, next) {
+    if (specifier === '@/data/store') return { url: ${JSON.stringify(STORE_STUB)}, shortCircuit: true };
+    if (specifier.startsWith('@/')) return next(${JSON.stringify(SRC)} + specifier.slice(2) + (/\\.[a-z]+$/.test(specifier) ? '' : '.js'), context);
+    return next(specifier, context);
+  }
+`)}`);
 
 let failures = 0;
 async function check(name, fn) {
@@ -31,9 +46,10 @@ const fixture = () => ({
   mode: 'live',
   me: U1,
   users: [
-    { id: U1, name: 'Ana', initials: 'AN', color: '#579bfc', email: 'ana@example.com', role: 'admin', active: true },
-    { id: U2, name: 'Ben', initials: 'BE', color: '#ff7575', email: 'ben@example.com', role: 'member', active: false },
+    { id: U1, name: 'Ana', initials: 'AN', color: '#579bfc', email: 'ana@example.com', role: 'superadmin', active: true },
+    { id: U2, name: 'Ben', initials: 'BE', color: '#ff7575', email: 'ben@example.com', role: 'staff', active: false },
   ],
+  moduleAccess: [{ userId: U2, module: 'outreach', level: 'view' }, { userId: U2, module: 'pipeline', level: 'none' }],
   org: {
     businessName: 'Example Pty Ltd', abn: '00 000 000 000', address: '1 Example St', email: 'accounts@example.com',
     phone: '0000 000 000', bankAccountName: 'Example', bsb: '000-000', accountNumber: '00000000',
@@ -44,26 +60,26 @@ const fixture = () => ({
       groups: [
         { id: 'g-1', name: 'Active', color: '#c9ffe6', items: [
           {
-            id: 'it-1', name: 'First', values: { owner: U1, status: 'In progress', due: '2026-10-30' }, done: false,
+            id: 'it-1', name: 'First', values: { people: [U1, U2], status: 'In progress', due: '2026-10-30' }, done: false,
             updates: [
               { id: 'up-2', user: U2, text: 'Newer', ts: '2026-10-02T03:00:00.000Z' },
               { id: 'up-1', user: U1, text: 'Older', ts: '2026-10-01T03:00:00.000Z' },
             ],
             subtasks: [{ id: 'st-1', text: 'One', done: true }, { id: 'st-2', text: 'Two', done: false }],
           },
-          { id: 'it-2', name: 'Second', values: { status: 'Done', owner: '' }, done: true, updates: [], subtasks: [] },
+          { id: 'it-2', name: 'Second', values: { status: 'Done', people: [] }, done: true, updates: [], subtasks: [] },
         ] },
         { id: 'g-2', name: 'Backlog', color: '#e6eaf2', items: [] },
+        { id: 'g-3', name: 'Admin', color: '#ffe6b0', items: [
+          { id: 'it-3', name: 'Admin task', values: { people: [U2], status: 'Stuck' }, done: false, updates: [], subtasks: [] },
+        ] },
       ],
     },
-    admin: { groups: [{ id: 'g-3', name: 'To do', color: '#ffe6b0', items: [
-      { id: 'it-3', name: 'Admin task', values: { owner: U2, status: 'Stuck' }, done: false, updates: [], subtasks: [] },
-    ] }] },
     marketing: { groups: [] },
   },
   deals: [
-    { id: 'd-1', name: 'Deal one', sector: 'Government', value: 70000, priority: 'P2', stage: 'Opportunities', contact: U1, next: 'Call' },
-    { id: 'd-2', name: 'Client one', sector: 'Utilities', value: '1,500', priority: 'P1', stage: 'Won', contact: '', next: '', clientId: 'c-1' },
+    { id: 'd-1', name: 'Deal one', sector: 'Government', value: 70000, priority: 'P2', stage: 'Opportunities', contact: U1, next: 'Call', contactId: 'p-1' },
+    { id: 'd-2', name: 'Client one', sector: 'Utilities', value: '1,500', priority: 'P1', stage: 'Won', contact: '', next: '', contactId: '', clientId: 'c-1' },
   ],
   clients: [
     {
@@ -76,25 +92,34 @@ const fixture = () => ({
       ],
       tasks: [{ id: 't-1', text: 'Book meeting', done: false }],
       invoices: [
-        { id: 'i-2', number: 'EX-1002', issued: '2026-10-08', due: '', status: 'Draft', lines: [
+        { id: 'i-2', number: 'EX-1002', issued: '2026-10-08', due: '', status: 'Awaiting approval', planId: 'bp-1', sentAt: '', paidOn: '', lines: [
           { id: 'l-3', desc: 'Licence', qty: 1, rate: 18450 },
         ] },
-        { id: 'i-1', number: 'EX-1001', issued: '2026-09-01', due: '2026-10-01', status: 'Paid', lines: [
-          { id: 'l-1', desc: 'Capture', qty: '2', rate: '1,000' },
-          { id: 'l-2', desc: 'Travel', qty: 1, rate: 250.5 },
-        ] },
+        { id: 'i-1', number: 'EX-1001', issued: '2026-09-01', due: '2026-10-01', status: 'Paid', planId: '', sentAt: '2026-09-01T02:00:00.000Z',
+          paidOn: '2026-09-20', lines: [
+            { id: 'l-1', desc: 'Capture', qty: '2', rate: '1,000' },
+            { id: 'l-2', desc: 'Travel', qty: 1, rate: 250.5 },
+          ] },
       ],
       access: [{ id: 'a-1', name: 'Pat Doe', email: 'pat@example.com', role: 'Client admin' }],
+      plans: [
+        { id: 'bp-1', description: 'Licence', amount: 2400, frequency: 'monthly', nextDate: '2026-11-01', anchorDay: 1, active: true },
+        { id: 'bp-2', description: 'Support', amount: 99.5, frequency: 'annually', nextDate: '', anchorDay: 0, active: false },
+      ],
+      usage: [
+        { id: 'cu-2', month: '2026-10-01', assets: 5200, sites: 12, seats: 6, notes: 'Import' },
+        { id: 'cu-1', month: '2026-09-01', assets: 3400, sites: 9, seats: 5, notes: '' },
+      ],
     },
     {
       id: 'c-0', name: 'Client two', group: 'Active', status: 'Passive', priority: 'P2', next: '', sector: '', contact: '', team: [],
       lastContact: '', demo: '', keyContact: '', email: '', demoUrl: '', avatar: '#f59e0b', abn: '', billingAddress: '',
-      notes: [], tasks: [], invoices: [], access: [],
+      notes: [], tasks: [], invoices: [], access: [], plans: [], usage: [],
     },
   ],
   contacts: [
-    { id: 'p-1', name: 'Pat Doe', org: 'Client one', email: 'pat@example.com', stage: 'Won', status: 'Replied', last: '2026-10-03T01:00:00.000Z' },
-    { id: 'p-2', name: 'Sam Roe', org: '', email: 'sam@example.com', stage: 'Opportunity', status: 'New', last: '' },
+    { id: 'p-1', name: 'Pat Doe', org: 'Client one', email: 'pat@example.com', stage: 'Won', status: 'Replied', last: '2026-10-03T01:00:00.000Z', owner: U1 },
+    { id: 'p-2', name: 'Sam Roe', org: '', email: 'sam@example.com', stage: 'Opportunity', status: 'New', last: '', owner: '' },
   ],
   emails: [
     { id: 'e-2', kind: 'sent', contactId: 'p-1', contact: 'Pat Doe', subject: 'Hello', snippet: 'Hi Pat', ts: '2026-10-06T00:00:00.000Z' },
@@ -114,13 +139,51 @@ const fixture = () => ({
     [U1]: { 'ch-1': '2026-10-08T01:00:00.000Z', 'ch-2': '2026-10-09T01:00:00.000Z' },
     [U2]: { 'ch-1': '2026-10-08T02:00:00.000Z' }, // another viewer: not stored
   },
+  routines: [
+    { id: 'r-1', title: 'LinkedIn engagement', category: 'LinkedIn', minutes: 60, assignee: U2, weekdays: [1, 2, 3, 4, 5], start: '09:00', active: true },
+    { id: 'r-2', title: 'Pipeline review', category: 'Meetings', minutes: 30, assignee: U1, weekdays: [1], start: '', active: false },
+  ],
+  // In assembled order: by day, then position within each person's day.
+  todos: [
+    { id: 't-4', assignee: U2, createdBy: U1, title: 'Carried', notes: '', day: '2026-10-09', start: '', minutes: 30, category: 'Other',
+      source: 'manual', routineId: '', ref: '', done: false, doneAt: '' },
+    { id: 't-1', assignee: U2, createdBy: U2, title: 'LinkedIn engagement', notes: '', day: '2026-10-12', start: '09:00', minutes: 60,
+      category: 'LinkedIn', source: 'routine', routineId: 'r-1', ref: '', done: false, doneAt: '' },
+    { id: 't-3', assignee: U1, createdBy: U1, title: "Upload this week's bank screenshot", notes: '', day: '2026-10-12', start: '', minutes: 30,
+      category: 'Admin', source: 'automation', routineId: '', ref: 'bank:2026-10-12', done: false, doneAt: '' },
+    { id: 't-2', assignee: U2, createdBy: U1, title: 'Send deck', notes: 'Use v2', day: '2026-10-12', start: '13:30', minutes: 45,
+      category: 'Outreach', source: 'manual', routineId: '', ref: '', done: true, doneAt: '2026-10-12T03:00:00.000Z' },
+  ],
+  timeEntries: [
+    { id: 'te-1', user: U2, day: '2026-10-09', start: '09:00', minutes: 60, category: 'LinkedIn', note: 'Posts', source: 'suggested' },
+    { id: 'te-3', user: U1, day: '2026-10-09', start: '09:00', minutes: 30, category: 'Admin', note: '', source: 'manual' },
+    { id: 'te-2', user: U2, day: '2026-10-09', start: '10:00', minutes: 60, category: 'Outreach', note: '', source: 'manual' },
+  ],
+  payments: [
+    { id: 'pay-1', invoiceId: 'i-1', clientId: 'c-1', amount: 2750.55, receivedOn: '2026-09-20', reference: 'EX-1001', statementId: 'bs-1' },
+    { id: 'pay-0', invoiceId: '', clientId: 'c-0', amount: 100, receivedOn: '2026-09-02', reference: '', statementId: '' },
+  ],
+  bankStatements: [
+    { id: 'bs-1', weekStart: '2026-09-14', filePath: 'statements/0000-statement.png', note: 'Week 38', uploadedBy: U1, createdAt: '2026-09-21T00:00:00.000Z' },
+    { id: 'bs-0', weekStart: '2026-09-07', filePath: '', note: '', uploadedBy: '', createdAt: '' },
+  ],
+  expenses: [
+    { id: 'x-2', date: '2026-10-03', vendor: 'Golf club', category: 'Marketing', amount: 1650, gst: 150, clientId: '', receiptPath: '', notes: '', createdBy: U1 },
+    { id: 'x-1', date: '2026-10-01', vendor: 'Airline', category: 'Travel', amount: 412.5, gst: 37.5, clientId: 'c-1', receiptPath: 'receipts/0000-r.pdf',
+      notes: 'Visit', createdBy: U2 },
+  ],
+  subscriptions: [
+    { id: 'sub-1', name: 'Workspace', vendor: 'Example', category: 'Software', amount: 69, cycle: 'monthly', renewsOn: '2026-11-01', active: true, notes: '3 seats' },
+    { id: 'sub-2', name: 'Domains', vendor: 'Registrar', category: 'Hosting', amount: 60, cycle: 'annually', renewsOn: '', active: false, notes: '' },
+  ],
 });
 
 // ── (a) Round trip ─────────────────────────────────────────────────────────────
 
 let createSeed = null;
+let migrate = null;
 try {
-  ({ createSeed } = await import('../src/data/seed.js'));
+  ({ createSeed, migrate } = await import('../src/data/seed.js'));
 } catch (e) {
   console.log(`SKIP createSeed round trip: seed.js is not importable in Node (${String(e?.message).split('\n')[0]})`);
 }
@@ -148,7 +211,7 @@ await check('flatten: DB column shapes', () => {
   });
   assert.deepEqual(rows.deals.get('d-2'), {
     id: 'd-2', name: 'Client one', sector: 'Utilities', priority: 'P1', stage: 'Won', next_step: '', value: 1500,
-    owner_id: null, client_id: 'c-1', position: 1,
+    owner_id: null, client_id: 'c-1', contact_id: null, position: 1,
   });
   assert.equal(rows.clients.get('c-0').last_contact, null);
   // position is the array index ('c-0' sits second, so id order can't stand in for it), counted from the end for
@@ -172,8 +235,10 @@ await check('assemble: order and state fields', () => {
   const s = fixture();
   const back = assemble(flatten(s), { me: U1 });
   assert.deepEqual(Object.keys(back).sort(), ['approvals', 'boards', 'channels', 'clients', 'contacts', 'deals', 'emails', 'lastRead',
-    'messages', 'org', 'sequences', 'users'].sort());
-  assert.deepEqual(back.boards.projects.groups.map((g) => g.id), ['g-1', 'g-2']);
+    'messages', 'org', 'sequences', 'users', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements',
+    'expenses', 'subscriptions'].sort());
+  assert.deepEqual(Object.keys(back.boards), ['projects', 'marketing']);
+  assert.deepEqual(back.boards.projects.groups.map((g) => g.id), ['g-1', 'g-2', 'g-3']);
   assert.deepEqual(back.boards.projects.groups[0].items.map((i) => i.id), ['it-1', 'it-2']);
   assert.deepEqual(back.boards.projects.groups[0].items[0].updates.map((u) => u.id), ['up-2', 'up-1']); // newest first
   assert.deepEqual(back.boards.marketing, { groups: [] });
@@ -192,18 +257,78 @@ await check('assemble: order and state fields', () => {
   assert.deepEqual(back.lastRead, { [U1]: s.lastRead[U1] });
   assert.deepEqual(back.users, s.users);
   // Parts of the fixture already in canonical form come back exactly (no extra or missing fields).
-  ['boards', 'contacts', 'emails', 'sequences', 'approvals', 'messages'].forEach((k) => assert.deepEqual(back[k], s[k], k));
+  ['boards', 'contacts', 'emails', 'sequences', 'approvals', 'messages', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments',
+    'bankStatements', 'expenses', 'subscriptions'].forEach((k) => assert.deepEqual(back[k], s[k], k));
   assert.deepEqual(back.clients[1], s.clients[1]);
-  assert.deepEqual(back.deals[0], s.deals[0]);
+  assert.deepEqual(back.clients[0].plans, s.clients[0].plans);
+  assert.deepEqual(back.clients[0].usage, s.clients[0].usage); // newest month first
+  assert.deepEqual(back.clients[0].invoices.map(({ lines: _l, ...inv }) => inv), s.clients[0].invoices.map(({ lines: _l, ...inv }) => inv));
+  assert.deepEqual(back.deals, s.deals.map((d) => ({ ...d, value: Number(String(d.value).replace(/,/g, '')) })));
 });
 
 await check('assemble: empty rows give a usable state', () => {
   const back = assemble({}, { me: U1 });
-  assert.deepEqual(back.boards, { projects: { groups: [] }, admin: { groups: [] }, marketing: { groups: [] } });
+  assert.deepEqual(back.boards, { projects: { groups: [] }, marketing: { groups: [] } });
+  ['moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements', 'expenses', 'subscriptions']
+    .forEach((k) => assert.deepEqual(back[k], [], k));
   assert.equal(back.org.paymentTermsDays, 30);
   assert.equal(back.org.invoicePrefix, 'INV-');
   assert.deepEqual(back.lastRead, { [U1]: {} });
   assert.deepEqual(back.clients, []);
+});
+
+await check('flatten: phase 2 tables and columns', () => {
+  const rows = flatten(fixture());
+  assert.deepEqual(rows.module_access.get(`${U2}:outreach`), { user_id: U2, module: 'outreach', level: 'view' });
+  assert.equal(rows.contacts.get('p-1').owner_id, U1);
+  assert.equal(rows.contacts.get('p-2').owner_id, null);
+  assert.equal(rows.deals.get('d-1').contact_id, 'p-1');
+  assert.deepEqual(
+    ['plan_id', 'sent_at', 'paid_on'].map((k) => [rows.invoices.get('i-2')[k], rows.invoices.get('i-1')[k]]),
+    [['bp-1', null], [null, '2026-09-01T02:00:00.000Z'], [null, '2026-09-20']],
+  );
+  assert.deepEqual(rows.billing_plans.get('bp-2'), {
+    id: 'bp-2', client_id: 'c-1', description: 'Support', amount: 99.5, frequency: 'annually', next_date: null, anchor_day: 0, active: false,
+    position: 1,
+  });
+  assert.deepEqual(rows.client_usage.get('cu-2'), { id: 'cu-2', client_id: 'c-1', month: '2026-10-01', assets: 5200, sites: 12, seats: 6, notes: 'Import' });
+  assert.deepEqual(rows.routines.get('r-1').weekdays, [1, 2, 3, 4, 5]);
+  assert.equal(rows.routines.get('r-1').start_time, '09:00');
+  assert.equal(rows.routines.get('r-2').start_time, null);
+  assert.deepEqual(rows.todos.get('t-2'), {
+    id: 't-2', assignee_id: U2, created_by: U1, title: 'Send deck', notes: 'Use v2', day: '2026-10-12', start_time: '13:30', minutes: 45,
+    category: 'Outreach', source: 'manual', routine_id: null, ref: '', done: true, done_at: '2026-10-12T03:00:00.000Z', position: 1,
+  });
+  assert.equal(rows.todos.get('t-1').routine_id, 'r-1');
+  assert.equal(rows.todos.get('t-3').done_at, null);
+  // Positions count within one person's day (t-1 and t-3 share a day but not a person; t-4 is another day).
+  [['todos', 't-4', 0], ['todos', 't-1', 0], ['todos', 't-3', 0], ['todos', 't-2', 1], ['time_entries', 'te-1', 0], ['time_entries', 'te-3', 0],
+    ['time_entries', 'te-2', 1], ['routines', 'r-2', 1], ['expenses', 'x-2', 1], ['expenses', 'x-1', 0], ['subscriptions', 'sub-2', 1]]
+    .forEach(([table, key, pos]) => assert.equal(rows[table].get(key).position, pos, `${table} ${key}`));
+  assert.deepEqual(rows.payments.get('pay-0'), {
+    id: 'pay-0', invoice_id: null, client_id: 'c-0', amount: 100, received_on: '2026-09-02', reference: '', statement_id: null,
+  });
+  assert.deepEqual(rows.bank_statements.get('bs-0'), { id: 'bs-0', week_start: '2026-09-07', file_path: '', note: '', uploaded_by: null, created_at: null });
+  assert.equal(rows.expenses.get('x-2').client_id, null);
+  assert.equal(rows.subscriptions.get('sub-2').renews_on, null);
+  assert.deepEqual(rows.time_entries.get('te-2'), {
+    id: 'te-2', user_id: U2, day: '2026-10-09', start_time: '10:00', minutes: 60, category: 'Outreach', note: '', source: 'manual', position: 1,
+  });
+});
+
+await check('normalizeRow: Postgres time, int[] and numeric values come back in state form', () => {
+  const todo = normalizeRow('todos', { id: 't', assignee_id: U1, day: '2026-10-12', start_time: '09:30:00', minutes: '15', done_at: '2026-10-12T01:02:03.456789+00:00' });
+  assert.equal(todo.start_time, '09:30');
+  assert.equal(todo.minutes, 15);
+  assert.equal(todo.done_at, '2026-10-12T01:02:03.456Z');
+  assert.equal(todo.created_by, null);
+  assert.equal(normalizeRow('time_entries', { start_time: '7:05' }).start_time, '07:05');
+  assert.equal(normalizeRow('time_entries', { start_time: '25:00' }).start_time, null);
+  assert.deepEqual(normalizeRow('routines', { weekdays: [5, 1, 1] }).weekdays, [1, 5]);
+  assert.deepEqual(normalizeRow('routines', { weekdays: '{3,2}' }).weekdays, [2, 3]);
+  assert.deepEqual(normalizeRow('routines', { weekdays: null }).weekdays, []);
+  assert.equal(normalizeRow('billing_plans', { amount: '2400.50' }).amount, 2400.5);
+  assert.equal(normalizeRow('expenses', { gst: '37.50' }).gst, 37.5);
 });
 
 // ── (b) diff ──────────────────────────────────────────────────────────────────
@@ -299,6 +424,64 @@ await check('diff: rows state never had (orphans) are not deleted', () => {
   assert.deepEqual(diff(prev, flatten(base)), []);
 });
 
+await check('diff: a new to-do only writes that row', () => {
+  const ops = opsAfter((s) => {
+    s.todos.push({ id: 't-new', assignee: U2, createdBy: U2, title: 'New', notes: '', day: '2026-10-12', start: '', minutes: 30, category: 'Other',
+      source: 'manual', routineId: '', ref: '', done: false, doneAt: '' });
+  });
+  assert.deepEqual(labels(ops), ['upsert todos t-new']);
+  assert.equal(ops[0].row.position, 2);
+});
+
+await check('diff: to-dos are numbered within a person\'s day, so other days never move', () => {
+  assert.deepEqual(labels(opsAfter((s) => { s.todos = s.todos.filter((t) => t.id !== 't-4'); })), ['delete todos t-4']);
+  const ops = opsAfter((s) => {
+    const t = s.todos.find((x) => x.id === 't-1');
+    t.day = '2026-10-13';
+  });
+  assert.deepEqual(labels(ops), ['upsert todos t-1', 'upsert todos t-2']); // t-2 moves up to position 0 of that day
+  assert.equal(ops.find((o) => o.key === 't-2').row.position, 0);
+  assert.deepEqual(labels(opsAfter((s) => { s.timeEntries = s.timeEntries.filter((e) => e.user !== U2); })), ['delete time_entries te-1', 'delete time_entries te-2']);
+});
+
+await check('diff: module access overrides upsert and delete by user and module', () => {
+  const ops = opsAfter((s) => {
+    s.moduleAccess = s.moduleAccess.filter((a) => a.module !== 'pipeline');
+    s.moduleAccess[0].level = 'edit';
+    s.moduleAccess.push({ userId: U2, module: 'clients', level: 'none' });
+  });
+  assert.deepEqual(labels(ops), [`delete module_access ${U2}:pipeline`, `upsert module_access ${U2}:clients`, `upsert module_access ${U2}:outreach`]);
+});
+
+await check('diff: plans, usage, payments, expenses and subscriptions', () => {
+  const ops = opsAfter((s) => {
+    s.clients[0].plans[0].nextDate = '2026-12-01';
+    s.clients[0].usage.unshift({ id: 'cu-3', month: '2026-11-01', assets: 1, sites: 1, seats: 1, notes: '' });
+    s.payments.unshift({ id: 'pay-2', invoiceId: 'i-2', clientId: 'c-1', amount: 1, receivedOn: '2026-10-10', reference: '', statementId: '' });
+    s.expenses.unshift({ id: 'x-3', date: '2026-10-10', vendor: 'V', category: 'Other', amount: 11, gst: 1, clientId: '', receiptPath: '', notes: '', createdBy: U1 });
+    s.subscriptions[1].active = true;
+  });
+  assert.deepEqual(labels(ops), [
+    'upsert billing_plans bp-1', 'upsert client_usage cu-3', 'upsert expenses x-3', 'upsert payments pay-2', 'upsert subscriptions sub-2',
+  ]); // the new expense goes on top without renumbering the others
+  assert.equal(ops.find((o) => o.key === 'x-3').row.position, 2);
+});
+
+await check('diff: deleting a plan unlinks its invoices before the plan goes', () => {
+  const ops = opsAfter((s) => {
+    s.clients[0].plans.shift();
+    s.clients[0].invoices[0].planId = '';
+  });
+  assert.deepEqual(labels(ops), ['delete billing_plans bp-1', 'upsert billing_plans bp-2', 'upsert invoices i-2']); // sync sends upserts first
+});
+
+await check('diff: groups still on the old admin board (before 0002 moves them) are never deleted', () => {
+  const prev = flatten(base);
+  prev.board_groups.set('g-old', { id: 'g-old', board_key: 'admin', name: 'To do', color: '', position: 0 });
+  prev.items.set('it-old', { ...prev.items.get('it-3'), id: 'it-old', board_key: 'admin', group_id: 'g-old' });
+  assert.deepEqual(diff(prev, flatten(base)), []);
+});
+
 // ── (c) Sync queue against a fake Supabase ────────────────────────────────────
 
 // Fake clock: replaces setTimeout/clearTimeout; tick(ms) fires due timers in order and lets promises settle.
@@ -354,7 +537,7 @@ function fakeSupabase(db = {}) {
           if (i >= 0) {
             const f = sb.failures[i];
             if (!f.sticky) sb.failures.splice(i, 1);
-            result = { data: null, error: { message: f.message, code: f.code ?? '' }, status: f.status ?? 400 };
+            result = { data: null, error: { message: f.message, code: f.code ?? '', details: f.details ?? '' }, status: f.status ?? 400 };
           } else if (call.method === 'select') {
             const all = db[table] || [];
             result = { data: all.slice(call.range[0], call.range[1] + 1), error: null, count: all.length, status: 200 };
@@ -574,6 +757,66 @@ await check('sync: a child whose parent was deleted elsewhere is dropped and hol
   assert.equal(statuses.at(-1).state, 'saved');
   await tick(60000);
   assert.equal(sb.calls.length, 2, 'never retried');
+  sync.dispose();
+});
+
+// What PostgREST says for a foreign key violation (23503): the constraint in the message, the key in details.
+const fkError = (table, cols, values, ref) => ({
+  table, method: 'upsert', code: '23503', sticky: true,
+  message: `insert or update on table "${table}" violates foreign key constraint "${table}_${cols.replace(', ', '_')}_fkey"`,
+  details: `Key (${cols})=(${values}) is not present in table "${ref}".`,
+});
+
+await check('sync: a link the database clears on delete, to a row deleted elsewhere, goes again cleared (never dropped or given up)', async () => {
+  const rejected = [];
+  const { sb, sync, states } = setup(undefined, { onRejected: (list) => rejected.push(list) });
+  const gone = (col) => (call) => call.rows.some((r) => r[col] === 'gone');
+  sb.failures.push(
+    { ...fkError('invoices', 'plan_id', 'gone', 'billing_plans'), match: gone('plan_id') },
+    { ...fkError('todos', 'routine_id', 'gone', 'routines'), match: gone('routine_id') },
+  );
+  sync.queue([
+    up('invoices', 'i1', { id: 'i1', client_id: 'c1', number: 'INV-1001', status: 'Approved', plan_id: 'gone' }),
+    up('todos', 't1', { id: 't1', assignee_id: 'u1', title: 'Post', done: true, routine_id: 'gone' }),
+  ]);
+  await tick(400);
+  assert.equal(sync.isPending('invoices', 'i1'), true, 'kept');
+  assert.equal(sync.isPending('todos', 't1'), true, 'kept');
+  await tick(400);
+  const sent = (table) => sb.calls.filter((c) => c.table === table).map((c) => c.rows[0]);
+  assert.deepEqual(sent('invoices'), [
+    { id: 'i1', client_id: 'c1', number: 'INV-1001', status: 'Approved', plan_id: 'gone' },
+    { id: 'i1', client_id: 'c1', number: 'INV-1001', status: 'Approved', plan_id: null },
+  ]);
+  assert.deepEqual(sent('todos').map((r) => [r.routine_id, r.done]), [['gone', true], [null, true]]);
+  assert.equal(sync.hasPending(), false);
+  assert.equal(rejected.length, 0);
+  assert.deepEqual(states(), ['saving', 'saved'], 'never an error');
+  assert.equal(sync.staleEcho('invoices', 'i1', sent('invoices')[1]), false, 'its echo is applied, clearing the link in the store');
+  sync.dispose();
+});
+
+await check('sync: a missing parent is told from another foreign key by the key PostgREST names', async () => {
+  const rejected = [];
+  const { sb, sync } = setup(undefined, { onRejected: (list) => rejected.push(list) });
+  sb.failures.push(
+    fkError('subtasks', 'item_id', 'it-gone', 'items'),
+    fkError('items', 'group_id, board_key', 'g-gone, projects', 'board_groups'),
+    fkError('client_notes', 'user_id', 'u-gone', 'profiles'),
+  );
+  sync.queue([
+    up('subtasks', 'st-1', { id: 'st-1', item_id: 'it-gone', position: 0, text: 'x', done: false }),
+    up('items', 'it-1', { id: 'it-1', board_key: 'projects', group_id: 'g-gone', position: 0, name: 'x', values: {}, done: false }),
+    up('client_notes', 'n1', { id: 'n1', client_id: 'c1', user_id: 'u-gone', text: 'x' }),
+  ]);
+  await tick(400);
+  assert.equal(sync.isPending('subtasks', 'st-1'), false, 'parent item deleted elsewhere: dropped');
+  assert.equal(sync.isPending('items', 'it-1'), false, 'parent group deleted elsewhere (key with the board): dropped');
+  assert.equal(sync.isPending('client_notes', 'n1'), true, 'not about its client: kept');
+  await tick(2000);
+  await tick(5000);
+  assert.equal(sb.calls.filter((c) => c.table === 'client_notes').length, 3);
+  assert.deepEqual(rejected.flat().map((r) => [r.table, r.key]), [['client_notes', 'n1']], 'given up like any refused row');
   sync.dispose();
 });
 
@@ -820,8 +1063,426 @@ await check('sync: realtime status goes to onRealtime, and SUBSCRIBED waits for 
   sync.dispose();
 });
 
+await check('sync: module_access upserts on (user_id, module) and deletes by both', async () => {
+  const { sb, sync } = setup();
+  sync.queue([
+    up('module_access', 'u1:outreach', { user_id: 'u1', module: 'outreach', level: 'view' }),
+    del('module_access', 'u2:pipeline', { user_id: 'u2', module: 'pipeline', level: 'edit' }),
+    del('module_access', 'u2:clients', { user_id: 'u2', module: 'clients', level: 'none' }),
+  ]);
+  await sync.flush();
+  const call = (method) => sb.calls.find((c) => c.method === method && c.table === 'module_access');
+  assert.deepEqual(call('upsert').options, { onConflict: 'user_id,module', ignoreDuplicates: false });
+  assert.deepEqual(call('delete').filters, [['eq', 'user_id', 'u2'], ['in', 'module', ['pipeline', 'clients']]]);
+  sync.dispose();
+});
+
+await check('sync: phase 2 tables are written parents first', async () => {
+  const order = TABLES.map((t) => t.name);
+  [['deals', 'contacts'], ['invoices', 'billing_plans'], ['billing_plans', 'clients'], ['client_usage', 'clients'], ['payments', 'invoices'],
+    ['payments', 'bank_statements'], ['expenses', 'clients'], ['todos', 'routines'], ['todos', 'profiles'], ['routines', 'profiles'],
+    ['time_entries', 'profiles'], ['module_access', 'profiles'], ['contacts', 'profiles']]
+    .forEach(([child, parent]) => assert.ok(order.indexOf(parent) < order.indexOf(child), `${parent} before ${child}`));
+  const { sb, sync } = setup();
+  const names = ['todos', 'routines', 'payments', 'bank_statements', 'invoices', 'billing_plans', 'deals', 'contacts', 'client_usage', 'clients'];
+  sync.queue(names.map((t) => up(t, `${t}-1`)));
+  await sync.flush();
+  assert.deepEqual(seq(sb), ['upsert clients', 'upsert contacts', 'upsert deals', 'upsert billing_plans', 'upsert invoices',
+    'upsert client_usage', 'upsert bank_statements', 'upsert payments', 'upsert routines', 'upsert todos']);
+  sync.dispose();
+});
+
 globalThis.setTimeout = realTimers.setTimeout;
 globalThis.clearTimeout = realTimers.clearTimeout;
+
+// ── (d) Access, demo automations, seed and migration ──────────────────────────
+
+const access = await import('../src/lib/access.js');
+const auto = await import('../src/lib/automations.js');
+
+const person = (id, role, active = true) => ({ id, name: id, initials: id.slice(0, 2).toUpperCase(), color: '#579bfc', email: `${id}@example.com`, role, active });
+const team = () => ({
+  me: 'sue',
+  users: [person('sue', 'superadmin'), person('al', 'admin'), person('stu', 'staff'), person('mem', 'member'), person('off', 'staff', false),
+    person('ex', 'superadmin', false)],
+  moduleAccess: [
+    { userId: 'stu', module: 'outreach', level: 'edit' }, { userId: 'stu', module: 'pipeline', level: 'none' },
+    { userId: 'stu', module: 'clients', level: 'bogus' }, { userId: 'al', module: 'clients', level: 'none' },
+  ],
+});
+
+await check('access: modules, staff defaults and roles', () => {
+  assert.deepEqual(access.MODULES, ['projects', 'marketing', 'outreach', 'pipeline', 'clients']);
+  assert.deepEqual(access.STAFF_DEFAULTS, { projects: 'edit', marketing: 'edit', outreach: 'none', pipeline: 'view', clients: 'view' });
+  const st = team();
+  assert.deepEqual(['sue', 'al', 'stu', 'mem', 'nobody'].map((u) => access.roleOf(st, u)), ['superadmin', 'admin', 'staff', 'staff', '']);
+  assert.equal(access.roleOf(st), 'superadmin', 'defaults to me');
+  assert.deepEqual(['superadmin', 'admin', 'staff', 'member', ''].map(access.isAdminRole), [true, true, false, false, false]);
+  assert.deepEqual(['sue', 'al', 'stu', 'ex'].map((u) => access.isSuperadmin(st, u)), [true, false, false, false]);
+  assert.deepEqual(['sue', 'al', 'stu', 'ex'].map((u) => access.isAdmin(st, u)), [true, true, false, false]);
+  assert.equal(access.isSuperadmin(st), true);
+});
+
+await check('access: effective module level (admins edit, staff override else default, inactive none)', () => {
+  const st = team();
+  const levels = (u) => access.MODULES.map((m) => access.moduleLevel(st, m, u));
+  assert.deepEqual(levels('sue'), ['edit', 'edit', 'edit', 'edit', 'edit']);
+  assert.deepEqual(levels('al'), ['edit', 'edit', 'edit', 'edit', 'edit'], 'overrides never apply to admins');
+  assert.deepEqual(levels('mem'), ['edit', 'edit', 'none', 'view', 'view'], 'phase 1 member gets the staff defaults');
+  assert.deepEqual(levels('stu'), ['edit', 'edit', 'edit', 'none', 'view'], 'overrides; an invalid level is ignored');
+  assert.deepEqual(levels('off'), ['none', 'none', 'none', 'none', 'none']);
+  assert.deepEqual(levels('ex'), ['none', 'none', 'none', 'none', 'none']);
+  assert.equal(access.moduleLevel(st, 'projects', 'nobody'), 'none');
+  assert.equal(access.moduleLevel(st, 'settings'), 'none');
+  assert.equal(access.moduleLevel(st, 'outreach'), 'edit', 'defaults to me');
+  assert.deepEqual([access.canView(st, 'pipeline', 'mem'), access.canEdit(st, 'pipeline', 'mem')], [true, false]);
+  assert.deepEqual([access.canView(st, 'pipeline', 'stu'), access.canEdit(st, 'outreach', 'stu')], [false, true]);
+  assert.deepEqual([access.canView({ ...st, moduleAccess: undefined }, 'clients', 'stu')], [true]);
+});
+
+const migration2 = new URL('../supabase/migrations/0002_team_workflow.sql', import.meta.url);
+if (existsSync(migration2)) {
+  await check('access: STAFF_DEFAULTS match public.module_level() in 0002', () => {
+    const sql = readFileSync(migration2, 'utf8');
+    const fn = sql.slice(sql.indexOf('function public.module_level'), sql.indexOf('function public.can_view'));
+    const pairs = Object.fromEntries([...fn.matchAll(/when '(\w+)' then '(\w+)'/g)].map((m) => [m[1], m[2]]));
+    assert.ok(Object.keys(pairs).length, 'module_level defaults not found');
+    const expected = Object.fromEntries(Object.entries(access.STAFF_DEFAULTS).filter(([, level]) => level !== 'none'));
+    assert.deepEqual(pairs, expected); // anything else falls through to 'none'
+  });
+}
+
+await check('automations: date helpers match Postgres', () => {
+  assert.deepEqual(['2026-10-12', '2026-10-18', '2026-10-14'].map(auto.isoDow), [1, 7, 3]);
+  assert.equal(auto.addDays('2026-12-31', 1), '2027-01-01');
+  assert.equal(auto.addDays('2026-03-01', -1), '2026-02-28');
+  assert.equal(auto.mondayOf('2026-10-18'), '2026-10-12');
+  assert.equal(auto.mondayOf('2026-10-12'), '2026-10-12');
+  assert.equal(auto.addMonths('2026-01-31', 1), '2026-02-28');
+  assert.equal(auto.addMonths('2024-01-31', 1), '2024-02-29');
+  assert.equal(auto.addMonths('2026-11-30', 3), '2027-02-28');
+  assert.equal(auto.addMonths('2026-10-12', 12), '2027-10-12');
+  assert.equal(auto.addMonthsOnDay('2026-09-30', 1, 31), '2026-10-31');
+  assert.equal(auto.addMonthsOnDay('2027-01-31', 1, 31), '2027-02-28');
+  assert.equal(auto.addMonthsOnDay('2026-11-30', 3, 30), '2027-02-28');
+  assert.deepEqual(['2026-10-12', '0026-07-01', '0002-10-01', '1999-12-31', '2100-01-01', '', '2026-1-1'].map(auto.isPlanDate),
+    [true, false, false, false, false, false, false]);
+  assert.deepEqual(['9:05', '09:05:00', '24:00', '', 'x'].map(auto.toHhmm), ['09:05', '09:05', '', '', '']);
+});
+
+await check('automations: invoice numbers continue the prefix from 1001', () => {
+  const st = (prefix, numbers) => ({ org: { invoicePrefix: prefix }, clients: [{ invoices: numbers.map((number) => ({ number })) }] });
+  assert.equal(auto.nextInvoiceNumber(st('EX-', ['EX-1002', 'INV-5000', 'EX-12a'])), 'EX-1003');
+  assert.equal(auto.nextInvoiceNumber(st('EX-', [])), 'EX-1001');
+  assert.equal(auto.nextInvoiceNumber(st('2026-', ['2026-1001', '2025-1009'])), '2026-1002');
+  assert.equal(auto.nextInvoiceNumber({ clients: [] }), 'INV-1001');
+});
+
+const workState = () => ({
+  me: 'stu',
+  users: [person('al', 'admin'), person('stu', 'staff'), person('off', 'staff', false)],
+  routines: [
+    { id: 'r-late', title: 'No time', category: 'Outreach', minutes: 15, assignee: 'stu', weekdays: [1], start: '', active: true },
+    { id: 'r-li', title: 'LinkedIn engagement', category: 'LinkedIn', minutes: 60, assignee: 'stu', weekdays: [1, 2, 3, 4, 5], start: '09:00', active: true },
+    { id: 'r-off', title: 'Paused', category: 'Other', minutes: 10, assignee: 'stu', weekdays: [1, 2, 3, 4, 5, 6, 7], start: '', active: false },
+    { id: 'r-al', title: 'Pipeline review', category: 'Meetings', minutes: 30, assignee: 'al', weekdays: [1], start: '08:30', active: true },
+    { id: 'r-gone', title: 'Inactive person', category: 'Other', minutes: 10, assignee: 'off', weekdays: [1], start: '', active: true },
+  ],
+  todos: [],
+  bankStatements: [{ id: 'bs', weekStart: '2026-10-19', filePath: '', note: '', uploadedBy: 'al', createdAt: '' }],
+});
+
+await check('automations: ensureTodosLocal adds routine to-dos once per routine, person and day', () => {
+  const st = workState();
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-12'), 2); // Monday
+  assert.deepEqual(st.todos.map((t) => t.routineId), ['r-li', 'r-late'], 'by start time, untimed last');
+  const { id: _id, ...li } = st.todos[0];
+  assert.deepEqual(li, {
+    assignee: 'stu', createdBy: 'stu', title: 'LinkedIn engagement', notes: '', day: '2026-10-12', start: '09:00', minutes: 60,
+    category: 'LinkedIn', source: 'routine', routineId: 'r-li', ref: '', done: false, doneAt: '',
+  });
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-12'), 0, 'idempotent');
+  st.todos[0].done = true;
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-12'), 0, 'a done to-do still counts');
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-13'), 1); // Tuesday: weekday routine only
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-18'), 0); // Sunday
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-12', { me: 'off' }), 0, 'inactive person');
+  assert.equal(auto.ensureTodosLocal(st, 'not a day'), 0);
+});
+
+await check('automations: a routine to-do deleted or moved to another day is not made again that day', () => {
+  const st = workState();
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-12'), 2);
+  st.todos = st.todos.filter((t) => t.routineId !== 'r-li');
+  st.todos.find((t) => t.routineId === 'r-late').day = '2026-10-14';
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-12'), 0);
+  assert.equal(st.todos.filter((t) => t.day === '2026-10-12').length, 0);
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-13'), 1, 'the next day runs as usual');
+  assert.deepEqual(st.routineRuns, ['2026-10-12|r-li|stu', '2026-10-12|r-late|stu', '2026-10-13|r-li|stu']);
+  auto.ensureTodosLocal(st, '2026-10-27');
+  assert.ok(st.routineRuns.every((r) => r >= '2026-10-13'), 'runs older than two weeks are let go');
+});
+
+await check('automations: ensureTodosLocal adds the Monday bank reminder for admins until the statement is in', () => {
+  const st = workState();
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-12', { me: 'al' }), 2);
+  const bank = st.todos.find((t) => t.source === 'automation');
+  assert.deepEqual({ ...bank, id: '' }, {
+    id: '', assignee: 'al', createdBy: 'al', title: auto.BANK_TODO_TITLE, notes: '', day: '2026-10-12', start: '', minutes: 30, category: 'Admin',
+    source: 'automation', routineId: '', ref: 'bank:2026-10-12', done: false, doneAt: '',
+  });
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-12', { me: 'al' }), 0);
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-19', { me: 'al' }), 1, 'statement uploaded for that week: routine only');
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-13', { me: 'al' }), 0, 'Mondays only');
+  assert.ok(!st.todos.some((t) => t.assignee === 'stu'));
+  auto.ensureTodosLocal(st, '2026-10-26');
+  assert.ok(!st.todos.some((t) => t.assignee === 'stu' && t.source === 'automation'), 'staff never get it');
+});
+
+const outreachState = () => ({
+  me: 'al',
+  users: [person('al', 'admin'), person('stu', 'staff')],
+  contacts: [
+    { id: 'c1', name: 'Pat Doe', org: 'Example Water', email: '', stage: 'Opportunity', status: 'Replied', last: '', owner: 'stu' },
+    { id: 'c2', name: 'Lee Roe', org: '  ', email: '', stage: 'Opportunity', status: 'Meeting booked', last: '', owner: '' },
+    { id: 'c3', name: 'Kim Poe', org: 'Org', email: '', stage: 'Opportunity', status: 'Opened', last: '', owner: 'stu' },
+  ],
+  deals: [{ id: 'd0', name: 'Existing', sector: '', value: 5, priority: 'P1', stage: 'Opportunities', contact: 'al', next: '', contactId: '' }],
+  todos: [],
+});
+
+await check('automations: contactPipelineLocal creates the deal and the follow-up once', () => {
+  const st = outreachState();
+  const out = auto.contactPipelineLocal(st, 'c1', 'Sent', { day: '2026-10-12' });
+  assert.deepEqual({ ...out.deal, id: '' }, {
+    id: '', name: 'Example Water', sector: '', value: 0, priority: 'P2', stage: 'Opportunities', contact: 'stu', next: 'Reply to Pat Doe', contactId: 'c1',
+  });
+  assert.equal(st.deals.at(-1), out.deal, 'at the end of the pipeline');
+  assert.deepEqual({ ...out.todo, id: '' }, {
+    id: '', assignee: 'stu', createdBy: 'al', title: 'Follow up: Pat Doe replied', notes: '', day: '2026-10-12', start: '', minutes: 30,
+    category: 'Outreach', source: 'automation', routineId: '', ref: 'contact:c1', done: false, doneAt: '',
+  });
+  assert.equal(auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-12' }), null, 'status unchanged');
+  st.contacts[0].status = 'Meeting booked';
+  const again = auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-12' });
+  assert.equal(again.deal, out.deal);
+  assert.equal(out.deal.stage, 'First meetings', 'a booking moves it on');
+  assert.equal(again.todo, null, 'one follow-up per contact and day');
+  st.contacts[0].status = 'Replied';
+  auto.contactPipelineLocal(st, 'c1', 'Meeting booked', { day: '2026-10-13' });
+  assert.equal(out.deal.stage, 'First meetings', 'never moves back');
+  assert.equal(st.todos.at(-1).title, 'Follow up: Pat Doe replied');
+  assert.equal(st.deals.length, 2);
+  assert.equal(st.todos.length, 2);
+});
+
+await check('automations: contactPipelineLocal names, owners and stages', () => {
+  const st = outreachState();
+  const booked = auto.contactPipelineLocal(st, 'c2', '', { day: '2026-10-12' });
+  assert.equal(booked.deal.name, 'Lee Roe', 'blank org: the contact name');
+  assert.equal(booked.deal.stage, 'First meetings');
+  assert.equal(booked.deal.next, 'Prepare meeting with Lee Roe');
+  assert.equal(booked.deal.contact, 'al', 'no owner: whoever changed it');
+  assert.equal(booked.todo.title, 'Prepare: meeting with Lee Roe');
+  assert.equal(booked.todo.assignee, 'al');
+  assert.equal(auto.contactPipelineLocal(st, 'c3', 'Sent'), null, 'Opened does nothing');
+  assert.equal(auto.contactPipelineLocal(st, 'missing', ''), null);
+  st.deals.push({ id: 'd-demo', name: 'Org', sector: '', value: 0, priority: 'P2', stage: 'Demos', contact: 'stu', next: '', contactId: 'c3' });
+  st.contacts[2].status = 'Meeting booked';
+  assert.equal(auto.contactPipelineLocal(st, 'c3', 'Opened', { day: '2026-10-12' }).deal.stage, 'Demos', 'only Opportunities moves on');
+});
+
+await check('automations: generateDueInvoicesLocal catches up every period, numbered in order', () => {
+  const plan = (id, frequency, nextDate, amount, active = true) => ({ id, description: `Plan ${id}`, amount, frequency, nextDate, active });
+  const st = {
+    org: { invoicePrefix: 'EX-', paymentTermsDays: 14 },
+    clients: [
+      { id: 'cA', invoices: [{ id: 'old', number: 'EX-1005', lines: [] }], plans: [
+        plan('pA', 'monthly', '2026-08-31', 2400), plan('pB', 'quarterly', '2026-12-01', 10), plan('pC', 'monthly', '2026-01-01', 10, false),
+      ] },
+      { id: 'cB', invoices: [], plans: [plan('pD', 'annually', '2025-10-12', 99.5), plan('pE', 'monthly', '', 10)] },
+    ],
+  };
+  assert.equal(auto.generateDueInvoicesLocal(st, '2026-10-12', { uid: (() => { let i = 0; return () => `id${++i}`; })() }), 4);
+  const [cA, cB] = st.clients;
+  // Oldest plan date first: pD's two years, then pA's two months.
+  assert.deepEqual(cB.invoices.map((i) => [i.number, i.issued, i.due]), [['EX-1007', '2026-10-12', '2026-10-26'], ['EX-1006', '2025-10-12', '2025-10-26']]);
+  assert.deepEqual(cA.invoices.map((i) => [i.number, i.issued]), [['EX-1009', '2026-09-30'], ['EX-1008', '2026-08-31'], ['EX-1005', undefined]]);
+  assert.deepEqual(cA.invoices[0], {
+    id: 'id7', number: 'EX-1009', issued: '2026-09-30', due: '2026-10-14', status: 'Awaiting approval', planId: 'pA', sentAt: '', paidOn: '',
+    lines: [{ id: 'id8', desc: 'Plan pA', qty: '1', rate: '2400' }],
+  });
+  assert.equal(cB.invoices[0].lines[0].rate, '99.5');
+  assert.deepEqual(st.clients.flatMap((c) => c.plans.map((p) => p.nextDate)), ['2026-10-31', '2026-12-01', '2026-01-01', '2027-10-12', ''],
+    'the 31st stays the 31st; future, inactive and undated plans untouched');
+  assert.equal(auto.generateDueInvoicesLocal(st, '2026-10-12'), 0, 'nothing due twice');
+  assert.equal(cA.plans[0].anchorDay, 31, 'its billing day is kept with the plan');
+});
+
+await check('automations: billed one period per run, a plan on the 31st keeps its day (no month-end drift)', () => {
+  const p31 = { id: 'p31', description: 'Retainer', amount: 100, frequency: 'monthly', nextDate: '2026-08-31', active: true }; // no anchorDay yet
+  const st = { org: { invoicePrefix: 'EX-', paymentTermsDays: 30 }, clients: [{ id: 'c', invoices: [], plans: [p31] }] };
+  const days = ['2026-08-31', '2026-09-30', '2026-10-31', '2026-11-30', '2026-12-31', '2027-01-31', '2027-02-28', '2027-03-31'];
+  days.forEach((day) => assert.equal(auto.generateDueInvoicesLocal(st, day), 1, day));
+  assert.deepEqual(st.clients[0].invoices.map((i) => i.issued).reverse(), days);
+  assert.deepEqual([p31.nextDate, p31.anchorDay], ['2027-04-30', 31]);
+  const once = { ...p31, nextDate: '2026-08-31', anchorDay: 31 };
+  const st2 = { org: st.org, clients: [{ id: 'c', invoices: [], plans: [once] }] };
+  auto.generateDueInvoicesLocal(st2, '2027-03-31');
+  assert.deepEqual(st2.clients[0].invoices.map((i) => i.issued).reverse(), days, 'the same dates as one catch-up run');
+});
+
+await check('automations: a plan more than two years behind (a mistyped year) is left alone', () => {
+  const plan = (id, frequency, nextDate) => ({ id, description: id, amount: 10, frequency, nextDate, anchorDay: 0, active: true });
+  const st = { org: { invoicePrefix: 'EX-' }, clients: [{ id: 'c', invoices: [], plans: [plan('typo', 'monthly', '0026-07-01'), plan('two', 'quarterly', '2024-10-12')] }] };
+  assert.equal(auto.generateDueInvoicesLocal(st, '2026-10-12'), 9, 'two years back still catches up');
+  assert.deepEqual(st.clients[0].plans.map((p) => p.nextDate), ['0026-07-01', '2027-01-12']);
+  assert.ok(st.clients[0].invoices.every((i) => i.planId === 'two'));
+});
+
+await check('import: contact statuses as written, Meeting booked included (negated wording is not a booking)', async () => {
+  const { normalise } = await import('../src/lib/importers.js');
+  const status = (v) => normalise('contacts', ['Ben South', v], { name: 0, status: 1 }).status;
+  assert.deepEqual(
+    ['Meeting booked', 'meeting  booked', 'Booked', 'Replied - meeting booked', 'Meeting not booked', 'No meeting booked',
+      'Cancelled meeting', 'Email scheduled', 'Replied', 'No reply', 'Sent', 'Opened', 'New'].map(status),
+    ['Meeting booked', 'Meeting booked', 'Meeting booked', 'Meeting booked', 'New', 'New',
+      'New', 'New', 'Replied', 'No reply', 'Sent', 'Opened', 'New'],
+  );
+});
+
+if (createSeed) {
+  await check('seed: the team, phase 2 demo data, and only placeholder emails', () => {
+    const s = createSeed();
+    const today = s.todos.find((t) => t.source === 'automation').day;
+    assert.deepEqual(s.users.map((u) => [u.id, u.name, u.role]), [['david', 'David', 'superadmin'], ['josh', 'Josh', 'admin'], ['hello', 'Hello', 'staff']]);
+    const emails = JSON.stringify(s).match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g) || [];
+    assert.ok(emails.length && emails.every((e) => e.endsWith('@example.com')), emails.filter((e) => !e.endsWith('@example.com')).join(', '));
+    assert.deepEqual(Object.keys(s.boards), ['projects', 'marketing']);
+    assert.ok(s.boards.projects.groups.some((g) => g.name === 'Admin'));
+    const items = Object.values(s.boards).flatMap((b) => b.groups.flatMap((g) => g.items));
+    assert.ok(items.every((it) => Array.isArray(it.values.people) && !('owner' in it.values)));
+    assert.deepEqual(s.moduleAccess, [], 'staff start on the defaults (docs/PHASE2.md §1): no outreach for Hello');
+    // Hello's day: an automation follow-up, a carried-over routine, and work the admins assigned.
+    const hello = s.todos.filter((t) => t.assignee === 'hello');
+    const quinn = s.contacts.find((c) => c.status === 'Replied' && s.todos.some((t) => t.ref === `contact:${c.id}`));
+    assert.ok(quinn && s.deals.some((d) => d.contactId === quinn.id), 'a replied contact already has its deal');
+    assert.ok(hello.some((t) => t.source === 'automation' && t.day === today && !t.done));
+    assert.ok(hello.some((t) => t.source === 'routine' && t.day < today && !t.done), 'carried over');
+    assert.ok(hello.some((t) => t.source === 'manual' && t.day === today && ['david', 'josh'].includes(t.createdBy)));
+    if (auto.isoDow(today) <= 5) assert.ok(hello.some((t) => t.source === 'routine' && t.day === today));
+    assert.equal(auto.ensureTodosLocal(s, today, { me: 'hello' }), 0, 'seeded routine to-dos follow the routines');
+    assert.ok(s.routines.some((r) => r.title === 'LinkedIn engagement' && r.minutes === 60 && r.weekdays.join() === '1,2,3,4,5'));
+    // Clients: plans, one invoice awaiting approval from a plan, payments that add up, a statement without a file.
+    const invoices = s.clients.flatMap((c) => c.invoices);
+    const awaiting = invoices.filter((i) => i.status === 'Awaiting approval');
+    assert.equal(awaiting.length, 1);
+    assert.ok(s.clients.some((c) => c.plans.some((p) => p.id === awaiting[0].planId)));
+    s.payments.forEach((p) => assert.ok(invoices.some((i) => i.id === p.invoiceId) && s.clients.some((c) => c.id === p.clientId)));
+    const paid = invoices.find((i) => i.status === 'Paid');
+    assert.equal(s.payments.filter((p) => p.invoiceId === paid.id).reduce((t, p) => t + p.amount, 0), 7975);
+    assert.ok(s.bankStatements.some((b) => b.filePath === ''));
+    ['expenses', 'subscriptions', 'timeEntries'].forEach((k) => assert.ok(s[k].length, k));
+    assert.ok(s.clients.some((c) => c.usage.length));
+    assert.equal(auto.generateDueInvoicesLocal(s, today), 0, 'plans are up to date');
+  });
+}
+
+if (migrate) {
+  const phase1 = () => ({
+    version: 1,
+    me: 'dale',
+    users: [
+      { id: 'david', name: 'David', initials: 'DV', color: '#9cd326', email: 'david@example.com', role: 'admin', active: true },
+      { id: 'dale', name: 'Dale', initials: 'DL', color: '#579bfc', email: 'dale@example.com', role: 'member', active: true },
+      { id: 'sam', name: 'Sam', initials: 'SM', color: '#ff7575' },
+    ],
+    org: { businessName: 'AssetStack' },
+    boards: {
+      projects: { groups: [{ id: 'g1', name: 'Active', color: '#c9ffe6', items: [
+        { id: 'i1', name: 'A', values: { owner: 'dale', status: 'Done' }, done: true, updates: [], subtasks: [] },
+      ] }] },
+      admin: { groups: [
+        { id: 'g2', name: 'To do', color: '#ffe6b0', items: [{ id: 'i2', name: 'B', values: { owner: 'gone', status: 'Stuck' }, done: false, updates: [], subtasks: [] }] },
+        { id: 'g3', name: 'This quarter', color: '#ffe6b0', items: [{ id: 'i3', name: 'C', values: { owner: '' }, done: false, updates: [], subtasks: [] }] },
+      ] },
+      marketing: { groups: [{ id: 'g4', name: 'October', color: '#bfe9ff', items: [
+        { id: 'i4', name: 'D', values: { owner: 'sam', people: ['dale'] }, done: false, updates: [], subtasks: [] },
+      ] }] },
+    },
+    deals: [{ id: 'd1', name: 'X', sector: '', value: 1, priority: 'P2', stage: 'Opportunities', contact: 'Dale', next: '' }],
+    clients: [{
+      id: 'c1', name: 'C', group: 'Active', status: 'Active', priority: 'P2', next: '', sector: '', contact: 'dale', team: ['dale'], lastContact: '',
+      demo: '', keyContact: '', email: '', demoUrl: '', avatar: '#3b82f6', notes: [], tasks: [], access: [],
+      invoices: [{ id: 'inv1', number: 'INV-1001', issued: '2026-09-01', due: '2026-10-01', status: 'Sent', lines: [] }],
+    }],
+    contacts: [{ id: 'p1', name: 'P', org: '', email: '', stage: 'Opportunity', status: 'New', last: '' }],
+    emails: [], sequences: [], approvals: [],
+    channels: [{ id: 'ch1', name: 'general', members: ['david', 'dale', 'sam'] }],
+    messages: [],
+    lastRead: { ch1: '2026-10-01T00:00:00.000Z' },
+  });
+
+  await check('migrate: phase 1 demo data gets roles, the merged board, people and the new lists', () => {
+    const m = migrate(phase1());
+    assert.deepEqual(m.users.map((u) => [u.id, u.role, u.email, u.active]), [
+      ['david', 'superadmin', 'david@example.com', true], ['dale', 'staff', 'dale@example.com', true], ['sam', 'staff', 'sam@example.com', true],
+    ]);
+    assert.deepEqual(Object.keys(m.boards), ['projects', 'marketing']);
+    assert.deepEqual(m.boards.projects.groups.map((g) => [g.id, g.name]), [['g1', 'Active'], ['g2', 'Admin'], ['g3', 'This quarter']]);
+    const values = Object.fromEntries(Object.values(m.boards).flatMap((b) => b.groups.flatMap((g) => g.items)).map((it) => [it.id, it.values]));
+    assert.deepEqual(values, {
+      i1: { status: 'Done', people: ['dale'] }, i2: { status: 'Stuck', people: [] }, i3: { people: [] }, i4: { people: ['sam', 'dale'] },
+    });
+    assert.deepEqual([m.deals[0].contact, m.deals[0].contactId], ['dale', '']);
+    assert.equal(m.contacts[0].owner, '');
+    assert.deepEqual([m.clients[0].plans, m.clients[0].usage, m.clients[0].abn], [[], [], '']);
+    assert.deepEqual(['planId', 'sentAt', 'paidOn'].map((k) => m.clients[0].invoices[0][k]), ['', '', '']);
+    ['moduleAccess', 'todos', 'routines', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'timeEntries'].forEach((k) => assert.deepEqual(m[k], [], k));
+    assert.deepEqual(m.lastRead.dale, { ch1: '2026-10-01T00:00:00.000Z' });
+    assert.equal(m.org.invoicePrefix, 'INV-');
+    assert.deepEqual(migrate(structuredClone(m)), m, 'running it again changes nothing');
+    assert.deepEqual(plain(roundTrip({ ...m, mode: 'live' })), plain(flatten(m)));
+    assert.equal(access.moduleLevel(m, 'outreach'), 'none', 'dale is staff now');
+    assert.equal(auto.ensureTodosLocal(m, '2026-10-12'), 0);
+  });
+
+  await check('migrate: phase 2 demo data gets billing days and the routine run log', () => {
+    const p = migrate(phase1());
+    p.clients[0].plans = [{ id: 'bp', description: 'Licence', amount: 1, frequency: 'monthly', nextDate: '2026-10-31', active: true },
+      { id: 'bp2', description: 'Later', amount: 1, frequency: 'monthly', nextDate: '', active: false }];
+    p.routines = [{ id: 'r1', title: 'Post', category: 'LinkedIn', minutes: 10, assignee: 'dale', weekdays: [1], start: '', active: true }];
+    p.todos = [auto.makeTodo({ assignee: 'dale', title: 'Post', day: '2026-10-12', source: 'routine', routineId: 'r1' })];
+    delete p.routineRuns;
+    const m = migrate(p);
+    assert.deepEqual(m.clients[0].plans.map((x) => x.anchorDay), [31, 0]);
+    assert.deepEqual(m.routineRuns, ['2026-10-12|r1|dale']);
+    m.todos = [];
+    assert.equal(auto.ensureTodosLocal(m, '2026-10-12'), 0, 'a routine to-do deleted before the upgrade stays deleted');
+  });
+
+  await check('migrate: an existing superadmin is kept, and the seed is already current', () => {
+    const p = phase1();
+    p.users[1].role = 'superadmin';
+    assert.deepEqual(migrate(p).users.map((u) => u.role), ['admin', 'superadmin', 'staff']);
+    const s = createSeed();
+    assert.deepEqual(migrate(structuredClone(s)), s);
+  });
+}
+
+let timesheet = null;
+try {
+  timesheet = await import('../src/lib/timesheet.js');
+} catch (e) {
+  console.log(`SKIP suggestBlocks: src/lib/timesheet.js is not importable in Node (${String(e?.message).split('\n')[0]})`);
+}
+if (timesheet?.suggestBlocks) {
+  await check('timesheet: suggestBlocks gives eight hourly blocks, Other when nothing was done', () => {
+    const blocks = timesheet.suggestBlocks({ todosDone: [], emailsSent: [], itemsTouched: [], messagesSent: [] }, { start: '09:00', end: '17:00' });
+    assert.deepEqual(blocks.map((b) => b.start), ['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00']);
+    assert.ok(blocks.every((b) => b.category === 'Other'));
+  });
+}
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);

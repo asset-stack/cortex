@@ -1,13 +1,14 @@
 import { useRef, useState } from 'react';
 import { CornerUpLeft, Eye, Inbox, ListChecks, Loader2, PlugZap, Repeat, Send, Sparkles, Users, WandSparkles } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
-import { KpiRow, Modal, PageHeader, Segmented } from '@/components/ui';
+import { CONTACT_STATUSES } from '@/data/boards';
+import { KpiRow, LabelPicker, Modal, PageHeader, PersonPicker, Segmented } from '@/components/ui';
 import { draftOutreach, GOALS } from '@/integrations/claudeAgent';
 import { GMAIL_CONNECTED, sendEmail } from '@/integrations/gmail';
+import { useAccess } from '@/lib/access';
 import { ago, emailSnippet } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
-const STATUS_STYLE = { Replied: 'bg-emerald-400/35', Opened: 'bg-violet-400/35', Sent: 'bg-sky-400/35', New: 'bg-white/20', 'No reply': 'bg-white/15 dim' };
 const FEED_ICON = { reply: [CornerUpLeft, 'bg-emerald-400/35'], open: [Eye, 'bg-violet-400/35'], sent: [Send, 'bg-sky-400/35'] };
 
 function Agent() {
@@ -86,8 +87,13 @@ function Agent() {
   );
 }
 
+// Contacts that reached each step; a booked meeting came from a reply, so it counts as opened and replied too.
+const OPENED = ['Opened', 'Replied', 'Meeting booked'];
+const REPLIED = ['Replied', 'Meeting booked'];
+
 export default function Outreach() {
   const { state, actions } = useStore();
+  const editable = useAccess().canEdit('outreach'); // view: no adding, status or owner changes, sending or approving
   const [tab, setTab] = useState('contacts');
   const [adding, setAdding] = useState(false);
   const [f, setF] = useState({ name: '', org: '', email: '' });
@@ -101,19 +107,19 @@ export default function Outreach() {
   };
   const sent = state.emails.filter((e) => e.kind === 'sent').length;
   const contacted = state.contacts.filter((c) => c.status !== 'New');
-  const openRate = contacted.length ? Math.round((contacted.filter((c) => ['Opened', 'Replied'].includes(c.status)).length / contacted.length) * 100) : 0;
-  const replies = state.contacts.filter((c) => c.status === 'Replied').length;
+  const openRate = contacted.length ? Math.round((contacted.filter((c) => OPENED.includes(c.status)).length / contacted.length) * 100) : 0;
+  const replies = state.contacts.filter((c) => REPLIED.includes(c.status)).length;
 
   return (
     <div>
-      <PageHeader title="Outreach" action="Add contact" onAction={() => setAdding(true)} />
+      <PageHeader title="Outreach" action={editable ? 'Add contact' : undefined} onAction={() => setAdding(true)} />
       <KpiRow items={[
         { value: sent, label: 'Emails sent', tint: '#334155' },
         { value: `${openRate}%`, label: 'Opened', tint: '#7c3aed' },
         { value: replies, label: 'Replies', tint: '#0f9f6f' },
         { value: state.approvals.length, label: 'To approve', tint: '#f59e0b' },
       ]} />
-      <div className="mt-7 grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className={cn('mt-7 grid gap-6', editable && 'xl:grid-cols-[minmax(0,1fr)_360px]')}>
         <div className="min-w-0 rounded-[26px] glass glass-rim self-start">
           <div className="flex flex-wrap items-center justify-between gap-2 p-3">
             <Segmented label="Outreach views" value={tab} onChange={setTab} options={[
@@ -127,13 +133,20 @@ export default function Outreach() {
           </div>
 
           {tab === 'contacts' && (
-            <div className="overflow-x-auto scroll-thin"><table className="w-full min-w-[540px] text-[13.5px]"><tbody>
+            <div className="overflow-x-auto scroll-thin"><table className="w-full min-w-[640px] text-[13.5px]"><tbody>
               {state.contacts.map((c) => (
                 <tr key={c.id} className="border-t rowline hover:bg-white/5">
                   <td className="p-3.5 font-semibold">{c.name}</td><td className="p-3.5 dim">{c.org}</td>
                   <td className="p-3.5"><span className="rounded-full chip px-2.5 py-1 text-[12px]">{c.stage}</span></td>
                   <td className="p-3.5 dimmer tnum">{ago(c.last)}</td>
-                  <td className="p-3.5 text-right"><span className={cn('rounded-full px-2.5 py-1 text-[12px] font-bold', STATUS_STYLE[c.status])}>{c.status}</span></td>
+                  <td className="w-12 px-1.5 text-center">
+                    <PersonPicker value={c.owner || ''} size={26} readOnly={!editable} onChange={(v) => actions.updateContact(c.id, { owner: v })} />
+                  </td>
+                  {/* Replied or Meeting booked creates (or advances) a deal in Pipeline and a follow-up for the owner. */}
+                  <td className="w-[150px] py-2 pl-1.5 pr-3.5">
+                    <LabelPicker label={`Status for ${c.name}`} value={c.status || ''} options={CONTACT_STATUSES} allowEmpty={false} readOnly={!editable}
+                      onChange={(v) => actions.updateContact(c.id, { status: v })} />
+                  </td>
                 </tr>
               ))}
             </tbody></table></div>
@@ -175,20 +188,22 @@ export default function Outreach() {
                   {state.approvals.map((a) => (
                     <li key={a.id} className="rounded-2xl chip p-3"><div className="font-semibold">{a.subject}</div><div className="text-[12.5px] dimmer">To {a.contact} · {ago(a.ts)}</div>
                       <p className="mt-2 whitespace-pre-wrap text-[13px] dim line-clamp-4">{a.body}</p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button type="button" disabled={pending === a.id} onClick={() => approve(a)} className="btn-primary rounded-full h-9 px-4 font-semibold">Approve & send</button>
-                        <button type="button" disabled={pending === a.id} onClick={() => actions.discardApproval(a.id)} className="rounded-full chip h-9 px-4 font-semibold disabled:opacity-50">Discard</button>
-                      </div></li>
+                      {editable && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button type="button" disabled={pending === a.id} onClick={() => approve(a)} className="btn-primary rounded-full h-9 px-4 font-semibold">Approve & send</button>
+                          <button type="button" disabled={pending === a.id} onClick={() => actions.discardApproval(a.id)} className="rounded-full chip h-9 px-4 font-semibold disabled:opacity-50">Discard</button>
+                        </div>
+                      )}</li>
                   ))}
                 </ul>
               )}
             </div>
           )}
         </div>
-        <aside className="min-w-0"><Agent /></aside>
+        {editable && <aside className="min-w-0"><Agent /></aside>}
       </div>
 
-      <Modal open={adding} onClose={() => setAdding(false)} title="Add contact">
+      <Modal open={editable && adding} onClose={() => setAdding(false)} title="Add contact">
         <form className="grid gap-2" onSubmit={(e) => { e.preventDefault(); if (!f.name.trim()) return; actions.addContact({ name: f.name.trim(), org: f.org.trim(), email: f.email.trim() }); setF({ name: '', org: '', email: '' }); setAdding(false); }}>
           <input className="field" placeholder="Name" aria-label="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus />
           <input className="field" placeholder="Organisation" aria-label="Organisation" value={f.org} onChange={(e) => setF({ ...f, org: e.target.value })} />

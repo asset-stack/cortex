@@ -1,5 +1,36 @@
 # Cortex backend: Supabase design (contract)
 
+## Phase 2: team workflow
+
+The full contract is [`docs/PHASE2.md`](PHASE2.md); migration `supabase/migrations/0002_team_workflow.sql` runs
+once on top of `0001` (applied in production, never edited). The rest of this file is phase 1, corrected
+where 0002 changed it.
+
+- **Roles**: `superadmin | admin | staff` (phase 1's `member` became `staff`). Admins (superadmin or admin) edit
+  every module and see finance; only the SuperAdmin changes roles, active flags and module access, and the last
+  active SuperAdmin can't be demoted or deactivated. `admin_emails.role` sets the role at sign-up (else staff).
+- **Module access**: modules `projects`, `marketing`, `outreach`, `pipeline`, `clients`, each `none | view | edit`.
+  Admins always edit; staff get a `module_access` override or the default (projects and marketing edit, pipeline
+  and clients view, outreach none). One rule set on each side: SQL `module_level` / `can_view` / `can_edit`
+  (every module table's RLS), JS `src/lib/access.js` (`useAccess()`; nav, read-only screens, store actions).
+  My Work, team chat and the timesheet are always available; Settings is admins only.
+- **Boards**: the Admin board merged into **Projects** (`board_key in ('projects','marketing')`; the seeded
+  *To do* group became *Admin*). `items.values.people` (user ids) replaced `values.owner`. An item's `board_key` is
+  its group's (foreign key on `(group_id, board_key)`), so the boards' RLS covers where an item is filed.
+- **New tables** (all synced, RLS on, in realtime): `module_access`, `routines`, `todos`, `billing_plans`,
+  `client_usage`, `bank_statements`, `payments`, `expenses`, `subscriptions`, `time_entries`. Bank statements,
+  payments, expenses and subscriptions are admins only; todos and time entries are your own (admins see all).
+  `routine_runs` (not synced, no policies) is `ensure_todos`' run log.
+- **New columns**: `contacts.owner_id`, `deals.contact_id`, `invoices.plan_id / sent_at / paid_on`;
+  `billing_plans.anchor_day` (synced) and `billed_periods` (the database's own).
+- **Automation**: RPCs `ensure_todos(day)` (daily routines, Monday bank-screenshot reminder) and
+  `generate_due_invoices()` (admins); trigger `contact_pipeline` (Replied / Meeting booked → deal + follow-up
+  to-do); triggers `protect_invoice_status` / `protect_invoice_insert` (only admins approve, send, void or mark
+  paid). Their "today" is `team_today()` (Australia/Perth). Demo mode runs the same rules in
+  `src/lib/automations.js` on each person's local day.
+- **Storage**: private bucket `finance` (bank screenshots, receipts), admins only.
+- **Demo team**: David (superadmin), Josh (admin), Hello (staff), all `@example.com`.
+
 Cortex runs in one of two modes, chosen at build time:
 
 | Mode | When | Data | Sign-in |
@@ -24,32 +55,35 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
   version: 1,
   mode: 'demo' | 'live',                 // not persisted; set by the provider
   me: '<user id>',                       // live: auth.uid()
-  users: [{ id, name, initials, color, email, role: 'admin'|'member', active: true }],
+  users: [{ id, name, initials, color, email, role: 'superadmin'|'admin'|'staff', active: true }],
   org: { businessName, abn, address, email, phone, bankAccountName, bsb, accountNumber,
          paymentTermsDays: 30, invoicePrefix: 'INV-' },
-  boards: { projects|admin|marketing: { groups: [{ id, name, color,
-            items: [{ id, name, values: { owner, status, ... }, done,
+  boards: { projects|marketing: { groups: [{ id, name, color,
+            items: [{ id, name, values: { people /* [userId] */, status, ... }, done,
                       updates: [{ id, user, text, ts }], subtasks: [{ id, text, done }] }] }] } },
-  deals:   [{ id, name, sector, value, priority, stage, contact /* owner user id */, next, clientId? }],
+  deals:   [{ id, name, sector, value, priority, stage, contact /* owner user id */, next, clientId?, contactId }],
   clients: [{ id, name, group, status, priority, next, sector, contact /* user id */, team: [userId],
               lastContact /* 'YYYY-MM-DD' | '' */, demo, keyContact, email, demoUrl, avatar,
               abn, billingAddress,
               notes: [{ id, user, text, ts }], tasks: [{ id, text, done }],
-              invoices: [{ id, number, issued, due, status, lines: [{ id, desc, qty, rate }] }],
+              invoices: [{ id, number, issued, due, status, planId, sentAt, paidOn, lines: [{ id, desc, qty, rate }] }],
               access: [{ id, name, email, role }] }],
-  contacts:  [{ id, name, org, email, stage, status, last }],
+  contacts:  [{ id, name, org, email, stage, status, last, owner /* user id | '' */ }],
   emails:    [{ id, kind, contactId?, contact, subject, snippet, ts }],
   sequences: [{ id, name, steps, enrolled, replyRate }],
   approvals: [{ id, contactId?, contact, subject, body, by, ts }],
   channels:  [{ id, name, members: [userId] }],
   messages:  [{ id, channel, user, text, ts }],
   lastRead:  { [userId]: { [channelId]: isoTs } },   // live: only the current user's map
+  // phase 2: moduleAccess, todos, routines, payments, bankStatements, expenses, subscriptions, timeEntries,
+  // clients[].plans and clients[].usage (docs/PHASE2.md §2)
 }
 ```
 
 Array order is meaningful and is stored as `position` (0-based index) where the table has one. Clients,
-contacts and a client's invoices are added at the top, so their positions count from the end
-(`length - 1 - index`) and adding one leaves the other rows untouched.
+contacts, a client's invoices and expenses are added at the top, so their positions count from the end
+(`length - 1 - index`) and adding one leaves the other rows untouched. To-dos and time entries are numbered
+within one person's day.
 Ids are `crypto.randomUUID()` for everything created at runtime (both modes). Seed ids are only
 ever used in demo mode.
 
@@ -61,21 +95,21 @@ maintained by a `touch()` trigger (the sync engine never sends these two columns
 
 | table | columns (besides id/updated_*) | state source |
 |---|---|---|
-| `profiles` | `id uuid pk → auth.users on delete cascade`, `email text unique not null`, `name text not null`, `initials text not null`, `color text not null`, `role text not null default 'member' check in ('admin','member')`, `active bool not null default true`, `created_at timestamptz default now()` | `users[]` |
-| `admin_emails` | `email text pk` (setup only; not synced) | — |
+| `profiles` | `id uuid pk → auth.users on delete cascade`, `email text unique not null`, `name text not null`, `initials text not null`, `color text not null`, `role text not null default 'staff' check in ('superadmin','admin','staff')` (0002; was `'member'`, `('admin','member')`), `active bool not null default true`, `created_at timestamptz default now()` | `users[]` |
+| `admin_emails` | `email text pk`, `role text not null default 'admin' check in ('superadmin','admin')` (0002) (setup only; not synced) | — |
 | `org_settings` | `id int pk default 1 check (id = 1)`, `business_name, abn, address, email, phone, bank_account_name, bsb, account_number, invoice_prefix text not null default ''` (`invoice_prefix` default `'INV-'`), `payment_terms_days int not null default 30` | `org` |
-| `board_groups` | `board_key text not null check in ('projects','admin','marketing')`, `name text`, `color text`, `position int` | `boards[k].groups[]` |
-| `items` | `board_key text not null`, `group_id uuid not null → board_groups cascade`, `position int`, `name text`, `values jsonb not null default '{}'`, `done bool not null default false` | `groups[].items[]` |
+| `board_groups` | `board_key text not null check in ('projects','marketing')` (0002 merged `admin` into `projects`), `name text`, `color text`, `position int` | `boards[k].groups[]` |
+| `items` | `board_key text not null`, `group_id uuid not null → board_groups cascade`, `position int`, `name text`, `values jsonb not null default '{}'` (`people`: user ids; 0002 replaced `owner`), `done bool not null default false` | `groups[].items[]` |
 | `item_updates` | `item_id → items cascade`, `user_id uuid → profiles`, `text text`, `created_at timestamptz` | `items[].updates[]` (newest first in state; order by `created_at desc`) |
 | `subtasks` | `item_id → items cascade`, `position int`, `text text`, `done bool` | `items[].subtasks[]` |
 | `clients` | `name, group_name, status, priority, next_step, sector text`, `contact_id uuid null → profiles`, `team uuid[] not null default '{}'`, `last_contact date null`, `demo, key_contact, email, demo_url, avatar, abn, billing_address text not null default ''`, `position int` | `clients[]` |
-| `deals` | `name, sector, priority, stage, next_step text`, `value numeric not null default 0`, `owner_id uuid null → profiles`, `client_id uuid null → clients on delete set null`, `position int` | `deals[]` |
+| `deals` | `name, sector, priority, stage, next_step text`, `value numeric not null default 0`, `owner_id uuid null → profiles`, `client_id uuid null → clients on delete set null`, `contact_id uuid null → contacts on delete set null` (0002), `position int` | `deals[]` |
 | `client_notes` | `client_id → clients cascade`, `user_id → profiles`, `text text`, `created_at timestamptz` | `clients[].notes[]` (newest first) |
 | `client_tasks` | `client_id cascade`, `position int`, `text text`, `done bool` | `clients[].tasks[]` |
-| `invoices` | `client_id cascade`, `number text not null unique`, `issued date`, `due date`, `status text`, `position int` | `clients[].invoices[]` |
+| `invoices` | `client_id cascade`, `number text not null unique`, `issued date`, `due date`, `status text`, `position int`; 0002: `plan_id uuid null → billing_plans on delete set null`, `sent_at timestamptz null`, `paid_on date null` | `clients[].invoices[]` |
 | `invoice_lines` | `invoice_id → invoices cascade`, `position int`, `description text`, `qty text`, `rate text` (kept as typed, e.g. `'1,000'`) | `invoices[].lines[]` |
 | `client_access` | `client_id cascade`, `position int`, `name, email, role text` | `clients[].access[]` |
-| `contacts` | `name, org, email, stage, status text`, `last_at timestamptz`, `position int` | `contacts[]` |
+| `contacts` | `name, org, email, stage, status text`, `last_at timestamptz`, `owner_id uuid null → profiles on delete set null` (0002), `position int` | `contacts[]` |
 | `emails` | `kind text`, `contact_id uuid null → contacts on delete set null`, `contact text`, `subject text`, `snippet text`, `ts timestamptz` | `emails[]` (newest first) |
 | `sequences` | `name text`, `steps int`, `enrolled int`, `reply_rate numeric`, `position int` | `sequences[]` |
 | `approvals` | `contact_id uuid null → contacts on delete set null`, `contact text`, `subject text`, `body text`, `by_id uuid → profiles`, `ts timestamptz` | `approvals[]` (newest first) |
@@ -86,28 +120,42 @@ maintained by a `touch()` trigger (the sync engine never sends these two columns
 
 Text columns default to `''` and are `not null` unless noted, so the state never sees `null` for text.
 `date` columns map `''` ⇄ `null`. Timestamps are normalised to `new Date(x).toISOString()` on the way in.
+0002 adds `module_access`, `routines`, `todos`, `billing_plans`, `client_usage`, `bank_statements`, `payments`,
+`expenses`, `subscriptions` and `time_entries` (columns in `docs/PHASE2.md` §3); `time` columns map `'HH:MM'` ⇄
+`null`.
 
 ### Security (RLS on every table)
 - `public.is_staff()`: `security definer`, true when `auth.uid()` has an **active** profile whose email
-  ends in `@assetstackai.com`. `public.is_admin()`: `is_staff()` and `role = 'admin'`.
+  ends in `@assetstackai.com`. `public.is_admin()`: `is_staff()` and `role in ('superadmin','admin')` (0002;
+  was `role = 'admin'`). `public.is_superadmin()` (0002): `is_staff()` and `role = 'superadmin'`.
   `public.is_member(channel uuid)`: current user is in `channel_members` for it.
-- Default for business tables (boards, items, clients, deals, invoices, contacts, …): `select/insert/update/delete` to `authenticated` **using/with check `is_staff()`**.
-- `profiles`: select `is_staff()`; update: `is_admin()` or own row. A `protect_profile` trigger stops non-admins changing `role`, `active` or `email`. No insert/delete policy (rows come from the signup trigger).
+- Module tables (0002; phase 1 used `is_staff()` for all of them): select **`can_view(module)`**, insert/update/delete
+  **`can_edit(module)`**. `module_level(m)` is `'edit'` for admins, else the caller's `module_access` override or the
+  staff default, and `'none'` unless `is_staff()`. Outreach: `contacts, emails, sequences, approvals`. Pipeline:
+  `deals`. Clients: `clients, client_notes, client_tasks, invoices, invoice_lines, client_access, billing_plans,
+  client_usage`. Boards: `board_groups, items` by their `board_key`; `item_updates, subtasks` by their item's board
+  (`item_board(item_id)`).
+- Finance (0002): `bank_statements, payments, expenses, subscriptions` and the `finance` storage bucket: `is_admin()` only.
+  `todos`: select/insert/update own (`assignee_id`) or admin, delete creator or admin. `time_entries`: write own only,
+  select own or admin. `routines`: select `is_staff()`, write admin. `module_access`: select own or admin, write
+  `is_superadmin()`.
+- `profiles`: select `is_staff()`; update: `is_admin()` or own row. A `protect_profile` trigger stops anyone but a superadmin changing `role`, `active` or `email` (0002; was admins), and refuses to demote or deactivate the last active superadmin (even from the SQL editor, where the other checks are skipped). No insert/delete policy (rows come from the signup trigger).
 - `org_settings`: select `is_staff()`; update `is_admin()`; no insert/delete (seeded row id 1).
 - Upserts are checked against insert policies even when the row exists, so `profiles` (own row or admin) and `org_settings` (admin) carry narrow upsert-only policies that resolve to the update path; they never allow a row the rules above forbid. The sync engine writes `profiles` / `org_settings` with plain updates anyway. `channel_members` has no update policy: the sync engine upserts it with `ignoreDuplicates` (on conflict do nothing), and an update could otherwise move someone else's membership.
 - `channels`: select when `is_member(id)` or `created_by = auth.uid()`; insert with `created_by = auth.uid()` and `is_staff()`; update/delete `is_admin()` or creator.
 - `channel_members`: select when `is_staff()` and (`user_id = auth.uid()` or `is_member(channel_id)` or the caller created the channel); insert when `is_staff()` and (`is_member(channel_id)` or the caller created the channel); delete own row or `is_admin()`. (Select needs the creator clause because PostgREST writes use `RETURNING`: a new channel's memberships go up in one upsert, before the creator counts as a member.)
 - `messages`: select `is_member(channel_id)`; insert `is_member(channel_id)` and `user_id = auth.uid()`; update/delete own.
-- `item_updates`, `client_notes`: select `is_staff()`; insert `user_id = auth.uid()`; update/delete own or admin.
+- `item_updates`, `client_notes`: select `can_view` of their module; insert `user_id = auth.uid()`; update/delete own or admin; every write also needs `can_edit` of the module (0002).
 - `read_state`: all operations only where `user_id = auth.uid()`.
 - `admin_emails`: no policies (not readable by clients).
 
 ### Triggers / setup
-- `handle_new_user` (after insert on `auth.users`, `security definer`): **raises an exception** when the email domain is not `assetstackai.com` (blocks the sign-up); otherwise inserts the profile (name from `raw_user_meta_data->>'full_name'` or the email's local part, two-letter initials, a colour from a fixed palette by hash, `role = 'admin'` when the email is in `admin_emails`) and adds the user to the `general` channel.
-- `touch()` on every table; `protect_profile` on `profiles`.
-- Seed (empty start): `org_settings` row 1; board groups `projects`: Active, Backlog · `admin`: To do · `marketing`: This month; channel `general`.
+- `handle_new_user` (after insert on `auth.users`, `security definer`): **raises an exception** when the email domain is not `assetstackai.com` (blocks the sign-up); otherwise inserts the profile (name from `raw_user_meta_data->>'full_name'` or the email's local part, two-letter initials, a colour from a fixed palette by hash, the role listed in `admin_emails`, else `'staff'` (0002)) and adds the user to the `general` channel.
+- `touch()` on every table; `protect_profile` on `profiles`. 0002 adds `protect_invoice_status` and `protect_todo`
+  (`created_by` can't be forged), `contact_pipeline` on `contacts`, and the RPCs `ensure_todos` / `generate_due_invoices`.
+- Seed (empty start): `org_settings` row 1; board groups `projects`: Active, Backlog · `admin`: To do (0002 moves it to `projects` as *Admin*) · `marketing`: This month; channel `general`.
 - `alter publication supabase_realtime add table …` for every synced table.
-- `supabase/setup-admins.sql`: `insert into public.admin_emails (email) values ('you@assetstackai.com') on conflict do nothing;` plus an `update profiles set role='admin' where email in (...)` for people who already signed in.
+- `supabase/setup-admins.sql` (run after 0002): `insert into public.admin_emails (email, role) values ('you@assetstackai.com', 'superadmin'), … on conflict (email) do update set role = excluded.role;` plus updates that promote people who already signed in to their listed role (never demote).
 
 ## 3. Sync engine (`src/data/backend/`)
 
@@ -116,14 +164,15 @@ Text columns default to `''` and are `not null` unless noted, so the state never
   (PKCE so the OAuth return uses `?code=` and doesn't collide with the `#/route` hash router).
 - `schema.js` (pure, no Supabase import):
   - `TABLES`: ordered parent → child, each `{ name, key: (row) => string, onConflict? }`
-    (`channel_members` key `channel_id:user_id`, `read_state` key `user_id:channel_id`).
-  - `flatten(state) → { [table]: Map<key, row> }`: DB-column rows, snake_case, `''`→`null` for dates/uuid fks, positions from array index (from the end for clients, contacts and invoices). `read_state` only for `state.me`. Never emits `updated_at/updated_by`.
+    (`channel_members` key `channel_id:user_id`, `read_state` key `user_id:channel_id`, `module_access` key
+    `user_id:module`).
+  - `flatten(state) → { [table]: Map<key, row> }`: DB-column rows, snake_case, `''`→`null` for dates/uuid fks, positions from array index (from the end for clients, contacts, invoices and expenses; per person and day for todos and time entries). `read_state` only for `state.me`. Never emits `updated_at/updated_by`.
   - `assemble(rowsByTable, { me }) → state fields` (everything except `version/mode/me`). Must satisfy **`flatten(assemble(flatten(s)))` deep-equals `flatten(s)`** for any valid state.
   - `diff(prev, next) → ops[]`: `{ table, op: 'upsert'|'delete', key, row }` comparing rows by `JSON.stringify` with sorted keys.
 - `sync.js`: `createSync({ supabase, onStatus, onRealtime?, onRejected? })` →
   - `queue(ops)`: coalesce by `table+key` (last write wins, delete beats upsert), flush 400 ms after the last change.
   - flush: upserts grouped per table in `TABLES` order (parents first), deletes in reverse order (children first); composite tables use `onConflict`. On error: `onStatus({ state: 'error', message })`, keep the failed ops queued and retry with backoff (2 s, 5 s, 10 s, max 30 s). New changes still go out 400 ms after the last one (with the failed ops) unless the failure was offline. A request refused for a row's data (constraint, RLS) is re-sent row by row so one bad row doesn't hold back the rest, and only deletes in that row's parent tables wait for its retry.
-  - A child refused for a missing parent (`23503`) that this client isn't still writing is dropped: someone else deleted the parent and the cascade took the row too. A row refused for its data 3 times (not counting a child waiting for its parent) is given up: `onRejected([{ table, op, key, row, error }])` is called once and the status shows `'error'` with the message until the next change. A newer change to the row starts its count again.
+  - A child refused for a missing parent (`23503` naming its parent column, or no column) that this client isn't still writing is dropped: someone else deleted the parent and the cascade took the row too. A row refused because a link the database clears on delete (`setNull` in `TABLES`, e.g. `invoices.plan_id`, `todos.routine_id`) points at a row deleted elsewhere is sent again with that link null, as the database left it. A row refused for its data 3 times (not counting a child waiting for its parent) is given up: `onRejected([{ table, op, key, row, error }])` is called once and the status shows `'error'` with the message until the next change. A newer change to the row starts its count again.
   - `isPending(table, key)`, `hasPending()` (anything queued or in flight).
   - `staleEcho(table, key, row | null)`: true when a realtime change is the echo of one of our writes that a newer write of ours has since replaced (sent rows are remembered per row, oldest first, for 30 s; matching uses them up).
   - `dispose()`: nothing is scheduled afterwards, so a stopped engine stops writing.
@@ -141,6 +190,9 @@ Text columns default to `''` and are `not null` unless noted, so the state never
   `importRecords(kind, records, options) → { added, skipped }` with `kind` in `'clients' | 'contacts' | 'deals' | 'tasks'`
   (records already normalised to state shape by `src/lib/importers.js`; `options = { board, groupId, groupName }` for tasks; skips names that already exist, case-insensitive),
   `signOut({ force }) → { unsaved }` (live): waits up to 3 s for edits to save; if some still haven't, returns `{ unsaved: true }` without signing out unless `force`.
+- Phase 2 actions (access, My Work, routines, billing, money in, expenses, software costs, timesheets) are in
+  `docs/PHASE2.md` §5. Every action refuses (returns `false`) what `src/lib/access.js` says the user can't do;
+  live mode leaves automations to the database (`rpc` and triggers), demo mode runs `src/lib/automations.js`.
 - `setMe` and `reset` are demo-only (no-ops in live).
 - Extra context value `sync: { state, message }` for a small status indicator.
 

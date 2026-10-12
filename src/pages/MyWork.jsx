@@ -1,95 +1,103 @@
-import { useMemo } from 'react';
-import { AtSign, Hash } from 'lucide-react';
-import { useStore, useUsers } from '@/data/store';
-import { BOARD_SCHEMAS, STATUS } from '@/data/boards';
-import { Avatar, KpiRow, PageHeader } from '@/components/ui';
-import { NAV } from '@/components/layout/Sidebar';
-import { openChat } from '@/components/chat/ChatDock';
-import { MessageText, mentionsUser } from '@/lib/mentions';
-import { ago, invoiceTotals, shortDate } from '@/lib/format';
+import { useEffect, useMemo, useState } from 'react';
+import { CalendarCheck, Clock, History } from 'lucide-react';
+import { ensuredTodos, useStore, useUsers } from '@/data/store';
+import { KpiRow } from '@/components/ui';
+import DayNav from '@/components/work/DayNav';
+import PersonSwitch from '@/components/work/PersonSwitch';
+import TodoList from '@/components/work/TodoList';
+import AddTodo from '@/components/work/AddTodo';
+import OnBoards from '@/components/work/OnBoards';
+import Mentions, { mentionsOf } from '@/components/work/Mentions';
+import TimesheetModal from '@/components/timesheet/TimesheetModal';
+import { useAccess } from '@/lib/access';
+import { addDays } from '@/lib/automations';
+import { localYmd } from '@/lib/format';
+import { dayLabel } from '@/lib/timesheet';
 
 function greeting() {
   const h = new Date().getHours();
   return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
 }
 
+// By start time (timed ones first), then list order.
+const byStart = (todos) => todos
+  .map((t, position) => ({ t, position }))
+  .sort((a, b) => (!a.t.start) - (!b.t.start) || (a.t.start < b.t.start ? -1 : a.t.start > b.t.start ? 1 : 0) || a.position - b.position)
+  .map(({ t }) => t);
+
 export default function MyWork() {
-  const { state } = useStore();
+  const { state, actions } = useStore();
   const users = useUsers();
-  const me = users[state.me];
+  const access = useAccess();
+  const today = localYmd();
+  const [offset, setOffset] = useState(0); // days from today, so "Today" follows the date past midnight
+  const day = addDays(today, offset);
+  const [picked, setPicked] = useState('');
+  const [logging, setLogging] = useState(false);
 
-  const mine = useMemo(() => Object.entries(state.boards).flatMap(([key, b]) =>
-    b.groups.flatMap((g) => g.items.filter((i) => i.values.owner === state.me && !i.done).map((i) => ({ ...i, board: key }))))
-    .sort((a, b) => (a.values.due || '9999').localeCompare(b.values.due || '9999')), [state.boards, state.me]);
+  // Routine to-dos (and an admin's Monday bank reminder) are made once per signed-in person and day.
+  useEffect(() => {
+    const key = `${state.me}|${today}`;
+    if (!state.me || ensuredTodos.has(key)) return;
+    ensuredTodos.add(key);
+    actions.ensureTodos(today).then((r) => { if (r === false) ensuredTodos.delete(key); });
+  }, [state.me, today, actions]);
 
-  const allMentions = useMemo(() => state.messages
-    .filter((m) => m.user !== state.me && mentionsUser(m.text, me) && state.channels.find((c) => c.id === m.channel)?.members.includes(state.me))
-    .sort((a, b) => b.ts.localeCompare(a.ts)), [state.messages, state.channels, state.me, me]);
-  const mentions = allMentions.slice(0, 5); // the KPI counts them all; the list shows the latest five
+  useEffect(() => { setPicked(''); }, [state.me]); // back to your own list when the signed-in person changes (demo switcher)
 
-  const overdue = state.clients.flatMap((c) => c.invoices).filter((i) => i.status === 'Overdue');
+  // Admins can look at anyone's list; everyone else sees their own.
+  const personId = access.isAdmin && users[picked] ? picked : state.me;
+  const person = users[personId];
+  const self = personId === state.me;
+
+  const mine = useMemo(() => state.todos.filter((t) => t.assignee === personId), [state.todos, personId]);
+  const dayTodos = useMemo(() => byStart(mine.filter((t) => t.day === day)), [mine, day]);
+  const carried = useMemo(() => mine.filter((t) => !t.done && t.day < today)
+    .map((t, position) => ({ t, position }))
+    .sort((a, b) => (a.t.day < b.t.day ? -1 : a.t.day > b.t.day ? 1 : 0) || a.position - b.position)
+    .map(({ t }) => t), [mine, today]);
+  const mentions = useMemo(() => mentionsOf(state, person), [state, person]);
+
+  const title = offset === 0 ? 'Today' : offset === -1 ? 'Yesterday' : offset === 1 ? 'Tomorrow' : dayLabel(day);
 
   return (
     <div>
-      <PageHeader title={`${greeting()}, ${me?.name}`} />
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="page-title text-[34px] md:text-[44px] leading-none">{self ? `${greeting()}, ${person?.name}` : person?.name}</h1>
+        {self && (
+          <button type="button" onClick={() => setLogging(true)} aria-label="Log time" title="Log time"
+            className="btn-primary inline-flex h-11 w-11 shrink-0 items-center justify-center gap-2 rounded-full font-semibold sm:w-auto sm:px-5">
+            <Clock className="h-4 w-4" /><span className="hidden sm:inline">Log time</span>
+          </button>
+        )}
+      </div>
+
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+        <DayNav offset={offset} onChange={setOffset} day={day} />
+        {access.isAdmin && <PersonSwitch value={personId} onChange={(id) => setPicked(id === state.me ? '' : id)} />}
+      </div>
+
       <KpiRow items={[
-        { value: mine.length, label: 'My open tasks', tint: '#334155' },
-        { value: mine.filter((i) => i.values.status === 'Stuck').length, label: 'Stuck', tint: '#e2445c' },
-        { value: allMentions.length, label: 'Mentions', tint: '#0f9f6f' },
-        { value: overdue.length, label: overdue.length === 1 ? 'Overdue invoice' : 'Overdue invoices', tint: '#f59e0b' },
+        { value: dayTodos.length, label: offset === 0 ? 'To-dos today' : 'To-dos', tint: '#334155' },
+        { value: dayTodos.filter((t) => t.done).length, label: 'Done', tint: '#0f9f6f' },
+        { value: carried.length, label: 'Carried over', tint: '#f59e0b' },
+        { value: mentions.length, label: 'Mentions', tint: '#579bfc' },
       ]} />
 
-      <div className="mt-7 grid grid-cols-2 gap-4 md:grid-cols-3">
-        {NAV.slice(1).map(({ id, label, icon: Icon }) => (
-          <a key={id} href={`#/${id}`} className="glass glass-rim float flex items-center gap-3 rounded-[24px] p-5">
-            <span className="grid h-10 w-10 place-items-center rounded-2xl chip"><Icon className="h-5 w-5" /></span>
-            <span className="font-extrabold text-[15px]">{label}</span>
-          </a>
-        ))}
+      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="flex min-w-0 flex-col gap-6">
+          {offset === 0 && carried.length > 0 && (
+            <TodoList title="Carried over" icon={History} todos={carried} showDay moveTo={{ day: today, label: 'today' }} />
+          )}
+          <TodoList title={title} icon={CalendarCheck} todos={dayTodos} empty="Nothing planned." rim>
+            <AddTodo assignee={personId} day={day} />
+          </TodoList>
+          <OnBoards personId={personId} />
+        </div>
+        <Mentions mentions={mentions} person={person} />
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <div className="min-w-0 overflow-x-auto scroll-thin rounded-[24px] glass">
-          <table className="w-full min-w-[520px] text-[13.5px]">
-            <tbody>
-              {mine.length === 0 && <tr><td className="p-5 dimmer">Nothing assigned to you. Nice.</td></tr>}
-              {mine.map((i, k) => (
-                <tr key={i.id} className={k ? 'border-t rowline' : ''}>
-                  <td className="p-3.5 font-semibold"><a href={`#/${i.board}?item=${encodeURIComponent(i.id)}`} className="hover:underline">{i.name}</a></td>
-                  <td className="p-3.5 dimmer">{BOARD_SCHEMAS[i.board].title}</td>
-                  <td className="w-[130px] px-2"><span className="pill" style={{ backgroundColor: STATUS[i.values.status] }}>{i.values.status}</span></td>
-                  <td className="p-3.5 text-right dim tnum">{shortDate(i.values.due)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <section className="glass glass-rim rounded-[24px] p-5" aria-label="Mentions">
-          <h2 className="flex items-center gap-2 font-extrabold text-[16px]"><AtSign className="h-4 w-4" />Mentions</h2>
-          {mentions.length === 0 && <p className="mt-3 dimmer">No one has tagged you yet.</p>}
-          <ol className="mt-3 flex flex-col gap-2">
-            {mentions.map((m) => {
-              const ch = state.channels.find((c) => c.id === m.channel);
-              return (
-                <li key={m.id}>
-                  <button type="button" onClick={() => openChat(m.channel)} className="flex w-full gap-3 rounded-2xl p-2 text-left hover:bg-white/10">
-                    <Avatar userId={m.user} size={30} ring={false} />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 text-[12.5px] dimmer"><span className="font-semibold text-white">{users[m.user]?.name}</span><Hash className="h-3 w-3" />{ch?.name} · {ago(m.ts)}</div>
-                      <p className="line-clamp-2"><MessageText text={m.text} users={state.users} me={me} /></p>
-                    </div>
-                  </button>
-                </li>
-              );
-            })}
-          </ol>
-          {overdue.length > 0 && (
-            <p className="mt-4 rounded-2xl bg-rose-500/20 p-3 text-[13px]">
-              {overdue.length} overdue invoice{overdue.length > 1 ? 's' : ''} totalling {overdue.reduce((t, i) => t + invoiceTotals(i).total, 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 })}. <a href="#/clients" className="font-semibold underline">Open Clients</a>
-            </p>
-          )}
-        </section>
-      </div>
+      <TimesheetModal open={logging} onClose={() => setLogging(false)} day={day} />
     </div>
   );
 }

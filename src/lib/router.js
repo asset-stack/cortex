@@ -1,17 +1,32 @@
 // Tiny hash router: #/clients, #/marketing … keeps the build static.
 import { useEffect, useState } from 'react';
 
-export const ROUTES = ['work', 'projects', 'admin', 'outreach', 'marketing', 'pipeline', 'clients', 'settings'];
+export const ROUTES = ['work', 'projects', 'marketing', 'outreach', 'pipeline', 'clients', 'settings'];
+// Old links that still work: the Admin board merged into Projects (docs/PHASE2.md §6), item ids unchanged.
+export const REDIRECTS = { admin: 'projects' };
+
+const split = () => {
+  const [path, ...query] = window.location.hash.replace(/^#\/?/, '').split('?');
+  return { path, query: query.length ? `?${query.join('?')}` : '' };
+};
 
 const read = () => {
-  const r = window.location.hash.replace(/^#\/?/, '').split('?')[0];
-  return ROUTES.includes(r) ? r : 'work';
+  const { path } = split();
+  if (REDIRECTS[path]) return REDIRECTS[path];
+  return ROUTES.includes(path) ? path : 'work';
+};
+
+// #/admin?item=x → #/projects?item=x in the address bar, without a history entry (replaceState fires no hashchange).
+const fixAddress = () => {
+  const { path, query } = split();
+  if (REDIRECTS[path]) window.history.replaceState(window.history.state, '', `#/${REDIRECTS[path]}${query}`);
 };
 
 export function useRoute() {
   const [route, setRoute] = useState(read);
   useEffect(() => {
-    const on = () => setRoute(read());
+    fixAddress();
+    const on = () => { fixAddress(); setRoute(read()); };
     window.addEventListener('hashchange', on);
     return () => window.removeEventListener('hashchange', on);
   }, []);

@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import { useRoute } from '@/lib/router';
-import { useIsAdmin } from '@/data/store';
+import { MODULES, useAccess } from '@/lib/access';
 import Sidebar, { MobileNav } from '@/components/layout/Sidebar';
 import ChatDock from '@/components/chat/ChatDock';
 import Board from '@/components/board/Board';
+import TimesheetPrompt from '@/components/timesheet/TimesheetPrompt';
 import MyWork from '@/pages/MyWork';
 import Pipeline from '@/pages/Pipeline';
 import Clients from '@/pages/Clients';
@@ -13,7 +14,6 @@ import Settings from '@/pages/Settings';
 function Page({ route }) {
   switch (route) {
     case 'projects':
-    case 'admin':
     case 'marketing':
       return <Board key={route} boardKey={route} />;
     case 'pipeline': return <Pipeline />;
@@ -24,10 +24,16 @@ function Page({ route }) {
   }
 }
 
+// Settings is admins only; a module the user can't see (access 'none') falls back to My Work.
+function allowed(route, access) {
+  if (route === 'settings') return access.isAdmin;
+  return !MODULES.includes(route) || access.canView(route);
+}
+
 export default function App() {
-  const isAdmin = useIsAdmin();
+  const access = useAccess();
   const hashRoute = useRoute();
-  const route = hashRoute === 'settings' && !isAdmin ? 'work' : hashRoute; // Settings is admin-only
+  const route = allowed(hashRoute, access) ? hashRoute : 'work';
   const scroller = useRef(null);
   const dock = useRef(null);
   const [dockH, setDockH] = useState(0);
@@ -64,6 +70,7 @@ export default function App() {
           <main ref={scroller} className="flex-1 overflow-y-auto scroll-thin">
             <MobileNav route={route} />
             <div className="mx-auto max-w-[1240px] px-4 pb-32 pt-6 md:px-8 md:pt-9" style={dockH ? { paddingBottom: `max(8rem, ${dockH + 16}px)` } : undefined}>
+              {access.role === 'staff' && <TimesheetPrompt />}
               <Page route={route} />
             </div>
           </main>

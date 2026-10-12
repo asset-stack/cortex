@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowUpDown, Calendar, Columns3, ListFilter, Table2, User } from 'lucide-react';
 import { useStore } from '@/data/store';
+import { useAccess } from '@/lib/access';
 import { BOARD_SCHEMAS, STATUS } from '@/data/boards';
 import { IconButton, PageHeader, Popover, SearchField, Segmented, Avatar } from '@/components/ui';
 import { cn } from '@/lib/cn';
@@ -18,6 +19,8 @@ const VIEWS = [
 
 export default function Board({ boardKey }) {
   const { state, actions } = useStore();
+  const access = useAccess();
+  const editable = access.canEdit(boardKey); // at view: no adding, pickers, drag or typing
   const schema = BOARD_SCHEMAS[boardKey];
   const board = state.boards[boardKey];
   const [view, setView] = useState('table');
@@ -33,30 +36,32 @@ export default function Board({ boardKey }) {
 
   useEffect(() => { setAdded((a) => (a.length ? [] : a)); }, [q, person, status]);
 
-  const groups = useMemo(() => board.groups.map((g) => {
+  const groups = useMemo(() => (board?.groups || []).map((g) => {
     let items = g.items.filter((it) => added.includes(it.id) || (
       (!q || it.name.toLowerCase().includes(q.toLowerCase())) &&
-      (!person || it.values.owner === person) &&
+      (!person || (it.values.people || []).includes(person)) &&
       (!status || it.values.status === status)));
     if (sortDue) items = [...items].sort((a, b) => (a.values.due || '9999').localeCompare(b.values.due || '9999'));
     return { ...g, items };
-  }), [board.groups, q, person, status, sortDue, added]);
+  }), [board?.groups, q, person, status, sortDue, added]);
 
   const add = (groupId, name) => {
     const id = actions.addItem(boardKey, groupId, name);
-    setAdded((a) => [...a, id]);
-    return id;
+    if (id) setAdded((a) => [...a, id]);
+    return id || null;
   };
-  const newTask = () => setOpenId(add(board.groups[0]?.id));
+  const newTask = () => { const id = add(board.groups[0]?.id); if (id) setOpenId(id); };
   const closeItem = () => {
     setOpenId(null);
     // Drop ?item= so a reload or Back doesn't reopen it; replaceState fires no hashchange.
     if (window.location.hash.includes('?')) window.history.replaceState(null, '', `#/${boardKey}`);
   };
 
+  if (!schema || !board) return null; // e.g. the old admin board, merged into projects
+
   return (
     <div>
-      <PageHeader title={schema.title} action="New task" onAction={newTask} />
+      <PageHeader title={schema.title} action={editable ? 'New task' : undefined} onAction={newTask} />
       <div className="mt-6 flex flex-wrap items-center gap-2">
         <Segmented options={VIEWS} value={view} onChange={setView} label="View" />
         <SearchField value={q} onChange={setQ} />
@@ -86,12 +91,12 @@ export default function Board({ boardKey }) {
         </div>
       </Popover>
 
-      {view === 'table' && <TableView boardKey={boardKey} schema={schema} groups={groups} onOpen={setOpenId} onAdd={add} />}
-      {view === 'kanban' && <KanbanView boardKey={boardKey} groups={groups} sortDue={sortDue} onOpen={setOpenId} />}
+      {view === 'table' && <TableView boardKey={boardKey} schema={schema} groups={groups} onOpen={setOpenId} onAdd={add} readOnly={!editable} />}
+      {view === 'kanban' && <KanbanView boardKey={boardKey} groups={groups} sortDue={sortDue} onOpen={setOpenId} readOnly={!editable} />}
       {view === 'calendar' && <CalendarView groups={groups} onOpen={setOpenId} />}
 
       {/* Keyed by task so its local drafts (name, update) never carry over to another task. */}
-      <ItemDrawer key={openId ?? 'closed'} boardKey={boardKey} schema={schema} itemId={openId} onClose={closeItem} />
+      <ItemDrawer key={openId ?? 'closed'} boardKey={boardKey} schema={schema} itemId={openId} onClose={closeItem} readOnly={!editable} />
     </div>
   );
 }

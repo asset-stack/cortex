@@ -40,19 +40,49 @@ Keep the values below in the company password manager, never in the repo, an iss
 2. On GitHub open `supabase/migrations/0001_cortex.sql` → **Raw**, select all, copy, and paste the whole file
    into the editor.
 3. **Run** (Ctrl/Cmd + Enter). The editor may warn about destructive operations: the file drops and recreates
-   its own policies so it can be re-run safely. Choose **Run this query**. Expect *Success. No rows returned*.
-4. **+** → **Create a new snippet** again and paste `supabase/setup-admins.sql`. Replace
-   `you@assetstackai.com` with the real admin addresses, one `('name@assetstackai.com')` per line, separated
-   by commas. **Run**. Keep these addresses out of the repo. Run this before admins first sign in (if someone
-   already has, the `update` at the end of the file promotes them).
-5. Check:
-   - **Table Editor**: the Cortex tables are listed (`profiles`, `clients`, `items`, …) and none is marked
-     **Unrestricted** (that label means RLS is off).
+   its own policies. Choose **Run this query**. Expect *Success. No rows returned*.
+4. **+** → **Create a new snippet**, paste `supabase/migrations/0002_team_workflow.sql` the same way and **Run**.
+   It adds roles, module access, My Work, billing, money in, expenses, timesheets and the `finance` storage
+   bucket. From now on never run `0001` again: it would put back the phase 1 roles and policies.
+5. **+** → **Create a new snippet** again and paste `supabase/setup-admins.sql`. Replace the placeholder
+   addresses with the real ones, one `('name@assetstackai.com', 'role')` per line, separated by commas, in lower
+   case. The role is `'superadmin'` or `'admin'`:
+   - **SuperAdmin**: everything an Admin can do, plus roles, the **Active** switch and staff module access in
+     **Settings** → **Team**. List at least one; nobody else can change roles.
+   - **Admin**: edits every module, sees money in, expenses and software costs, approves invoices and marks
+     them paid, and manages routines, timesheets, business details and import in **Settings**.
+   - Anyone not listed signs up as **Staff**.
+
+   **Run**. Keep these addresses out of the repo. Run this before admins first sign in (if someone already has,
+   the `update`s at the end of the file promote them; they never demote anyone).
+6. Check:
+   - **Table Editor**: the Cortex tables are listed (`profiles`, `clients`, `items`, `todos`, …) and none is
+     marked **Unrestricted** (that label means RLS is off).
    - **Database** → **Publications** → `supabase_realtime`: the Cortex tables are listed.
+   - **Storage**: a `finance` bucket, *not* marked **Public** (see the note below).
    - **Advisors** → **Security Advisor** → **Refresh**: no *RLS Disabled in Public* errors.
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0002_…`). Run each new file
-once, in order, the same way.
+**The `finance` bucket** is created by `0002`. It holds the weekly bank-statement screenshots
+(`statements/…`) and expense receipts (`receipts/…`). It is private and only admins can list, upload, open,
+change or delete its files; Cortex opens a file through a link that expires after five minutes. Never switch it
+to **Public**, and don't add policies to it in the dashboard.
+
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0003_…`). Run each new file
+once, in order, the same way. Never run an older file after a newer one.
+
+### Upgrading an existing project
+
+If the database was set up with `0001` only (phase 1), upgrade it once:
+
+1. **SQL Editor** → **+** → **Create a new snippet**, paste `supabase/migrations/0002_team_workflow.sql` and
+   **Run**. It runs as one transaction on top of the existing rows: members become **Staff**, admins stay
+   **Admin**, the Admin board's groups and items move to **Projects** (its *To do* group becomes *Admin*), and
+   each task's owner becomes its people. If anything fails, nothing changes. Don't run `0001` again.
+2. Run `supabase/setup-admins.sql` as in step 2.5, with at least one `'superadmin'`. Until then nobody is a
+   SuperAdmin, so nobody can change roles or staff access. Existing admin addresses take the role you list.
+3. Deploy the phase 2 code straight after (merge to `main`; Cloudflare builds it), then ask everyone to reload.
+   The phase 1 app can't save to the Admin board once it has been merged into Projects.
+4. Check as in step 2.6, including the `finance` bucket.
 
 ## 3. Google sign-in
 
@@ -195,13 +225,18 @@ There are no invitations to send.
 
 1. Send staff the link <https://cortex.assetstackai.com>. They click **Sign in with Google** and choose their
    `@assetstackai.com` account.
-2. On first sign-in Cortex creates their profile as a **Member** and adds them to #general. Addresses from
-   `setup-admins.sql` come in as **Admin**.
-3. Admins manage people in **Settings** → **Team**: the **Role** menu (Admin / Member) and the **Active**
-   switch. Switching Active off removes all of that person's access at once, because every database policy
-   checks it. Your own row is locked, and the last active admin can't be demoted or deactivated.
-4. When someone leaves, switch **Active** off the same day and suspend their Workspace account. Deactivate
-   rather than delete, so their notes, updates and messages stay attributed.
+2. On first sign-in Cortex creates their profile as **Staff** and adds them to #general. Addresses from
+   `setup-admins.sql` come in with the role listed there (**SuperAdmin** or **Admin**).
+3. The SuperAdmin manages people in **Settings** → **Team**: the **Role** menu (SuperAdmin / Admin / Staff),
+   the **Active** switch, and each staff member's access to **Projects**, **Marketing**, **Outreach**,
+   **Pipeline** and **Clients** (None / View / Edit). Staff start with Projects and Marketing on Edit, Pipeline
+   and Clients on View, and Outreach on None; admins always have Edit. Admins see the page read-only.
+   Switching Active off removes all of that person's access at once, because every database policy checks it.
+   Your own row is locked, and the last active SuperAdmin can't be demoted or deactivated.
+4. Admins set each person's daily routines in **Settings** → **Routines**; they appear on that person's
+   **My Work** each day.
+5. When someone leaves, the SuperAdmin switches **Active** off the same day and suspends their Workspace
+   account. Deactivate rather than delete, so their notes, updates and messages stay attributed.
 
 ## 9. Import data from the old platform
 
@@ -211,7 +246,9 @@ name or email.
 1. In the old platform, export each list as CSV: clients, contacts, deals, and the board tasks (one file per
    board or group).
 2. Cortex → **Settings** → **Import** → choose **Clients**, **Contacts**, **Deals** or **Board tasks**. For
-   board tasks, also pick the **Board** and **Group** (or **New group** and type a **Group name**).
+   board tasks, also pick the **Board** and **Group** (or **New group** and type a **Group name**). Import
+   contacts before deals: a contact that replied or booked a meeting gets its deal straight away, and the deal
+   with the same name in the deals file then fills it in.
 3. **Choose CSV**. Under **Columns**, Cortex matches the headers it recognises; fix any dropdown that's wrong
    (`—` means the field isn't imported). **Name** is required.
 4. Check **Preview** (first five rows) → **Import N**. Rows whose name already exists are skipped (ignoring
@@ -236,8 +273,11 @@ name or email.
 - [ ] Preview deployments build without the Supabase variables (demo mode): **Settings** → **Variables and
   Secrets** → **Preview** lists only `NODE_VERSION`, and a preview URL shows *Reset demo data* in the sidebar.
 - [ ] Supabase and Cloudflare dashboards: only admins are members, all with MFA on.
+- [ ] The `finance` storage bucket is **private** (Supabase → **Storage**: no **Public** badge).
+- [ ] At least one active **SuperAdmin**, and staff module access in **Settings** → **Team** is what you
+  intend (Outreach is off for staff unless granted).
 - [ ] Security headers are live (step 6.7).
-- [ ] Leavers are deactivated in **Settings** → **Team** the same day.
+- [ ] Leavers are deactivated in **Settings** → **Team** (by the SuperAdmin) the same day.
 
 ## Troubleshooting
 
@@ -247,7 +287,12 @@ name or email.
 | Google: "Access blocked … can only be used within its organization" | The account isn't in the Workspace. Expected for outsiders. |
 | Google: `redirect_uri_mismatch` | The redirect URI in the Google client must be exactly `https://<project-ref>.supabase.co/auth/v1/callback`. |
 | After Google you land on the wrong site or `localhost:3000` | Site URL or Redirect URLs (step 4). |
-| "Your account isn't active yet. Ask an admin." | An admin switched **Active** off. If the person signed in before step 2 ran, delete them under **Authentication** → **Users** and have them sign in again. |
+| "Your account isn't active yet. Ask an admin." | The SuperAdmin switched **Active** off. If the person signed in before step 2 ran, delete them under **Authentication** → **Users** and have them sign in again. |
+| Nobody can change roles; **Settings** → **Team** is read-only for everyone | There is no SuperAdmin yet (normal straight after upgrading). Run `setup-admins.sql` with a `'superadmin'` line (step 2.5). |
+| "Cortex needs at least one active SuperAdmin" | Someone tried to demote or deactivate the last active SuperAdmin. Make another person SuperAdmin first. |
+| A staff member can't see Outreach, or Pipeline / Clients are read-only for them | Expected defaults. The SuperAdmin changes their access in **Settings** → **Team**. |
+| "Only admins can approve, send, void or mark invoices paid" | Staff can't do these, even with Clients on Edit. An admin does it. |
+| Bank screenshot or receipt upload fails ("Bucket not found") | The `finance` bucket is missing: check **Storage**, then run `0002_team_workflow.sql` again (it is safe to re-run). |
 | Demo data on the live site | Supabase variables missing at build time (step 5.6). |
 | Red dot on the Cortex logo ("Not saved") | Hover it for the message. Changes stay queued and retry; check the browser console. A change the database refuses three times is put back the way the database has it (a duplicate invoice number or group name gets the next free one instead). |
 | Console: "Refused to load … Content Security Policy" | The origin isn't allowed in `public/_headers`. |

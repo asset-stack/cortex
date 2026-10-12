@@ -1,6 +1,6 @@
 // CSV import mapping (docs/BACKEND.md §4): which columns feed which fields, and one CSV row → one record in
 // state shape for actions.importRecords(), which adds ids and skips names that already exist. Pure functions.
-import { BOARD_SCHEMAS, CLIENT_STATUSES, DEAL_STAGES, PRIORITY, STATUS } from '@/data/boards';
+import { BOARD_SCHEMAS, CLIENT_STATUSES, CONTACT_STATUSES, DEAL_STAGES, PRIORITY, STATUS } from '@/data/boards';
 import { localYmd } from '@/lib/format';
 
 // Field types drive parsing and the preview: text | user (one staff member) | users | date (YYYY-MM-DD) |
@@ -50,7 +50,7 @@ export const FIELDS = {
   ],
   tasks: [
     field('name', 'Name', 'text', ['name', 'task', 'title', 'task name', 'item'], NAME),
-    field('owner', 'Owner', 'user', ['owner', 'assignee', 'assigned to', 'person', 'responsible', 'contact']),
+    field('people', 'People', 'users', ['people', 'owner', 'owners', 'assignee', 'assignees', 'assigned to', 'person', 'responsible', 'team', 'members', 'contact']),
     field('status', 'Status', 'text', ['status', 'state', 'progress']),
     field('priority', 'Priority', 'text', ['priority', 'importance'], { column: true }),
     field('type', 'Type', 'text', ['type', 'category'], { column: true }),
@@ -269,12 +269,16 @@ function contactStage(v) {
   return String(v).trim();
 }
 
-// Negated wording first: "Not contacted" / "Unsent" weren't sent; "Awaiting reply" / "Not opened" were.
+// A status name as written, else negated wording first: "Not contacted" / "Unsent" weren't sent; "Awaiting reply" /
+// "Not opened" were; "Meeting not booked" / "Cancelled meeting" aren't a booking.
 function contactStatus(v) {
   const s = norm(v);
+  const exact = exactly(s, Object.keys(CONTACT_STATUSES));
+  if (exact) return exact;
   if (/\b(no|not|un) ?(reply|replied|response|responded|answered)|bounce/.test(s)) return 'No reply';
   if (/\b(no|not|never|un) ?(yet )?(sent|contacted|emailed|delivered)/.test(s)) return 'New';
   if (/\b(no|not|never|un) ?(yet )?(opened|clicked)|\bawait|\bwaiting|\b(repl|respon)\w* (pending|due)/.test(s)) return 'Sent';
+  if (/meeting|\bbooked\b/.test(s) && !/\b(no|not|never)\b|\bun ?booked|cancel/.test(s)) return 'Meeting booked';
   if (/repl|respond|response|answered/.test(s)) return 'Replied';
   if (/open|clicked/.test(s)) return 'Opened';
   if (/sent|contacted|emailed|delivered/.test(s)) return 'Sent';
@@ -320,8 +324,9 @@ const avatarFor = (name) => AVATARS[[...name].reduce((h, c) => (h * 31 + c.charC
 
 /**
  * One CSV row (array of cells) → a state-shaped record without ids, or null when it has no name.
- * `me` (the importer) writes the imported note and owns clients and deals whose owner doesn't match anyone;
- * tasks are left unassigned instead. `board` is the target board for tasks.
+ * `me` (the importer) writes the imported note and owns clients and deals whose owner doesn't match anyone.
+ * Tasks get everyone their people cell names in `values.people` (none when nobody matches). `board` is the
+ * target board for tasks (projects or marketing).
  */
 export function normalise(kind, row, mapping, { users = [], me = '', board, now = new Date() } = {}) {
   const get = (key) => {
@@ -361,10 +366,10 @@ export function normalise(kind, row, mapping, { users = [], me = '', board, now 
       };
     case 'tasks': {
       const status = taskStatus(get('status'));
-      const values = { owner: owner('owner'), status };
+      const values = { people: matchUsers(get('people'), users), status };
       const cols = BOARD_SCHEMAS[board]?.columns || [{ key: 'priority', type: 'label', options: PRIORITY }, { key: 'due', type: 'date' }];
       cols.forEach((c) => {
-        if (c.key === 'owner' || c.key === 'status') return;
+        if (c.key === 'people' || c.key === 'status' || c.type === 'people' || c.type === 'status') return;
         if (c.key === 'priority') values.priority = taskPriority(get('priority'));
         else if (c.type === 'date') values[c.key] = toYmd(get(c.key));
         else if (c.type === 'label') values[c.key] = label(get(c.key), c.options);
