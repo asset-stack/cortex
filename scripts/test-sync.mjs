@@ -1327,9 +1327,15 @@ await check('automations: "Approve invoices" for admins while any invoice awaits
   assert.equal(auto.ensureTodosLocal(st, '2026-10-13', { me: 'al' }), 0, 'once a day');
   auto.ensureTodosLocal(st, '2026-10-13', { me: 'stu' });
   assert.ok(!st.todos.some((t) => t.assignee === 'stu' && t.ref.startsWith('approve:')), 'staff never get it');
-  st.clients[0].invoices[0].status = 'Approved';
   auto.ensureTodosLocal(st, '2026-10-14', { me: 'al' });
-  assert.ok(!st.todos.some((t) => t.ref === 'approve:2026-10-14'), 'nothing awaiting: no to-do');
+  assert.ok(!st.todos.some((t) => t.ref === 'approve:2026-10-14'), 'an undone reminder carries over: no new one each day');
+  approve[0].done = true;
+  auto.ensureTodosLocal(st, '2026-10-15', { me: 'al' });
+  assert.equal(st.todos.filter((t) => t.ref === 'approve:2026-10-15').length, 1, 'once ticked, a new one while invoices still wait');
+  st.clients[0].invoices[0].status = 'Approved';
+  st.todos.forEach((t) => { t.done = true; });
+  auto.ensureTodosLocal(st, '2026-10-16', { me: 'al' });
+  assert.ok(!st.todos.some((t) => t.ref === 'approve:2026-10-16'), 'nothing awaiting: no to-do');
 });
 
 await check('automations: clientCreatedLocal gives an admin owner a "Prepare contract" to-do on their own day (0004)', () => {
@@ -1762,6 +1768,24 @@ await check('import: clients map the contact, email and phone to a billing conta
     [{ name: '', role: '', email: '', phone: '0400 000 001', billing: true }]);
   assert.deepEqual(normalise('clients', ['Example', '', 'not an email'], { name: 0, keyContact: 1, email: 2 }).contacts, [], 'nothing usable: no contact');
   ['Platform', 'platform link', 'Platform address', 'site', 'PlatformUrl'].forEach((h) => assert.equal(autoMap(['Name', h], 'clients').platformUrl, 1, h));
+});
+
+await check('import: a bare Contact column is the owner next to any key contact column, else the client contact', async () => {
+  const { autoMap } = await import('../src/lib/importers.js');
+  ['Key contact', 'Primary contact', 'Main contact', 'Client contact', 'Contact name', 'Contact person', 'Billing contact'].forEach((h) => {
+    const m = autoMap(['Name', 'Contact', h], 'clients');
+    assert.deepEqual([m.contact, m.keyContact], [1, 2], h);
+    const r = autoMap(['Name', h, 'Contact'], 'clients');
+    assert.deepEqual([r.contact, r.keyContact], [2, 1], `${h} first`);
+  });
+  // Alone, or next to an owner column, it is the client's contact; the owner column keeps the owner.
+  assert.deepEqual(((m) => [m.contact, m.keyContact])(autoMap(['Name', 'Contact'], 'clients')), [-1, 1]);
+  assert.deepEqual(((m) => [m.contact, m.keyContact])(autoMap(['Name', 'Contact', 'Owner'], 'clients')), [2, 1]);
+  assert.deepEqual(((m) => [m.contact, m.keyContact])(autoMap(['Name', 'Contact owner', 'Contact'], 'clients')), [1, 2]);
+  assert.deepEqual(((m) => [m.contact, m.keyContact])(autoMap(['Name', 'Account owner', 'contact'], 'clients')), [1, 2]);
+  // Other kinds keep Contact as the owner / person as before.
+  assert.equal(autoMap(['Name', 'Contact'], 'deals').contact, 1);
+  assert.equal(autoMap(['Contact', 'Company'], 'contacts').name, 0);
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');

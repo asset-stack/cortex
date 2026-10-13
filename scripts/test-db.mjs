@@ -1340,13 +1340,13 @@ async function phase4({ alice, boss, david, hello, carol, newcomer }) {
       neither: [],
     }) && blanked.n === 0, { moved, blanked });
 
-  // An old browser tab still writing key_contact after the upgrade: re-running picks it up for clients without
-  // contacts, and never duplicates.
+  // An old browser tab still writing key_contact after the upgrade: re-running picks it up (after a client's existing
+  // contacts; see 31.), and never duplicates.
   await db.query("update clients set key_contact = 'Late Example' where id in ($1, $2)", [both, neither]);
   await applyMigration4();
   const rerun = { both: (await contactsOf(both)).length, neither: (await contactsOf(neither)).map((x) => x.name) };
-  check('27. re-running picks up a late key contact for a client with none, and never duplicates',
-    rerun.both === 1 && stable(rerun.neither) === stable(['Late Example']), rerun);
+  check('27. re-running picks up a late key contact for a client with none (and one with contacts), and never duplicates',
+    rerun.both === 2 && stable(rerun.neither) === stable(['Late Example']), rerun);
 
   const cols = await one(`select
     (select column_default from information_schema.columns where table_name = 'clients' and column_name = 'platform_url') as platform,
@@ -1376,6 +1376,7 @@ async function phase4({ alice, boss, david, hello, carol, newcomer }) {
   const bossContact = await error("insert into client_contacts (client_id, name, email, billing) values ($1, 'Bo Example', 'bo@example.com', true)", [both]);
   const bossContract = (await one(contractRow, [both])).id;
   const contract = await one('select status, created_by, start_date, annual_fee from client_contracts where id = $1', [bossContract]);
+  const badStatus = await error("update client_contracts set status = 'Pending' where id = $1", [bossContract]);
   await as(newcomer); // staff, clients view (default)
   const viewSees = await one(`select (select count(*)::int from client_contacts where client_id = $1) as contacts,
     (select count(*)::int from client_contracts where client_id = $1) as contracts`, [both]);
@@ -1388,13 +1389,12 @@ async function phase4({ alice, boss, david, hello, carol, newcomer }) {
   };
   await as(alice); // staff with clients edit (17.)
   const editWrite = await error("insert into client_contacts (client_id, name) values ($1, 'Alice adds')", [both]);
-  const badStatus = await error("update client_contracts set status = 'Pending' where id = $1", [bossContract]);
   await as(carol);
   const inactive = await one('select (select count(*)::int from client_contacts) as contacts, (select count(*)::int from client_contracts) as contracts');
   await db.exec('set role anon');
   const anon = await error('select * from public.client_contacts');
   await as(null);
-  check('28. admins add contacts and contracts (Draft, created_by them); staff with view read but cannot write; with edit they can',
+  check('28. admins add contacts and contracts (Draft, created_by them); staff with view read but cannot write; with edit they write contacts (31.)',
     bossContact === null && contract.status === 'Draft' && contract.created_by === boss && contract.start_date === null
       && Number(contract.annual_fee) === 4500 && viewSees.contacts >= 2 && viewSees.contracts === 1
       && typeof viewWrites.contact === 'string' && typeof viewWrites.contract === 'string' && viewWrites.edit === 0
@@ -1516,6 +1516,82 @@ async function phase4({ alice, boss, david, hello, carol, newcomer }) {
     { tokenTable, saveAsUser, readAsUser, anonSave, token, noToken, grants });
   check('30. google_disconnect removes only your own connection', disconnect === true && disconnectAgain === false
     && stable(left) === stable([david]), { disconnect, disconnectAgain, left });
+
+  // 31. Contracts are admins' to write; one "Approve invoices" at a time; re-running picks up changed key contacts ----
+
+  // As in the app (an admin makes a contract with their own Google account): staff with clients edit only read them,
+  // also through a PostgREST upsert as the sync engine sends one.
+  await as(alice);
+  const staffContract = {
+    sees: (await one('select count(*)::int as n from client_contracts where id = $1', [bossContract])).n,
+    add: await error(contractRow, [both]),
+    sign: await affected(`update client_contracts set status = 'Signed', signed_at = '2026-10-01',
+      doc_url = 'https://attacker.example/doc', sent_by = $2 where id = $1`, [bossContract, boss]),
+    upsert: await postgrestUpsert('client_contracts', [{ id: bossContract, client_id: both, status: 'Signed' }]),
+    drop: await affected('delete from client_contracts where id = $1', [bossContract]),
+  };
+  await as(null);
+  const untouchedContract = await one('select status, doc_url, sent_by from client_contracts where id = $1', [bossContract]);
+  await as(david);
+  const adminContract = {
+    send: await affected("update client_contracts set status = 'Sent for signature', sent_by = $2, sent_at = now() where id = $1",
+      [bossContract, david]),
+    upsert: await postgrestUpsert('client_contracts', [{ id: bossContract, client_id: both, status: 'Signed', signed_at: '2026-11-02' }]),
+    add: (await one(contractRow, [both])).id,
+  };
+  adminContract.drop = await affected('delete from client_contracts where id = $1', [adminContract.add]);
+  await as(null);
+  const signedContract = await one('select status, signed_at::text as signed from client_contracts where id = $1', [bossContract]);
+  check('31. contracts: staff with clients edit read them but never add, sign, relink or delete one (upserts too); admins do',
+    staffContract.sees === 1 && typeof staffContract.add === 'string' && staffContract.sign === 0
+      && typeof staffContract.upsert === 'string' && staffContract.drop === 0
+      && untouchedContract.status === 'Draft' && untouchedContract.doc_url === '' && untouchedContract.sent_by === null
+      && adminContract.send === 1 && adminContract.upsert === null && adminContract.drop === 1
+      && signedContract.status === 'Signed' && signedContract.signed === '2026-11-02',
+    { staffContract, untouchedContract, adminContract, signedContract });
+
+  // An invoice left Awaiting approval for days: an admin's undone reminder carries over instead of a new one each day.
+  await as(null);
+  const waitingInvoice = (await one(`insert into invoices (client_id, number, issued, status)
+    values ($1, 'APPROVE-CHECK-1', '2026-11-10', 'Awaiting approval') returning id`, [both])).id;
+  const undoneApprove = async (user) => (await rows(`select ref from todos where assignee_id = $1 and source = 'automation'
+    and ref like 'approve:%' and not done order by ref`, [user])).map((r) => r.ref);
+  await ensure(boss, '2026-11-10');
+  await ensure(boss, '2026-11-11');
+  await as(null);
+  const carried = await undoneApprove(boss); // 29.'s, never ticked
+  await db.query("update todos set done = true, done_at = now() where assignee_id = $1 and ref like 'approve:%'", [boss]);
+  await ensure(boss, '2026-11-12');
+  await ensure(boss, '2026-11-13');
+  await ensure(david, '2026-11-13');
+  await as(null);
+  const afterTick = { boss: await undoneApprove(boss), david: await undoneApprove(david) };
+  await db.query("update invoices set status = 'Approved' where id = $1", [waitingInvoice]);
+  check('31. "Approve invoices": one undone reminder per admin at a time (carried over, not a new one each day); a new one once ticked',
+    stable(carried) === stable(['approve:2026-11-03'])
+      && stable(afterTick) === stable({ boss: ['approve:2026-11-12'], david: ['approve:2026-11-13'] }),
+    { carried, afterTick });
+
+  // An old tab changed the key contact of a client that already has contacts: re-running adds it after them (not
+  // billing) instead of blanking it away; one the client already has (same email, else same name) is never added.
+  await db.query("update clients set key_contact = 'Bob Example', email = ' Bob@Example.com' where id = $1", [emailOnly]);
+  await db.query("update clients set key_contact = 'Pat Example', email = 'PAT@example.com ' where id = $1", [both]);
+  await db.query("update clients set key_contact = 'late example', email = '' where id = $1", [neither]);
+  const contactsBefore = { both: await contactsOf(both), neither: await contactsOf(neither) };
+  const rerunLate = await applyMigration4();
+  const picked = {
+    emailOnly: await contactsOf(emailOnly),
+    both: stable(await contactsOf(both)) === stable(contactsBefore.both),
+    neither: stable(await contactsOf(neither)) === stable(contactsBefore.neither),
+    late: (await contactsOf(both)).find((x) => x.name === 'Late Example'), // 27.'s, on a client that had Pat
+    blank: (await one(`select count(*)::int as n from clients where key_contact <> '' or email <> ''`)).n,
+  };
+  check('31. re-running 0004 adds a key contact an old tab changed after the existing contacts (not billing), never one the client has',
+    rerunLate === null && stable(picked.emailOnly) === stable([
+      { name: '', role: '', email: 'accounts@example.com', phone: '', billing: true, position: 0 },
+      { name: 'Bob Example', role: '', email: 'bob@example.com', phone: '', billing: false, position: 1 },
+    ]) && picked.both && picked.neither && picked.late?.billing === false && picked.late?.position === 1 && picked.blank === 0,
+    { rerunLate, picked });
 
   return { alice, boss, david, hello };
 }

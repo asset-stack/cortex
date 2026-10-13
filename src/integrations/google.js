@@ -34,19 +34,35 @@ export async function sendGoogleEmail(invoke, { to, subject, text }) {
   return invoke('google/send', { to: recipients, subject: str(subject), text: String(text ?? '') });
 }
 
-/** An approved invoice and its PDF, from your own Gmail. Refused without your ABN (it wouldn't be a valid tax invoice)
- *  or without a recipient. → { ok } | { ok: false, error } */
-export async function sendInvoiceEmail(invoke, { client, invoice, org = {}, to, subject, text }) {
-  if (!str(org.abn)) return { ok: false, error: 'Add your ABN in Settings → Business first: without it this isn’t a valid tax invoice.' };
-  const recipients = cleanRecipients(to);
-  if (!recipients.length) return { ok: false, error: 'Add a billing contact with an email address.' };
-  let content;
+// pdf-lib is in its own chunk, loaded only when a PDF is made. A tab opened before a deploy asks for a chunk name the new
+// deployment no longer has (Pages answers with index.html), so a failed load means "reload", not a bad invoice.
+export const RELOAD_ERROR = 'Cortex was updated. Reload the page, then try again.';
+const loadInvoicePdf = () => import('../lib/invoicePdf.js');
+
+/** The invoice PDF's bytes (also for Download PDF). → { ok: true, bytes } | { ok: false, error } */
+export async function makeInvoicePdf({ client, invoice, org = {} }, load = loadInvoicePdf) {
+  let invoicePdf;
   try {
-    const { invoicePdf } = await import('../lib/invoicePdf.js'); // pdf-lib loads only when an invoice is emailed
-    content = toBase64(await invoicePdf({ client, invoice, org }));
+    ({ invoicePdf } = await load());
+  } catch {
+    return { ok: false, error: RELOAD_ERROR };
+  }
+  try {
+    return { ok: true, bytes: await invoicePdf({ client, invoice, org }) };
   } catch {
     return { ok: false, error: 'Could not make the PDF.' };
   }
+}
+
+/** An approved invoice and its PDF, from your own Gmail. Refused without your ABN (it wouldn't be a valid tax invoice)
+ *  or without a recipient. → { ok } | { ok: false, error } */
+export async function sendInvoiceEmail(invoke, { client, invoice, org = {}, to, subject, text }, load = loadInvoicePdf) {
+  if (!str(org.abn)) return { ok: false, error: 'Add your ABN in Settings → Business first: without it this isn’t a valid tax invoice.' };
+  const recipients = cleanRecipients(to);
+  if (!recipients.length) return { ok: false, error: 'Add a billing contact with an email address.' };
+  const pdf = await makeInvoicePdf({ client, invoice, org }, load);
+  if (!pdf.ok) return pdf;
+  const content = toBase64(pdf.bytes);
   const { filename } = taxInvoiceModel({ client, invoice, org });
   return invoke('google/send', {
     to: recipients, subject: str(subject), text: String(text ?? ''), attachment: { filename, content, type: 'application/pdf' },

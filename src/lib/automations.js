@@ -159,9 +159,11 @@ export function ensureTodosLocal(state, day = localYmd(), { me = state.me, uid: 
     added++;
   }
 
+  // One undone reminder at a time: it carries over (My Work's carried-over list) instead of a new one each day.
   const approve = `approve:${day}`;
   if (adminRole(state, me) && (state.clients || []).some((c) => (c.invoices || []).some((i) => i.status === 'Awaiting approval'))
-    && !hasAutomation(state, me, approve, day)) {
+    && !hasAutomation(state, me, approve, day)
+    && !state.todos.some((t) => t.source === 'automation' && t.assignee === me && t.ref.startsWith('approve:') && !t.done)) {
     state.todos.push(makeTodo({
       assignee: me, createdBy: me, title: APPROVE_TODO_TITLE, day, category: 'Clients', source: 'automation', ref: approve,
     }, newId));

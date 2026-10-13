@@ -258,12 +258,14 @@ app version that uses it.
 - **Tables**: `client_contacts (client_id → clients cascade, position, name, role, email, phone, billing)` and
   `client_contracts (client_id → clients cascade, position (from the end, newest on top), status check, title, doc_id,
   doc_url, start_date, end_date, annual_fee, payment_terms, user_limit, platform, customisations, mobile_app,
-  governing_law, created_by, sent_by, sent_at, signed_at)`: module `clients` policies, touch, realtime. Each client's
-  `key_contact` / `email` moved into one billing contact (only for clients without contacts, so re-running is safe);
-  the old columns stay, blank and no longer synced. New columns: `clients.platform_url`, `client_usage.credits`,
+  governing_law, created_by, sent_by, sent_at, signed_at)`: touch, realtime; contacts use the module `clients`
+  policies, contracts are read with clients view and written by admins only (`is_admin()`, as in the store). Each
+  client's `key_contact` / `email` moved into its first, billing contact; re-running adds a key contact an old tab
+  changed after the client's existing contacts (not billing), never one it already has (same email, else same name).
+  The old columns stay, blank and no longer synced. New columns: `clients.platform_url`, `client_usage.credits`,
   `invoices.sent_to`, `org_settings.contract_template / contract_folder` (Drive links).
 - **Automations**: `ensure_todos` adds **Approve invoices** (admins, ref `approve:<day>`, category Clients) while any
-  invoice is *Awaiting approval*, and admins' first My Work load each day raises due invoices first
+  invoice is *Awaiting approval* (one undone reminder per admin at a time: an undone one carries over), and admins' first My Work load each day raises due invoices first
   (`generate_due_invoices`), so recurring billing needs no cron. Trigger `client_contract_todo` (after insert on
   `clients`): a new **Onboarding** client gives its owner if they're an admin, else the admin who added it,
   **Prepare contract: <name>** on their own day (ref `contract:<id>`). Approving the last waiting invoice ticks the

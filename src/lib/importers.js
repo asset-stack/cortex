@@ -6,7 +6,8 @@ import { localYmd } from '@/lib/format';
 // Field types drive parsing and the preview: text | user (one staff member) | users | date (YYYY-MM-DD) |
 // ts (ISO timestamp) | money | note (becomes the record's first note / update). `column`: tasks only, kept
 // when the chosen board has a column with that key. `person`: clients only, the property of the client's first
-// contact (a billing one) the field fills. Aliases are header spellings, most likely first.
+// contact (a billing one) the field fills. `bare`: a header the field takes only when no other column matched it,
+// even from a field that also wants it. Aliases are header spellings, most likely first.
 const field = (key, label, type, aliases, extra) => ({ key, label, type, aliases, ...extra });
 const NAME = { required: true };
 const CREATED = ['created', 'created date', 'created at', 'date created', 'date added'];
@@ -19,10 +20,11 @@ export const FIELDS = {
     field('priority', 'Priority', 'text', ['priority']),
     field('next', 'Next step', 'text', ['next step', 'next steps', 'next action', 'next']),
     field('sector', 'Sector', 'text', ['sector', 'industry', 'segment', 'vertical']),
-    // A lone "Contact" column is the client's contact person; next to a "Key contact" column it is the owner.
+    // A "Contact" column is the client's contact person, unless another column is ("Key contact", "Primary
+    // contact", "Contact name"…): then it is the owner, as in the old export.
     field('contact', 'Owner', 'user', ['owner', 'account manager', 'assigned to', 'assignee', 'contact']),
     field('team', 'Team', 'users', ['team', 'team members', 'members']),
-    field('keyContact', 'Key contact', 'text', ['key contact', 'contact', 'primary contact', 'main contact', 'client contact', 'contact name', 'contact person', 'billing contact'], { person: 'name' }),
+    field('keyContact', 'Key contact', 'text', ['key contact', 'primary contact', 'main contact', 'client contact', 'contact name', 'contact person', 'billing contact'], { person: 'name', bare: 'contact' }),
     field('email', 'Email', 'text', ['email', 'email address', 'contact email', 'key contact email', 'billing email'], { person: 'email' }),
     field('phone', 'Phone', 'text', ['phone', 'phone number', 'telephone', 'tel', 'mobile number', 'mobile phone', 'contact phone', 'contact number', 'key contact phone'], { person: 'phone' }),
     field('platformUrl', 'Platform', 'text', ['platform', 'platform url', 'platform link', 'platform address', 'site']),
@@ -121,14 +123,21 @@ export function autoMap(headers, kind, board) {
     if (s > 0) pairs.push({ key: f.key, fi, hi, s });
   }));
   pairs.sort((a, b) => b.s - a.s || a.fi - b.fi || a.hi - b.hi);
-  const mapping = Object.fromEntries(fields.map((f) => [f.key, -1]));
-  const used = new Set();
-  pairs.forEach(({ key, hi }) => {
-    if (mapping[key] !== -1 || used.has(hi)) return;
-    mapping[key] = hi;
-    used.add(hi);
-  });
-  return mapping;
+  const pick = (preset) => {
+    const mapping = { ...Object.fromEntries(fields.map((f) => [f.key, -1])), ...preset };
+    const used = new Set(Object.values(preset));
+    pairs.forEach(({ key, hi }) => {
+      if (mapping[key] !== -1 || used.has(hi)) return;
+      mapping[key] = hi;
+      used.add(hi);
+    });
+    return mapping;
+  };
+  const mapping = pick({});
+  // A field still unmatched takes its bare header (clients' "Contact"), and the rest are matched again around it.
+  const bare = fields.find((f) => f.bare && mapping[f.key] === -1);
+  const hi = bare ? (headers || []).findIndex((h) => words(h) === bare.bare) : -1;
+  return hi >= 0 ? pick({ [bare.key]: hi }) : mapping;
 }
 
 // ── Value parsing ────────────────────────────────────────────────────────────

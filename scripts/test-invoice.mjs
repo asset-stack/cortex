@@ -496,5 +496,54 @@ await check('winAnsi: every character it returns is drawable in Helvetica', asyn
   assert.deepEqual(bad, []);
 });
 
+// Pages that draw the table's column headings with no row under them.
+const emptyTables = (pages, isRow) => pages.map((p, i) => (p.includes('Description') && !p.some(isRow) ? i + 1 : 0)).filter(Boolean);
+
+await check('invoicePdf: a first line taller than the room left on page 1 starts there, not under an empty table', async () => {
+  const isRow = (t) => /^Scope item \d+$/.test(t);
+  for (let n = 30; n <= 60; n++) {
+    const desc = Array.from({ length: n }, (_, i) => `Scope item ${i + 1}`).join('\n');
+    const pages = await pageTexts(await invoicePdf({ client: client(), invoice: invoice({ lines: [{ id: 'a', desc, qty: 1, rate: 5000 }] }), org: ORG }));
+    assert.deepEqual(emptyTables(pages, isRow), [], `${n} description lines: pages with headings and no row`);
+    assert.deepEqual(pages.flat().filter(isRow), desc.split('\n'), `${n} description lines: each drawn once, in order`);
+    assert.equal(pages.flat().filter((t) => t === '$5,500.00').length, 2, `${n} description lines: the amount once (and the total)`);
+    assert.ok(pages.at(-1).includes('Total (inc GST)') && pages.at(-1).includes('PAYMENT'), `${n} description lines: totals on the last page`);
+    assert.ok(pages.length <= 2, `${n} description lines: ${pages.length} pages`);
+  }
+});
+
+await check('invoicePdf: a long bill-to block never leaves page 1 with an empty table', async () => {
+  const isRow = (t) => ['One', 'Two', 'Three', 'Four'].includes(t);
+  for (let k = 28; k <= 42; k++) {
+    for (const name of ['Client One', 'Client One\nTrading as Example']) {
+      const billingAddress = Array.from({ length: k }, (_, i) => `Address line ${i + 1}`).join('\n');
+      const inv = invoice({ lines: [{ id: 'a', desc: 'One\nTwo\nThree', qty: 1, rate: 5 }, { id: 'b', desc: 'Four', qty: 1, rate: 5 }] });
+      const pages = await pageTexts(await invoicePdf({ client: client({ name, billingAddress }), invoice: inv, org: ORG }));
+      const label = `${k} address lines, ${name.split('\n').length} name line(s)`;
+      assert.deepEqual(emptyTables(pages, isRow), [], `${label}: pages with headings and no row`);
+      assert.deepEqual(pages.flat().filter(isRow), ['One', 'Two', 'Three', 'Four'], `${label}: every line once, in order`);
+      assert.ok(pages.at(-1).includes('Total (inc GST)') && pages.at(-1).includes('PAYMENT'), `${label}: totals on the last page`);
+    }
+  }
+});
+
+// A tab opened before a deploy can't load the PDF chunk (Pages has a new name for it): that says "reload", and only a
+// real pdf-lib failure says "Could not make the PDF".
+await check('makeInvoicePdf / sendInvoiceEmail: a chunk that will not load asks for a reload; nothing is sent', async () => {
+  const { makeInvoicePdf, RELOAD_ERROR } = await import('../src/integrations/google.js');
+  const stale = async () => { throw new TypeError('Failed to fetch dynamically imported module: /assets/invoicePdf-OLD.js'); };
+  assert.deepEqual(await makeInvoicePdf({ client: client(), invoice: invoice(), org: ORG }, stale), { ok: false, error: RELOAD_ERROR });
+  assert.match(RELOAD_ERROR, /reload/i);
+  const invoke = fakeInvoke({ ok: true, id: 'msg-1' });
+  const res = await sendInvoiceEmail(invoke, { client: client(), invoice: invoice(), org: ORG, to: 'pat@example.com', subject: 's', text: 't' }, stale);
+  assert.deepEqual(res, { ok: false, error: RELOAD_ERROR });
+  assert.equal(invoke.calls.length, 0, 'nothing is sent');
+  const broken = async () => ({ invoicePdf: async () => { throw new Error('pdf-lib failed'); } });
+  assert.deepEqual(await makeInvoicePdf({ client: client(), invoice: invoice(), org: ORG }, broken), { ok: false, error: 'Could not make the PDF.' });
+  const ok = await makeInvoicePdf({ client: client(), invoice: invoice(), org: ORG });
+  assert.equal(ok.ok, true);
+  assert.equal(Buffer.from(ok.bytes).subarray(0, 5).toString('latin1'), '%PDF-');
+});
+
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);

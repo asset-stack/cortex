@@ -81,8 +81,10 @@ export default function SendInvoice({ c, inv, onClose }) {
     return res.ok ? '' : res.error || 'Couldn’t send the invoice.';
   });
 
+  // No closing (X, backdrop, Escape) mid-request: the result would be lost, and the invoice, still Approved, would
+  // offer Send again and email the client twice.
   return (
-    <Modal open onClose={onClose} title={title} width={520}>
+    <Modal open onClose={onClose} closable={!busy} title={title} width={520}>
       {/* Not a <form>: Enter in To or Subject must never approve or send. */}
       <div className={MODAL_FORM}>
         <div className="flex min-w-0 flex-col gap-1.5">

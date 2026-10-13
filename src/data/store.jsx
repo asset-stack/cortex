@@ -1297,11 +1297,12 @@ function createLiveEngine({ me, onState, onPhase, onSync }) {
     if (out === false) return false; // refused: nothing changes
     const next = flatten(d);
     // Renumbering rows of a module this user only views would be refused and retried forever: keep the database's
-    // positions instead (the order on screen is the same).
+    // positions instead (the order on screen is the same). Contracts are written by admins only, whatever the module.
     const ops = diff(rows, next).filter((o) => {
       const before = o.op === 'upsert' && rows[o.table].get(o.key);
       const module = before && moduleOf(o.table, o.row, next);
-      if (!module || canEdit(d, module) || !onlyPosition(before, o.row)) return true;
+      const may = o.table === 'client_contracts' ? isAdmin(d) : canEdit(d, module);
+      if (!module || may || !onlyPosition(before, o.row)) return true;
       next[o.table].set(o.key, before);
       return false;
     });

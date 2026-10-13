@@ -194,7 +194,7 @@ export async function invoicePdf({ client, invoice, org } = {}) {
   }));
 
   // What goes on each page: a row that doesn't fit moves to the next page under a repeated header, and one taller
-  // than a whole page is split across pages.
+  // than a whole page, or one that would leave the first page's table without a row, is split across pages.
   const layout = [{ table: { top: y, rows: [] } }];
   let at = y - headH;
   const nextPage = () => {
@@ -219,9 +219,11 @@ export async function invoicePdf({ client, invoice, org } = {}) {
         return;
       }
       const fit = Math.floor((at - BOTTOM - 2 * PAD[1]) / T.cell.lead);
-      if (h > room && fit >= 2) {
+      if ((h > room || !list.length) && fit >= 2) {
         list.push({ cols: rest.map((c) => c.slice(0, fit)), h: rowH(fit), cont: rest !== row });
         rest = rest.map((c) => c.slice(fit));
+      } else if (!list.length) {
+        layout.at(-1).table = null; // no column headings without a row under them
       }
       nextPage();
     }

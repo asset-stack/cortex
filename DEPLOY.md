@@ -376,4 +376,5 @@ revoke it at Google too: <https://myaccount.google.com/connections>. When someon
 | Connect Google comes back with "Connect the Google account for your own Cortex email" | You picked a different Google account. Each admin connects their own. |
 | "Reconnect your Google account in Settings" | Google withdrew Cortex's access (password change, revoked, or the scopes changed). **Connect Google** again. |
 | Create contract: "Template or folder not found" | The template or folder isn't shared with your Google account, or a link is wrong (section 11.4–5). |
-| Sending or creating a contract fails with a 401 / function error | The function isn't deployed as `google`, JWT verification is still on, or the Google secrets are missing (section 11.2–3). |
+| Connect Google: after allowing access, a `supabase.co` page shows a 401 "Missing authorization header" | **Enforce JWT verification** is still on for the `google` function. Turn it off (section 11.3), then **Connect Google** again. |
+| Connect Google, sending or creating a contract fails with a function error or "Google isn’t set up yet" | The function isn't deployed as `google`, or the Google secrets are missing (section 11.2–3). |

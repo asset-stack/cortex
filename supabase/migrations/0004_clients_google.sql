@@ -84,40 +84,49 @@ begin
   end loop;
 end $$;
 
--- 4. Policies: part of the clients module (view to read, edit to write), as 0002 §8 ------------------------------
+-- 4. Policies: part of the clients module (view to read, edit to write), as 0002 §8. Contracts are written by admins
+-- only (as in the app: an admin makes them with their own Google account), like routines in 0002. -----------------
 
 do $$
 declare
   t text;
+  w text;
   p record;
 begin
   foreach t in array array['client_contacts', 'client_contracts'] loop
     for p in select policyname from pg_policies where schemaname = 'public' and tablename = t loop
       execute format('drop policy %I on public.%I', p.policyname, t);
     end loop;
+    w := case t when 'client_contracts' then 'public.is_admin()' else format('public.can_edit(%L)', 'clients') end;
     execute format('create policy module_select on public.%I for select to authenticated
       using (public.can_view(%L))', t, 'clients');
     execute format('create policy module_insert on public.%I for insert to authenticated
-      with check (public.can_edit(%L))', t, 'clients');
+      with check (%s)', t, w);
     execute format('create policy module_update on public.%I for update to authenticated
-      using (public.can_edit(%L)) with check (public.can_edit(%L))', t, 'clients', 'clients');
+      using (%s) with check (%s)', t, w, w);
     execute format('create policy module_delete on public.%I for delete to authenticated
-      using (public.can_edit(%L))', t, 'clients');
+      using (%s)', t, w);
   end loop;
 end $$;
 
--- 5. Each client's key contact / email becomes its first, billing contact (only for clients with no contacts yet,
--- so re-running picks up anything an old browser tab wrote meanwhile without duplicating). ------------------------
+-- 5. Each client's key contact / email becomes its first, billing contact; on a client that already has contacts
+-- (re-running after an old browser tab wrote one meanwhile) it's added after them, not billing. A contact the client
+-- already has (same email, or same name when there's no email) is never added twice. ------------------------------
 
 insert into public.client_contacts (client_id, position, name, email, billing)
-select c.id, 0, btrim(c.key_contact), lower(btrim(c.email)), true
+select c.id, coalesce((select max(x.position) + 1 from public.client_contacts x where x.client_id = c.id), 0),
+       btrim(c.key_contact), lower(btrim(c.email)),
+       not exists (select 1 from public.client_contacts x where x.client_id = c.id)
 from public.clients c
 where (btrim(c.key_contact) <> '' or btrim(c.email) <> '')
-  and not exists (select 1 from public.client_contacts x where x.client_id = c.id);
+  and not exists (select 1 from public.client_contacts x where x.client_id = c.id
+                  and case when btrim(c.email) <> '' then lower(btrim(x.email)) = lower(btrim(c.email))
+                           else lower(btrim(x.name)) = lower(btrim(c.key_contact)) end);
 
 update public.clients set key_contact = '', email = '' where key_contact <> '' or email <> '';
 
--- 6. ensure_todos: as 0002, plus an "Approve invoices" to-do for admins while any invoice awaits approval. ---------
+-- 6. ensure_todos: as 0002, plus an "Approve invoices" to-do for admins while any invoice awaits approval (one at a
+-- time: while an earlier day's is still undone it carries over, and no new one is added). -------------------------
 
 create or replace function public.ensure_todos(p_day date) returns int
 language plpgsql security definer set search_path = public as $$
@@ -156,7 +165,9 @@ begin
     v_added := v_added + v_n;
   end if;
 
-  if public.is_admin() and exists (select 1 from public.invoices where status = 'Awaiting approval') then
+  if public.is_admin() and exists (select 1 from public.invoices where status = 'Awaiting approval')
+     and not exists (select 1 from public.todos where assignee_id = v_me and source = 'automation'
+                     and ref like 'approve:%' and not done) then
     insert into public.todos (assignee_id, title, category, day, source, ref, position)
     values (v_me, 'Approve invoices', 'Clients', p_day, 'automation',
             'approve:' || to_char(p_day, 'YYYY-MM-DD'), public.next_todo_position(v_me, p_day))

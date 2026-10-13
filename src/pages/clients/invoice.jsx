@@ -10,6 +10,7 @@ import { LabelPicker } from '@/components/ui';
 import { fullDate, invoiceTotals, isBadAmount, money2, paidTowards } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { taxInvoiceModel } from '@/lib/taxInvoice';
+import { makeInvoicePdf } from '@/integrations/google';
 import { ADMIN_STATUSES, UNISSUED, hasBadAmounts } from './shared';
 import SendInvoice from './SendInvoice';
 
@@ -169,22 +170,22 @@ export function InvoiceActions({ c, inv, onSend }) {
 /** Admins: the PDF that is emailed (src/lib/invoicePdf.js, loaded on demand), saved to this computer. */
 export function DownloadButton({ c, inv, org }) {
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState('');
   const bad = hasBadAmounts(inv);
   const download = async () => {
     setBusy(true);
-    setFailed(false);
+    setFailed('');
     try {
-      const { invoicePdf } = await import('@/lib/invoicePdf');
-      const bytes = await invoicePdf({ client: c, invoice: inv, org });
-      const href = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      const pdf = await makeInvoicePdf({ client: c, invoice: inv, org });
+      if (!pdf.ok) { setFailed(pdf.error); return; }
+      const href = URL.createObjectURL(new Blob([pdf.bytes], { type: 'application/pdf' }));
       const a = Object.assign(document.createElement('a'), { href, download: taxInvoiceModel({ client: c, invoice: inv, org }).filename });
       document.body.append(a);
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(href), 60_000);
     } catch {
-      setFailed(true);
+      setFailed('Couldn’t make the PDF');
     } finally {
       setBusy(false);
     }
@@ -194,7 +195,7 @@ export function DownloadButton({ c, inv, org }) {
       <button type="button" onClick={download} disabled={busy || bad} title={bad ? 'Fix the highlighted amounts first' : undefined} className={cn(ACTION, 'chip')}>
         <Download className="h-3.5 w-3.5" aria-hidden="true" />Download PDF
       </button>
-      {failed && <span role="status" className="text-[12px] text-rose-200">Couldn’t make the PDF</span>}
+      {failed && <span role="status" className="text-[12px] text-rose-200">{failed}</span>}
     </>
   );
 }

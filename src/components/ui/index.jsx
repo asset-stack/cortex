@@ -296,8 +296,13 @@ export function KpiRow({ items }) {
 
 // Dialog focus: remember the trigger, make the page behind (#root) inert, focus the panel unless a
 // child autoFocused, and give focus back to the trigger when the dialog closes. #root rather than a
-// Tab trap, so popovers portalled next to the panel stay reachable.
-let openDialogs = 0;
+// Tab trap, so popovers portalled next to the panel stay reachable. Open dialog shells stack (oldest
+// first): every one under the top is inert too, so Tab can't leave a Modal opened over a Drawer.
+const shells = [];
+function syncInert() {
+  document.getElementById('root')?.toggleAttribute('inert', shells.length > 0);
+  shells.forEach((el, i) => el?.toggleAttribute('inert', i < shells.length - 1));
+}
 // Escape closes only the topmost Drawer / Modal (a Modal opened over a Drawer closes alone). Popovers handle Escape
 // first (capture phase + preventDefault), so an open popover closes before any dialog under it.
 const layers = [];
@@ -329,12 +334,15 @@ function useDialogFocus(open, panelRef) {
   useEffect(() => {
     if (!open) return;
     const prev = returnTo.current;
-    const root = document.getElementById('root');
-    if (root && openDialogs++ === 0) root.setAttribute('inert', '');
     const panel = panelRef.current;
+    const shell = panel?.parentElement || null;
+    shells.push(shell);
+    syncInert();
     if (panel && !panel.contains(document.activeElement)) panel.focus({ preventScroll: true });
     return () => {
-      if (root && --openDialogs === 0) root.removeAttribute('inert');
+      // Un-inert the dialog underneath before handing focus back into it.
+      shells.splice(shells.lastIndexOf(shell), 1);
+      syncInert();
       // Only when focus went away with the dialog (not on StrictMode's effect re-run).
       const lost = !document.activeElement || document.activeElement === document.body;
       if (lost && prev?.isConnected && typeof prev.focus === 'function') prev.focus({ preventScroll: true });
@@ -364,18 +372,21 @@ export function Drawer({ open, onClose, title, children, width = 520 }) {
   );
 }
 
-export function Modal({ open, onClose, title, children, width = 440 }) {
+/** `closable={false}` while something is in flight: Escape, the backdrop and X do nothing (X shows disabled). */
+export function Modal({ open, onClose, title, children, width = 440, closable = true }) {
   const panel = useRef(null);
+  const close = closable ? onClose : () => {};
   useDialogFocus(open, panel);
-  useEscapeLayer(open, onClose);
+  useEscapeLayer(open, close);
   if (!open) return null;
   return createPortal(
     <div role="dialog" aria-modal="true" aria-label={title} className="fixed inset-0 z-[70] grid place-items-center p-4">
-      <div className="absolute inset-0 bg-black/40" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/40" aria-hidden="true" onClick={close} />
       <div ref={panel} tabIndex={-1} className="glass-dark relative rounded-[26px] p-6" style={{ width: `min(${width}px, 100%)` }}>
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-[18px] font-extrabold">{title}</h2>
-          <button type="button" onClick={onClose} aria-label="Close" className="grid h-8 w-8 place-items-center rounded-full chip"><X className="h-4 w-4" /></button>
+          <button type="button" onClick={close} disabled={!closable} aria-label="Close"
+            className="grid h-8 w-8 place-items-center rounded-full chip disabled:cursor-not-allowed disabled:opacity-50"><X className="h-4 w-4" /></button>
         </div>
         <div className="mt-4">{children}</div>
       </div>

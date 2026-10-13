@@ -87,7 +87,8 @@ function ImportForm({ clientId, onClose, onImported }) {
         </Labelled>
       )}
       <Labelled label="CSV file">
-        <input type="file" accept=".csv,text/csv" className={FILE_INPUT} onChange={onFile} />
+        {/* Cleared as the picker opens, so picking the same (edited) file again still fires change; the chosen name stays shown. */}
+        <input type="file" accept=".csv,text/csv" className={FILE_INPUT} onClick={(e) => { e.currentTarget.value = ''; }} onChange={onFile} />
       </Labelled>
       {error && <div role="alert" className="text-[12.5px] text-rose-200">{error}</div>}
 
