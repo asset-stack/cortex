@@ -1,8 +1,8 @@
 // One invoice: the editor card (a client's drawer, the Invoices tab's drawer), the printed tax invoice, and the
-// admin actions (Approve, Mark as sent, Print / PDF).
+// admin actions (Approve, Send / Resend by email, Mark as sent, Print / PDF, Download PDF).
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { BadgeCheck, Plus, Printer, Send, Trash2 } from 'lucide-react';
+import { BadgeCheck, Download, MailCheck, Plus, Printer, Send, Trash2 } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { INVOICE_STATUS } from '@/data/boards';
 import { useAccess } from '@/lib/access';
@@ -11,6 +11,7 @@ import { fullDate, invoiceTotals, isBadAmount, money2, paidTowards } from '@/lib
 import { cn } from '@/lib/cn';
 import { taxInvoiceModel } from '@/lib/taxInvoice';
 import { ADMIN_STATUSES, UNISSUED, hasBadAmounts } from './shared';
+import SendInvoice from './SendInvoice';
 
 const str = (v) => String(v ?? '').trim();
 
@@ -109,33 +110,93 @@ export function PrintSheet({ c, inv, onDone }) {
 
 const ACTION = 'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12.5px] font-semibold disabled:cursor-not-allowed disabled:opacity-50';
 
-/** Admins: Approve (Draft / Awaiting approval) or Mark as sent (Approved). Nothing for anyone else. */
-export function InvoiceActions({ c, inv }) {
-  const { actions } = useStore();
+/** Admins: Approve (Draft / Awaiting approval), Send and Mark as sent (Approved), Resend (Sent). With your Google
+ *  account connected (Settings → Business), Approve, Send and Resend open the email (SendInvoice); without it Approve
+ *  just approves, and the PDF goes out by hand. `onSend` opens that dialog from the page instead (the Invoices list,
+ *  where an approved row moves panels or leaves the filter). Nothing for anyone else. */
+export function InvoiceActions({ c, inv, onSend }) {
+  const { actions, google } = useStore();
   const { isAdmin } = useAccess();
   const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(false);
   if (!isAdmin) return null;
+  const bad = hasBadAmounts(inv);
+  const badTitle = bad ? 'Fix the highlighted amounts first' : undefined;
+  const openSend = () => (onSend ? onSend() : setSending(true));
+  let buttons = null;
   if (UNISSUED.includes(inv.status)) {
-    const bad = hasBadAmounts(inv);
     const approve = async () => {
+      if (google.connected) { openSend(); return; }
       setBusy(true);
       try { await actions.approveInvoice(c.id, inv.id); } finally { setBusy(false); }
     };
-    return (
-      <button type="button" onClick={approve} disabled={busy || bad} title={bad ? 'Fix the highlighted amounts first' : undefined}
+    // Waits for the Google check, so Approve doesn't skip the email just after the page loads.
+    buttons = (
+      <button type="button" onClick={approve} disabled={busy || bad || !google.ready} title={badTitle}
         aria-label={`Approve ${inv.number}`} className={cn(ACTION, 'btn-primary')}>
         <BadgeCheck className="h-3.5 w-3.5" aria-hidden="true" />Approve
       </button>
     );
-  }
-  if (inv.status === 'Approved') {
-    return (
-      <button type="button" onClick={() => actions.markInvoiceSent(c.id, inv.id)} aria-label={`Mark ${inv.number} as sent`} className={cn(ACTION, 'chip')}>
-        <Send className="h-3.5 w-3.5" aria-hidden="true" />Mark as sent
+  } else if (inv.status === 'Approved') {
+    buttons = (
+      <>
+        {google.connected && (
+          <button type="button" onClick={openSend} disabled={bad} title={badTitle} aria-label={`Send ${inv.number}`} className={cn(ACTION, 'btn-primary')}>
+            <Send className="h-3.5 w-3.5" aria-hidden="true" />Send
+          </button>
+        )}
+        <button type="button" onClick={() => actions.markInvoiceSent(c.id, inv.id)} aria-label={`Mark ${inv.number} as sent`} className={cn(ACTION, 'chip')}>
+          <MailCheck className="h-3.5 w-3.5" aria-hidden="true" />Mark as sent
+        </button>
+      </>
+    );
+  } else if (inv.status === 'Sent' && google.connected) {
+    buttons = (
+      <button type="button" onClick={openSend} disabled={bad} title={badTitle} aria-label={`Resend ${inv.number}`} className={cn(ACTION, 'chip')}>
+        <Send className="h-3.5 w-3.5" aria-hidden="true" />Resend
       </button>
     );
   }
-  return null;
+  // The dialog sits outside the status branches, so approving (or a failed send) doesn't close it.
+  return (
+    <>
+      {buttons}
+      {sending && <SendInvoice c={c} inv={inv} onClose={() => setSending(false)} />}
+    </>
+  );
+}
+
+/** Admins: the PDF that is emailed (src/lib/invoicePdf.js, loaded on demand), saved to this computer. */
+export function DownloadButton({ c, inv, org }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const bad = hasBadAmounts(inv);
+  const download = async () => {
+    setBusy(true);
+    setFailed(false);
+    try {
+      const { invoicePdf } = await import('@/lib/invoicePdf');
+      const bytes = await invoicePdf({ client: c, invoice: inv, org });
+      const href = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      const a = Object.assign(document.createElement('a'), { href, download: taxInvoiceModel({ client: c, invoice: inv, org }).filename });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 60_000);
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button type="button" onClick={download} disabled={busy || bad} title={bad ? 'Fix the highlighted amounts first' : undefined} className={cn(ACTION, 'chip')}>
+        <Download className="h-3.5 w-3.5" aria-hidden="true" />Download PDF
+      </button>
+      {failed && <span role="status" className="text-[12px] text-rose-200">Couldn’t make the PDF</span>}
+    </>
+  );
 }
 
 export function PrintButton({ inv, onPrint, iconOnly = false }) {
@@ -179,6 +240,9 @@ export function InvoiceEditor({ c, inv }) {
               allowEmpty={false} readOnly={statusLocked} onChange={(v) => actions.updateInvoice(c.id, inv.id, { status: v })} />
           </div>
         </div>
+        {inv.sentTo && (
+          <div className="mt-1.5 break-words text-[12px] dim">Sent to {inv.sentTo}{inv.sentAt ? ` · ${fullDate(inv.sentAt)}` : ''}</div>
+        )}
         <div className="mt-3 flex flex-col gap-2">
           {inv.lines.map((l) => (
             <div key={l.id} className={cn('grid items-center gap-2', editable ? 'grid-cols-[1fr_56px_96px_28px]' : 'grid-cols-[1fr_56px_96px]')}>
@@ -211,6 +275,7 @@ export function InvoiceEditor({ c, inv }) {
           <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
             <InvoiceActions c={c} inv={inv} />
             <PrintButton inv={inv} onPrint={printThis} />
+            <DownloadButton c={c} inv={inv} org={org} />
             {!str(org.abn) && (
               <a href="#/settings?tab=business" className="text-[12px] text-amber-200 underline underline-offset-2 hover:text-white">Add your ABN in Settings to issue tax invoices</a>
             )}

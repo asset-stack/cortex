@@ -12,10 +12,12 @@ const KINDS = [{ id: 'clients', label: 'Clients' }, { id: 'contacts', label: 'Co
 const OPEN_ROUTE = { clients: 'clients', contacts: 'outreach', deals: 'pipeline' };
 const NEW_GROUP = '__new';
 
-// A preview cell: tasks keep board fields under `values`; the note is the first note / update.
+// A preview cell: tasks keep board fields under `values`; a client's key contact, email and phone are its first
+// contact; the note is the first note / update.
 function cellText(kind, rec, f, users) {
   const v = f.key === 'notes' ? (rec.notes || rec.updates)?.[0]?.text
-    : kind === 'tasks' && f.key !== 'name' ? rec.values[f.key] : rec[f.key];
+    : f.person ? rec.contacts?.[0]?.[f.person]
+      : kind === 'tasks' && f.key !== 'name' ? rec.values[f.key] : rec[f.key];
   if (f.type === 'user') return users[v]?.name || '';
   if (f.type === 'users') return (v || []).map((id) => users[id]?.name).filter(Boolean).join(', ');
   if (f.type === 'date' || f.type === 'ts') return v ? shortDate(v) : '';

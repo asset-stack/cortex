@@ -18,7 +18,7 @@ export function billingContacts(client) {
 /** Everything the tax invoice shows, as display strings. */
 export function taxInvoiceModel({ client, invoice, org = {} }) {
   const c = client || {};
-  const inv = invoice || { lines: [] };
+  const inv = { lines: [], ...invoice };
   const t = invoiceTotals(inv);
   const abn = str(org.abn);
   const kind = abn ? 'Tax invoice' : 'Invoice'; // without the supplier's ABN it isn't a valid tax invoice
@@ -58,7 +58,9 @@ export function taxInvoiceModel({ client, invoice, org = {} }) {
       ['Terms', days === 0 ? 'Due on receipt' : `Due in ${days} ${days === 1 ? 'day' : 'days'}`],
     ],
     total: money2(t.total),
-    filename: `${`${number} ${str(c.name)}`.trim().replace(/[^\w.\- ]+/g, '').replace(/\s+/g, ' ').trim() || 'invoice'}.pdf`,
+    // "INV-1002 Māori Trust.pdf" → "INV-1002 Maori Trust.pdf": accents dropped, other symbols become spaces.
+    filename: `${`${number} ${str(c.name)}`.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w.\- ]+/g, ' ')
+      .replace(/\s+/g, ' ').trim() || 'invoice'}.pdf`,
   };
 }
 

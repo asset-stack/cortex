@@ -298,6 +298,29 @@ export function KpiRow({ items }) {
 // child autoFocused, and give focus back to the trigger when the dialog closes. #root rather than a
 // Tab trap, so popovers portalled next to the panel stay reachable.
 let openDialogs = 0;
+// Escape closes only the topmost Drawer / Modal (a Modal opened over a Drawer closes alone). Popovers handle Escape
+// first (capture phase + preventDefault), so an open popover closes before any dialog under it.
+const layers = [];
+function onLayerKey(e) {
+  if (e.key !== 'Escape' || e.defaultPrevented || !layers.length) return;
+  e.preventDefault();
+  layers[layers.length - 1].current();
+}
+function useEscapeLayer(open, onClose) {
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    if (!open) return undefined;
+    layers.push(close);
+    if (layers.length === 1) document.addEventListener('keydown', onLayerKey);
+    return () => {
+      const i = layers.indexOf(close);
+      if (i >= 0) layers.splice(i, 1);
+      if (!layers.length) document.removeEventListener('keydown', onLayerKey);
+    };
+  }, [open]);
+}
+
 function useDialogFocus(open, panelRef) {
   const returnTo = useRef(null);
   // Captured during render: a child's autoFocus runs before this component's effects.
@@ -322,12 +345,7 @@ function useDialogFocus(open, panelRef) {
 export function Drawer({ open, onClose, title, children, width = 520 }) {
   const panel = useRef(null);
   useDialogFocus(open, panel);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  useEscapeLayer(open, onClose);
   if (!open) return null;
   return createPortal(
     <div role="dialog" aria-modal="true" aria-label={title} className="drawer-shell fixed inset-0 z-[60]">
@@ -349,12 +367,7 @@ export function Drawer({ open, onClose, title, children, width = 520 }) {
 export function Modal({ open, onClose, title, children, width = 440 }) {
   const panel = useRef(null);
   useDialogFocus(open, panel);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  useEscapeLayer(open, onClose);
   if (!open) return null;
   return createPortal(
     <div role="dialog" aria-modal="true" aria-label={title} className="fixed inset-0 z-[70] grid place-items-center p-4">

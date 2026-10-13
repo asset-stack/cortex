@@ -7,6 +7,18 @@ import { addMonths } from '@/lib/automations';
 import { invoiceTotals, isBadAmount, monthLabel, owingOn, parseAmount } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
+/** A free-text link (demo, platform, a pasted Doc) as an http(s) URL to link to: https:// is added when there is no
+ *  scheme; anything else is null. */
+export function safeUrl(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s.replace(/^\/+/, '')}`;
+  try {
+    const u = new URL(withScheme);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
+  } catch { return null; }
+}
+
 // Not issued yet (no date that counts, nothing owed); issued and waiting to be paid; and the statuses only admins set.
 export const UNISSUED = ['Draft', 'Awaiting approval'];
 export const OPEN = ['Approved', 'Sent', 'Overdue'];

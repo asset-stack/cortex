@@ -7,7 +7,7 @@ import { billingContacts } from './taxInvoice.js';
 const str = (v) => String(v ?? '').trim();
 
 export const CONTRACT_STATUS = {
-  Draft: '#c4c4c4', 'Sent for signature': '#fdab3d', Signed: '#00c875', Cancelled: '#9aa3b5',
+  Draft: '#7e8799', 'Sent for signature': '#fdab3d', Signed: '#00c875', Cancelled: '#9aa3b5',
 };
 
 // What the template's Key Details usually say (the 72 CTS example): the admin changes any of them per client.
@@ -21,8 +21,13 @@ export const CONTRACT_DEFAULTS = {
   governingLaw: 'New South Wales',
 };
 
-/** End of a term: the day before the same date `months` later (1 Nov 2026 → 31 Oct 2027). '' without a start. */
-export const termEnd = (start, months = 12) => (/^\d{4}-\d{2}-\d{2}$/.test(str(start)) ? addDays(addMonths(start, months), -1) : '');
+/** End of a term: the day before the same date `months` later (1 Nov 2026 → 31 Oct 2027). When that month has no
+ *  such day the term ends on its last day (31 Jan + 1 month → 28 Feb). '' without a start. */
+export function termEnd(start, months = 12) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(str(start))) return '';
+  const same = addMonths(start, months); // clamped to the month's last day when it is shorter
+  return Number(same.slice(8)) < Number(start.slice(8)) ? same : addDays(same, -1);
+}
 
 /** A new contract's Key Details for `client`: the defaults, its annual fee from active plans, starting on the 1st of
  *  next month (Sydney) for 12 months. */

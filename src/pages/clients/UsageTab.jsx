@@ -1,7 +1,8 @@
-// Usage: each client's platform usage for a month (everyone who can see Clients; editable with edit access), and for
-// admins our own software subscriptions with their monthly total (annual plans ÷ 12).
+// Usage: each client's platform usage for a month (everyone who can see Clients; editable with edit access, which also
+// imports a client's platform export), and for admins our own software subscriptions with their monthly total (annual
+// plans ÷ 12).
 import { useState } from 'react';
-import { CreditCard, Plus, Trash2 } from 'lucide-react';
+import { CreditCard, Plus, Trash2, Upload } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { EXPENSE_CATEGORIES, SUBSCRIPTION_CYCLES } from '@/data/boards';
 import { useAccess } from '@/lib/access';
@@ -10,8 +11,10 @@ import { addMonths } from '@/lib/automations';
 import { count, localYmd, money2, monthLabel, monthStart, monthlyCost, parseAmount } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { Labelled, MODAL_FORM, MonthNav, NumField, Panel, Switch, moneyField } from './shared';
+import ImportUsage from './ImportUsage';
 
-const FIELDS = [['assets', 'Assets'], ['sites', 'Sites'], ['seats', 'Seats']];
+// [key, label, decimal]: credits come from the platform's export and can be fractional.
+const FIELDS = [['credits', 'Credits', true], ['assets', 'Assets'], ['sites', 'Sites'], ['seats', 'Seats']];
 const rowFor = (c, month) => (c.usage || []).find((u) => u.month === month);
 
 // Up or down on the month before (only when both months were recorded).
@@ -27,6 +30,7 @@ function ClientUsage() {
   const editable = useAccess().canEdit('clients');
   // Opens on the latest month anyone has recorded, else this month.
   const [month, setMonth] = useState(() => state.clients.flatMap((c) => (c.usage || []).map((u) => u.month)).sort().pop() || monthStart(localYmd()));
+  const [importing, setImporting] = useState(false);
   const prev = addMonths(month, -1);
   const rows = state.clients.map((c) => ({ c, u: rowFor(c, month), before: rowFor(c, prev) }));
   const reported = rows.filter((r) => r.u);
@@ -34,15 +38,27 @@ function ClientUsage() {
 
   return (
     <div>
-      <KpiRow items={[
-        { value: `${reported.length}/${state.clients.length}`, label: 'Clients reporting', tint: '#475569' },
-        { value: count(total('assets')), label: 'Assets', tint: '#579bfc' },
-        { value: count(total('sites')), label: 'Sites', tint: '#0f9f8f' },
-        { value: count(total('seats')), label: 'Seats', tint: '#7c3aed' },
-      ]} />
-      <div className="mt-6"><MonthNav month={month} onChange={setMonth} /></div>
+      {/* Five tiles: Credits takes two columns so the rows come out even (2 / 2 / 2 on phones, 2 + 1 / 3 on desktop). */}
+      <div className="lg:[&>div]:grid-cols-3 [&>div>:first-child]:col-span-2">
+        <KpiRow items={[
+          { value: count(total('credits')), label: 'Credits', tint: '#f59e0b' },
+          { value: `${reported.length}/${state.clients.length}`, label: 'Clients reporting', tint: '#475569' },
+          { value: count(total('assets')), label: 'Assets', tint: '#579bfc' },
+          { value: count(total('sites')), label: 'Sites', tint: '#0f9f8f' },
+          { value: count(total('seats')), label: 'Seats', tint: '#7c3aed' },
+        ]} />
+      </div>
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+        <MonthNav month={month} onChange={setMonth} />
+        {editable && (
+          <button type="button" onClick={() => setImporting(true)} className="chip inline-flex h-10 shrink-0 items-center gap-2 rounded-full px-4 font-semibold">
+            <Upload className="h-4 w-4" aria-hidden="true" />Import usage
+          </button>
+        )}
+      </div>
+      {editable && <ImportUsage open={importing} onClose={() => setImporting(false)} onImported={(months) => setMonth(months[0].month)} />}
       <div className="mt-4 overflow-x-auto scroll-thin rounded-[24px] glass glass-rim">
-        <table className="w-full min-w-[640px] text-[13.5px]">
+        <table className="w-full min-w-[760px] text-[13.5px]">
           <thead>
             <tr className="text-left text-[12px] dimmer">
               <th className="p-3 font-medium">Client</th>
@@ -51,14 +67,14 @@ function ClientUsage() {
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && <tr className="border-t rowline"><td colSpan={5} className="p-3 dimmer">No clients.</td></tr>}
+            {rows.length === 0 && <tr className="border-t rowline"><td colSpan={FIELDS.length + 2} className="p-3 dimmer">No clients.</td></tr>}
             {rows.map(({ c, u, before }) => (
               <tr key={c.id} className="border-t rowline align-top">
                 <td className="p-3 font-semibold">{c.name}</td>
-                {FIELDS.map(([k, l]) => (
+                {FIELDS.map(([k, l, decimal]) => (
                   <td key={k} className="p-2 text-right">
                     {editable ? (
-                      <NumField format={count} className="!py-1.5 !px-2.5 text-right" aria-label={`${l}, ${c.name}`} value={u ? u[k] : ''}
+                      <NumField decimal={decimal} format={count} className="!py-1.5 !px-2.5 text-right" aria-label={`${l}, ${c.name}`} value={u ? u[k] : ''}
                         onCommit={(n) => actions.upsertUsage(c.id, month, { [k]: n })} />
                     ) : <div className="px-1 py-1.5 font-semibold tnum">{u ? count(u[k]) : '—'}</div>}
                     <Change now={u?.[k]} before={before?.[k]} />

@@ -1650,5 +1650,119 @@ if (timesheet?.suggestBlocks) {
   });
 }
 
+// ── Usage import and the clients importer ─────────────────────────────────────
+const usage = await import('../src/lib/usageImport.js');
+
+await check('usage import: columns found by header synonyms, any case or spacing; ids and balances never', () => {
+  const { detectColumns } = usage;
+  assert.deepEqual(detectColumns(['Date', 'Credits Used', 'Assets', 'Locations', 'Users']), { month: 0, credits: 1, assets: 2, sites: 3, seats: 4 });
+  assert.deepEqual(detectColumns(['  PERIOD ', 'credit_usage', 'SEATS']), { month: 0, credits: 1, assets: -1, sites: -1, seats: 2 });
+  assert.deepEqual(detectColumns(['timestamp', 'usageCredits', 'Sites']), { month: 0, credits: 1, assets: -1, sites: 2, seats: -1 });
+  assert.deepEqual(detectColumns(['Month', 'Credit']), { month: 0, credits: 1, assets: -1, sites: -1, seats: -1 });
+  assert.deepEqual(detectColumns(['Day', 'credits']), { month: 0, credits: 1, assets: -1, sites: -1, seats: -1 });
+  assert.deepEqual(detectColumns(['Site ID', 'User ID', 'Credits remaining', 'Credit limit', 'Usage date (UTC)', 'Credits']),
+    { month: 4, credits: 5, assets: -1, sites: -1, seats: -1 });
+  assert.deepEqual(detectColumns(['Organisation', 'Notes']), { month: -1, credits: -1, assets: -1, sites: -1, seats: -1 });
+  assert.equal(usage.readUsage('Date,Credits used\n2026-10-01,5').mapping.credits, 1, 'readUsage exports the mapping');
+});
+
+await check('usage import: the month from ISO dates and date-times, AU day-first dates, yyyy-mm, month names, mm/yyyy', () => {
+  const cases = {
+    '2026-10-05': '2026-10-01', '2026-10-31T23:30:00Z': '2026-10-01', '2026-10-05 09:30:00': '2026-10-01', '2026/10/05': '2026-10-01',
+    '5/10/2026': '2026-10-01', '05-10-2026': '2026-10-01', '5.10.26': '2026-10-01', '31/1/2026': '2026-01-01', '1/31/2026': '2026-01-01',
+    '5/10/2026 14:00': '2026-10-01', '2026-10': '2026-10-01', 'Oct 2026': '2026-10-01', 'October 2026': '2026-10-01',
+    'Sept 2026': '2026-09-01', 'Oct-26': '2026-10-01', '10/2026': '2026-10-01', '9-2026': '2026-09-01', '5 Oct 2026': '2026-10-01',
+    'Mon 5 October 2026': '2026-10-01', 'Oct 5, 2026': '2026-10-01',
+    '': '', 'Total': '', '31/02/2026': '', '13/2026': '', '2026-13': '', 'Mayor 2026': '', '2026': '', 'TBC': '', '45567': '',
+  };
+  Object.entries(cases).forEach(([v, want]) => assert.equal(usage.monthOf(v), want, JSON.stringify(v)));
+  assert.equal(usage.monthOf(null), '');
+  assert.deepEqual(['1,234', '$1,234.50', ' 1 234 ', '(5)', '7', '', ' - ', '—', 'n/a', 'abc', '12%'].map(usage.numberOf),
+    [1234, 1234.5, 1234, -5, 7, null, null, null, null, NaN, NaN]);
+});
+
+await check('usage import: credits summed per month, assets / sites / seats the month\'s highest, newest first', () => {
+  const csv = [
+    'Date,Credits used,Assets,Sites,Users',
+    '05/10/2026,"1,200",10,2,5',
+    '2026-10-20,$300.50,14,3,4',
+    '2026-09-30T23:00:00Z,0.1,9,,3',
+    '30/09/2026,0.2,7,1,',
+  ].join('\r\n');
+  const r = usage.parseUsage(csv);
+  assert.deepEqual(r.months, [
+    { month: '2026-10-01', credits: 1500.5, assets: 14, sites: 3, seats: 5 },
+    { month: '2026-09-01', credits: 0.3, assets: 9, sites: 1, seats: 3 },
+  ]);
+  assert.deepEqual([r.rows, r.skipped], [4, []]);
+  // A column mapped by hand (the dialog's override), and one taken away: those figures are left out.
+  const byHand = usage.parseUsage(csv, { mapping: { month: 0, credits: 2, assets: -1, sites: -1, seats: -1 } });
+  assert.deepEqual(byHand.months, [{ month: '2026-10-01', credits: 24 }, { month: '2026-09-01', credits: 16 }]);
+  const noCredits = usage.parseUsage(csv, { mapping: { month: 0, credits: -1, assets: 2, sites: -1, seats: -1 } });
+  assert.deepEqual(noCredits.months, [{ month: '2026-10-01', assets: 14 }, { month: '2026-09-01', assets: 9 }]);
+  assert.deepEqual(usage.parseUsage(csv, { mapping: { month: 0 } }).months, [], 'no figures mapped: nothing to import');
+});
+
+await check('usage import: without a date column every row counts toward the month given', () => {
+  const csv = 'User,Credits,Seats\nana@example.com,5,1\nben@example.com,"1,000",3\n';
+  const r = usage.parseUsage(csv, { month: '2026-09-15' });
+  assert.equal(r.mapping.month, -1);
+  assert.deepEqual(r.months, [{ month: '2026-09-01', credits: 1005, seats: 3 }]);
+  assert.equal(r.rows, 2);
+  assert.deepEqual(usage.parseUsage(csv).months, [], 'no month given: nothing');
+  assert.deepEqual(usage.parseUsage(csv, { month: 'soon' }).months, []);
+});
+
+await check('usage import: skipped rows say why (dates, numbers, totals); title lines and blank lines are passed over', () => {
+  const csv = [
+    'Usage report,,', ',,',
+    'Date,Credits,Seats',
+    '2026-10-01,5,2',
+    'not a date,3,1',
+    ',4,1',
+    '2026-10-02,abc,1',
+    'Total,12,',
+    '',
+    '2026-10-03,-,',
+  ].join('\n');
+  const r = usage.parseUsage(csv);
+  assert.deepEqual(r.headers, ['Date', 'Credits', 'Seats']);
+  assert.deepEqual(r.months, [{ month: '2026-10-01', credits: 5, seats: 2 }]);
+  assert.equal(r.rows, 2);
+  assert.deepEqual(r.skipped, [
+    { row: 5, reason: 'Not a date: not a date' },
+    { row: 6, reason: 'No date' },
+    { row: 7, reason: "Credits isn't a number: abc" },
+    { row: 8, reason: 'Total row' },
+  ]);
+  // Messy input never throws.
+  [null, undefined, '', '﻿', 42, '"unterminated', ',,,\n,,,', 'Date\n'].forEach((t) => {
+    const x = usage.parseUsage(t);
+    assert.ok(Array.isArray(x.months) && Array.isArray(x.skipped), String(t));
+  });
+  assert.deepEqual(usage.usageMonths(null, null), { months: [], rows: 0, skipped: [] });
+  assert.deepEqual(usage.usageMonths([['1', '2'], 'x', null, [undefined, 3]], { month: 0, credits: 1 }).skipped,
+    [{ row: 2, reason: 'Not a date: 1' }, { row: 5, reason: 'No date' }]);
+});
+
+await check('import: clients map the contact, email and phone to a billing contact, and the platform link', async () => {
+  const { autoMap, normalise } = await import('../src/lib/importers.js');
+  const users = [{ id: 'u-ana', name: 'Ana Example', email: 'ana@example.com' }];
+  const headers = ['Client name', 'Contact', 'Email', 'Phone', 'Platform URL', 'Owner'];
+  const map = autoMap(headers, 'clients');
+  assert.deepEqual([map.name, map.keyContact, map.email, map.phone, map.platformUrl, map.contact], [0, 1, 2, 3, 4, 5]);
+  const rec = normalise('clients', ['Example Council', ' Dale  Example ', 'Dale <Dale@Example.com>', '0400 000 000', 'https://example.assetstack.site', 'ana@example.com'], map, { users, me: 'u-me' });
+  assert.deepEqual(rec.contacts, [{ name: 'Dale Example', role: '', email: 'dale@example.com', phone: '0400 000 000', billing: true }]);
+  assert.deepEqual([rec.platformUrl, rec.contact], ['https://example.assetstack.site', 'u-ana']);
+  assert.ok(!('keyContact' in rec) && !('email' in rec), 'no legacy key contact / email fields');
+  // Next to a Key contact column, Contact is the owner (the old export); a phone alone still makes a contact.
+  const both = autoMap(['Name', 'Key contact', 'Contact', 'Site', 'Mobile number'], 'clients');
+  assert.deepEqual([both.keyContact, both.contact, both.platformUrl, both.phone], [1, 2, 3, 4]);
+  assert.deepEqual(normalise('clients', ['Example', '', '', '', '0400 000 001'], both, { users, me: 'u-me' }).contacts,
+    [{ name: '', role: '', email: '', phone: '0400 000 001', billing: true }]);
+  assert.deepEqual(normalise('clients', ['Example', '', 'not an email'], { name: 0, keyContact: 1, email: 2 }).contacts, [], 'nothing usable: no contact');
+  ['Platform', 'platform link', 'Platform address', 'site', 'PlatformUrl'].forEach((h) => assert.equal(autoMap(['Name', h], 'clients').platformUrl, 1, h));
+});
+
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);

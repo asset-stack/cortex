@@ -1,40 +1,44 @@
 // Clients tab: the client board / list with a recent-invoices panel, and the client drawer (Overview, Invoices,
-// Billing, Usage, Access). Everything is read-only at view access.
-import { useMemo, useState } from 'react';
+// Billing, Contract, Usage, Access). Everything is read-only at view access.
+import { useId, useMemo, useState } from 'react';
 import {
-  Clock, ExternalLink, Gauge, Info, KeyRound, Landmark, LayoutGrid, List, NotebookPen, Plus, Receipt, Repeat, Trash2, UserRound,
+  Clock, ExternalLink, FileSignature, Gauge, Info, KeyRound, Landmark, LayoutGrid, List, Mail, NotebookPen, Plus, Receipt, Repeat, Trash2, TriangleAlert,
+  Upload, UserRound,
 } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { CLIENT_GROUPS, CLIENT_STATUSES, PLAN_FREQUENCIES } from '@/data/boards';
 import { useAccess } from '@/lib/access';
 import { PLAN_MONTHS, addMonths, isPlanDate } from '@/lib/automations';
+import { CONTRACT_STATUS } from '@/lib/contract';
+import { billingContacts } from '@/lib/taxInvoice';
 import { Avatar, Drawer, KpiRow, LabelPicker, Modal, PersonPicker, QuickAdd, SearchField, Segmented } from '@/components/ui';
 import { ago, compactMoney, count, fullDate, invoiceTotals, localYmd, money, money2, monthLabel, monthStart, parseAmount, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import ClientContacts from './ClientContacts';
+import ContractTab from './ContractTab';
+import ImportUsage from './ImportUsage';
 import { InvoiceEditor } from './invoice';
-import { Labelled, NumField, STATUS_TEXT, Switch, moneyField, owedTotals } from './shared';
+import { Labelled, NumField, STATUS_TEXT, Switch, moneyField, owedTotals, safeUrl } from './shared';
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: Info },
   { id: 'invoices', label: 'Invoices', icon: Receipt },
   { id: 'billing', label: 'Billing', icon: Repeat },
+  { id: 'contract', label: 'Contract', icon: FileSignature },
   { id: 'usage', label: 'Usage', icon: Gauge },
   { id: 'access', label: 'Access', icon: KeyRound },
 ];
 
-// Demo links are free text: add https:// when there is no scheme, and only ever link http(s).
-function safeDemoUrl(v) {
-  const s = (v || '').trim();
-  if (!s) return null;
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s.replace(/^\/+/, '')}`;
-  try {
-    const u = new URL(withScheme);
-    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
-  } catch { return null; }
-}
+// The person a client's card names: its (first) billing contact, else its first contact.
+const mainContact = (c) => (c.contacts || []).find((x) => x.billing) || (c.contacts || [])[0];
+// What the search box matches: name, sector, and the client's people by name and email.
+const searchText = (c) => [c.name, c.sector, ...(c.contacts || []).flatMap((x) => [x.name, x.email])].join(' ').toLowerCase();
 
 function ClientCard({ c, onOpen }) {
-  const demoHref = safeDemoUrl(c.demoUrl);
+  const demoHref = safeUrl(c.demoUrl);
+  const platformHref = safeUrl(c.platformUrl);
+  const person = mainContact(c);
+  const contract = (c.contracts || [])[0]; // newest first
   return (
     <article className="mt-3 rounded-[26px] glass glass-rim float p-5">
       <div className="flex items-start gap-3.5">
@@ -47,7 +51,9 @@ function ClientCard({ c, onOpen }) {
           {c.next && <p className="dim mt-0.5">{c.next}</p>}
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] dimmer">
             {c.sector && <span className="inline-flex items-center gap-1.5"><Landmark className="h-3.5 w-3.5" />{c.sector}</span>}
-            {c.keyContact && <span className="inline-flex items-center gap-1.5"><UserRound className="h-3.5 w-3.5" />{c.keyContact}</span>}
+            {(person?.name || person?.email) && (
+              <span className="inline-flex min-w-0 max-w-full items-center gap-1.5"><UserRound className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{person.name || person.email}</span></span>
+            )}
             <span className="inline-flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" />{shortDate(c.lastContact)}</span>
           </div>
         </div>
@@ -56,6 +62,14 @@ function ClientCard({ c, onOpen }) {
       <div className="mt-4 flex flex-wrap items-center gap-2 text-[12.5px]">
         {demoHref && (
           <a href={demoHref} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 font-semibold"><ExternalLink className="h-3.5 w-3.5" />Demo</a>
+        )}
+        {platformHref && (
+          <a href={platformHref} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 font-semibold"><ExternalLink className="h-3.5 w-3.5" />Platform</a>
+        )}
+        {contract && (
+          <button type="button" onClick={() => onOpen(c.id, 'contract')} className="inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 font-semibold" aria-label={`Contract: ${contract.status}`}>
+            <FileSignature className="h-3.5 w-3.5" style={{ color: CONTRACT_STATUS[contract.status] }} aria-hidden="true" />{contract.status}
+          </button>
         )}
         <button type="button" onClick={() => onOpen(c.id, 'invoices')} className="inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 font-semibold" aria-label={`${c.invoices.length} invoices`}>
           <Receipt className="h-3.5 w-3.5" />{c.invoices.length}
@@ -70,6 +84,25 @@ function ClientCard({ c, onOpen }) {
         <div className="ml-auto flex -space-x-2">{c.team.map((u) => <Avatar key={u} userId={u} size={26} />)}</div>
       </div>
     </article>
+  );
+}
+
+/** A free-text link (demo, platform) with a button that opens it in a new tab once it is a real http(s) address. */
+function LinkField({ label, value, readOnly, onChange, placeholder }) {
+  const id = useId();
+  const href = safeUrl(value);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={id} className="text-[12px] dimmer">{label}</label>
+      <div className="flex items-center gap-2">
+        <input id={id} className="field" inputMode="url" autoComplete="off" placeholder={readOnly ? undefined : placeholder} value={value || ''}
+          readOnly={readOnly} onChange={onChange} />
+        {href && (
+          <a href={href} target="_blank" rel="noreferrer" aria-label={`Open ${label.toLowerCase()} in a new tab`} title="Open in a new tab"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full chip"><ExternalLink className="h-4 w-4" /></a>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -93,15 +126,18 @@ function Overview({ c, editable }) {
         </div>
       </div>
       <div className="grid gap-3">
-        {[['next', 'Next step'], ['sector', 'Sector'], ['keyContact', 'Key contact'], ['email', 'Email'], ['demo', 'Demo'], ['demoUrl', 'Demo link']].map(([k, l]) => (
+        {[['next', 'Next step'], ['sector', 'Sector'], ['demo', 'Demo']].map(([k, l]) => (
           <label key={k} className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">{l}</span><input className="field" value={c[k] || ''} readOnly={!editable} onChange={upd(k)} /></label>
         ))}
+        <LinkField label="Demo link" value={c.demoUrl} readOnly={!editable} onChange={upd('demoUrl')} />
+        <LinkField label="Platform" placeholder="https://name.assetstack.site" value={c.platformUrl} readOnly={!editable} onChange={upd('platformUrl')} />
         <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Last contact</span><input type="date" className="field" value={c.lastContact || ''} readOnly={!editable} onChange={upd('lastContact')} /></label>
         <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">ABN</span><input className="field" inputMode="numeric" autoComplete="off" value={c.abn || ''} readOnly={!editable} onChange={upd('abn')} /></label>
         <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Billing address</span>
           <textarea className="field resize-none !rounded-[18px]" rows={3} autoComplete="off" value={c.billingAddress || ''} readOnly={!editable} onChange={upd('billingAddress')} />
         </label>
       </div>
+      <ClientContacts c={c} editable={editable} />
       <section>
         <h3 className="font-bold">Tasks</h3>
         <ul className="mt-2 flex flex-col gap-1">
@@ -200,6 +236,22 @@ function PlanRow({ c, p, editable }) {
   );
 }
 
+// Who invoices go to (the same people the invoice email and its Attn: line use).
+function BillTo({ c }) {
+  const people = billingContacts(c);
+  if (!people.length) {
+    return <p className="flex items-center gap-2 text-[13px] text-amber-200"><TriangleAlert className="h-4 w-4 shrink-0" aria-hidden="true" />No billing contact</p>;
+  }
+  return (
+    <p className="flex items-start gap-2 text-[13px]">
+      <Mail className="mt-0.5 h-4 w-4 shrink-0 dimmer" aria-hidden="true" />
+      <span className="min-w-0 [overflow-wrap:anywhere]">
+        <span className="dimmer">Invoices to </span>{people.map((x) => (x.name ? `${x.name} (${x.email})` : x.email)).join(', ')}
+      </span>
+    </p>
+  );
+}
+
 function Billing({ c, editable }) {
   const { actions } = useStore();
   const blank = () => ({ description: '', amount: '', frequency: 'monthly', nextDate: firstOfNextMonth() });
@@ -216,6 +268,7 @@ function Billing({ c, editable }) {
   };
   return (
     <div className="flex flex-col gap-4">
+      <BillTo c={c} />
       {plans.length > 0 && (
         <div className="flex items-baseline justify-between gap-3 rounded-2xl chip px-4 py-3">
           <span className="dim">Per month</span><span className="font-extrabold tnum">{money(monthly)} <span className="text-[12px] font-semibold dimmer">ex GST</span></span>
@@ -250,7 +303,8 @@ function Billing({ c, editable }) {
   );
 }
 
-const USAGE_FIELDS = [['assets', 'Assets'], ['sites', 'Sites'], ['seats', 'Seats']];
+// [key, label, decimal]: credits come from the platform's export and can be fractional.
+const USAGE_FIELDS = [['assets', 'Assets'], ['sites', 'Sites'], ['seats', 'Seats'], ['credits', 'Credits', true]];
 
 // This month back two years, plus next month, without the months the client already has.
 function freeMonths(usage) {
@@ -265,25 +319,36 @@ function Usage({ c, editable }) {
   const months = freeMonths(usage);
   const now = monthStart(localYmd());
   const [month, setMonth] = useState('');
+  const [importing, setImporting] = useState(false);
   const pick = months.includes(month) ? month : months.includes(now) ? now : months[0] || '';
   return (
     <div className="flex flex-col gap-3">
-      {editable && months.length > 0 && (
-        <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (pick) actions.upsertUsage(c.id, pick); }}>
-          <select className="field" aria-label="Month" value={pick} onChange={(e) => setMonth(e.target.value)}>
-            {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
-          </select>
-          <button type="submit" className="btn-primary inline-flex h-10 shrink-0 items-center gap-2 rounded-full px-4 font-semibold"><Plus className="h-4 w-4" />Add month</button>
-        </form>
+      {editable && (
+        <div className="flex flex-wrap items-center gap-2">
+          {months.length > 0 && (
+            <form className="flex min-w-0 grow basis-[260px] gap-2" onSubmit={(e) => { e.preventDefault(); if (pick) actions.upsertUsage(c.id, pick); }}>
+              <select className="field" aria-label="Month" value={pick} onChange={(e) => setMonth(e.target.value)}>
+                {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
+              </select>
+              <button type="submit" className="btn-primary inline-flex h-10 shrink-0 items-center gap-2 rounded-full px-4 font-semibold"><Plus className="h-4 w-4" />Add month</button>
+            </form>
+          )}
+          <button type="button" onClick={() => setImporting(true)} className="chip inline-flex h-10 shrink-0 items-center gap-2 rounded-full px-4 font-semibold">
+            <Upload className="h-4 w-4" aria-hidden="true" />Import usage
+          </button>
+          <ImportUsage open={importing} onClose={() => setImporting(false)} clientId={c.id} />
+        </div>
       )}
       {usage.length === 0 && <p className="dimmer">No usage recorded.</p>}
       <ul className="flex flex-col gap-2">
         {usage.map((u) => (
           <li key={u.id} className="rounded-2xl chip p-3">
             <div className="font-bold">{monthLabel(u.month)}</div>
-            <div className="mt-2 grid grid-cols-3 gap-2">
-              {USAGE_FIELDS.map(([k, l]) => (editable ? (
-                <Labelled key={k} label={l}><NumField format={count} className="!py-1.5" aria-label={`${l}, ${monthLabel(u.month)}`} value={u[k]} onCommit={(n) => actions.upsertUsage(c.id, u.month, { [k]: n })} /></Labelled>
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {USAGE_FIELDS.map(([k, l, decimal]) => (editable ? (
+                <Labelled key={k} label={l}>
+                  <NumField decimal={decimal} format={count} className="!py-1.5" aria-label={`${l}, ${monthLabel(u.month)}`} value={u[k]} onCommit={(n) => actions.upsertUsage(c.id, u.month, { [k]: n })} />
+                </Labelled>
               ) : (
                 <div key={k} className="flex flex-col"><span className="text-[12px] dimmer">{l}</span><span className="font-extrabold tnum">{count(u[k])}</span></div>
               )))}
@@ -344,7 +409,7 @@ export default function ClientsTab({ adding, onCloseAdd }) {
   const [open, setOpen] = useState(null); // { id, tab }
   const [newName, setNewName] = useState('');
 
-  const clients = useMemo(() => state.clients.filter((c) => !q || `${c.name} ${c.sector} ${c.keyContact}`.toLowerCase().includes(q.toLowerCase())), [state.clients, q]);
+  const clients = useMemo(() => state.clients.filter((c) => !q || searchText(c).includes(q.trim().toLowerCase())), [state.clients, q]);
   const totals = owedTotals(state.clients, access.isAdmin ? state.payments : []); // staff never see money in
   const recent = state.clients.flatMap((c) => c.invoices.map((i) => ({ ...i, client: c })))
     .sort((a, b) => b.issued.localeCompare(a.issued)).slice(0, 6);
@@ -383,7 +448,13 @@ export default function ClientsTab({ adding, onCloseAdd }) {
                   {clients.map((c) => (
                     <tr key={c.id} className="border-t rowline hover:bg-white/5 cursor-pointer" onClick={() => setOpen({ id: c.id, tab: 'overview' })}>
                       <td className="p-3 font-semibold">
-                        <button type="button" onClick={(e) => { e.stopPropagation(); setOpen({ id: c.id, tab: 'overview' }); }} className="text-left hover:underline">{c.name}</button>
+                        <span className="inline-flex items-center gap-2">
+                          <button type="button" onClick={(e) => { e.stopPropagation(); setOpen({ id: c.id, tab: 'overview' }); }} className="text-left hover:underline">{c.name}</button>
+                          {safeUrl(c.platformUrl) && (
+                            <a href={safeUrl(c.platformUrl)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} aria-label={`${c.name} platform`} title="Platform"
+                              className="grid h-6 w-6 shrink-0 place-items-center rounded-full dimmer hover:bg-white/10 hover:text-white"><ExternalLink className="h-3.5 w-3.5" /></a>
+                          )}
+                        </span>
                       </td>
                       <td className="p-2"><span className="pill" style={{ backgroundColor: CLIENT_STATUSES[c.status] }}>{c.status}</span></td>
                       <td className="p-3 dim">{c.sector}</td>
@@ -419,13 +490,14 @@ export default function ClientsTab({ adding, onCloseAdd }) {
         </aside>
       </div>
 
-      <Drawer open={!!current} onClose={() => setOpen(null)} title={current?.name || ''} width={560}>
+      <Drawer open={!!current} onClose={() => setOpen(null)} title={current?.name || ''} width={600}>
         {current && (
           <>
             <div className="mb-5 no-print"><Segmented label="Client sections" value={open.tab} onChange={(tab) => setOpen({ ...open, tab })} options={TABS} /></div>
             {open.tab === 'overview' && <Overview c={current} editable={editable} />}
             {open.tab === 'invoices' && <Invoices c={current} editable={editable} />}
             {open.tab === 'billing' && <Billing c={current} editable={editable} />}
+            {open.tab === 'contract' && <ContractTab c={current} />}
             {open.tab === 'usage' && <Usage c={current} editable={editable} />}
             {open.tab === 'access' && <Access c={current} editable={editable} />}
           </>

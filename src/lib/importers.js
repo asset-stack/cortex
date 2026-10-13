@@ -5,7 +5,8 @@ import { localYmd } from '@/lib/format';
 
 // Field types drive parsing and the preview: text | user (one staff member) | users | date (YYYY-MM-DD) |
 // ts (ISO timestamp) | money | note (becomes the record's first note / update). `column`: tasks only, kept
-// when the chosen board has a column with that key. Aliases are header spellings, most likely first.
+// when the chosen board has a column with that key. `person`: clients only, the property of the client's first
+// contact (a billing one) the field fills. Aliases are header spellings, most likely first.
 const field = (key, label, type, aliases, extra) => ({ key, label, type, aliases, ...extra });
 const NAME = { required: true };
 const CREATED = ['created', 'created date', 'created at', 'date created', 'date added'];
@@ -18,10 +19,13 @@ export const FIELDS = {
     field('priority', 'Priority', 'text', ['priority']),
     field('next', 'Next step', 'text', ['next step', 'next steps', 'next action', 'next']),
     field('sector', 'Sector', 'text', ['sector', 'industry', 'segment', 'vertical']),
-    field('contact', 'Owner', 'user', ['contact', 'owner', 'account manager', 'assigned to', 'assignee']),
+    // A lone "Contact" column is the client's contact person; next to a "Key contact" column it is the owner.
+    field('contact', 'Owner', 'user', ['owner', 'account manager', 'assigned to', 'assignee', 'contact']),
     field('team', 'Team', 'users', ['team', 'team members', 'members']),
-    field('keyContact', 'Key contact', 'text', ['key contact', 'primary contact', 'main contact', 'client contact', 'contact name', 'contact person']),
-    field('email', 'Email', 'text', ['email', 'email address', 'contact email', 'key contact email']),
+    field('keyContact', 'Key contact', 'text', ['key contact', 'contact', 'primary contact', 'main contact', 'client contact', 'contact name', 'contact person', 'billing contact'], { person: 'name' }),
+    field('email', 'Email', 'text', ['email', 'email address', 'contact email', 'key contact email', 'billing email'], { person: 'email' }),
+    field('phone', 'Phone', 'text', ['phone', 'phone number', 'telephone', 'tel', 'mobile number', 'mobile phone', 'contact phone', 'contact number', 'key contact phone'], { person: 'phone' }),
+    field('platformUrl', 'Platform', 'text', ['platform', 'platform url', 'platform link', 'platform address', 'site']),
     field('lastContact', 'Last contact', 'date', ['last contact', 'last contacted', 'last contact date', 'last touch', 'last activity']),
     field('demo', 'Demo', 'text', ['demo', 'demo status']),
     field('demoUrl', 'Demo link', 'text', ['demo url', 'demo link']),
@@ -346,11 +350,14 @@ export function normalise(kind, row, mapping, { users = [], me = '', board, now 
     case 'clients': {
       const status = clientStatus(get('status'));
       const contact = owner('contact') || me;
+      // The key contact, email and phone make the client's first contact, who gets the invoices.
+      const person = { name: get('keyContact').replace(/\s+/g, ' '), role: '', email: emailOf(get('email')), phone: get('phone'), billing: true };
       return {
         name, group: status === 'Onboarding' ? 'Onboarding' : 'Active', status, priority: priority(get('priority'), false),
         next: get('next'), sector: get('sector'), contact, team: [...new Set([contact, ...matchUsers(get('team'), users)].filter(Boolean))],
-        lastContact: toYmd(get('lastContact')), demo: get('demo'), keyContact: get('keyContact'), email: emailOf(get('email')),
-        demoUrl: get('demoUrl'), avatar: avatarFor(name), abn: get('abn'), billingAddress: get('billingAddress'),
+        lastContact: toYmd(get('lastContact')), demo: get('demo'), demoUrl: get('demoUrl'), platformUrl: get('platformUrl'),
+        contacts: person.name || person.email || person.phone ? [person] : [],
+        avatar: avatarFor(name), abn: get('abn'), billingAddress: get('billingAddress'),
         notes: note(), tasks: [], invoices: [], access: [],
       };
     }

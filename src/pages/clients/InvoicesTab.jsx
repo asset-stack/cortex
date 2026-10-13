@@ -1,5 +1,6 @@
-// Invoices tab: every client's invoices, Awaiting approval first, with a status filter. Admins approve, mark as sent,
-// print, and generate the invoices billing plans have due (automatically once per session too).
+// Invoices tab: every client's invoices, Awaiting approval first, with a status filter. Admins approve, send (from
+// their own Gmail) or mark as sent, print, and generate the invoices billing plans have due (automatically once per
+// session too).
 import { useEffect, useState } from 'react';
 import { CalendarClock, Hourglass, Receipt } from 'lucide-react';
 import { useStore } from '@/data/store';
@@ -10,6 +11,7 @@ import { compactMoney, invoiceTotals, money, owingOn, shortDate } from '@/lib/fo
 import { cn } from '@/lib/cn';
 import { InvoiceActions, InvoiceEditor, PrintButton, PrintSheet } from './invoice';
 import { OPEN, Panel, StatusPill, invoicesOf, owedTotals } from './shared';
+import SendInvoice from './SendInvoice';
 
 // Plans' due invoices are generated once per signed-in admin per session (page load).
 const generated = new Set();
@@ -53,7 +55,7 @@ function GenerateButton() {
   );
 }
 
-function InvoiceRow({ c, inv, onOpen, onPrint }) {
+function InvoiceRow({ c, inv, onOpen, onPrint, onSend }) {
   const { state } = useStore();
   const { isAdmin } = useAccess();
   const total = invoiceTotals(inv).total;
@@ -72,7 +74,7 @@ function InvoiceRow({ c, inv, onOpen, onPrint }) {
           {owing !== total && <div className="text-[11.5px] dimmer">of {money(total)}</div>}
         </div>
         <StatusPill status={inv.status} />
-        {isAdmin && <InvoiceActions c={c} inv={inv} />}
+        {isAdmin && <InvoiceActions c={c} inv={inv} onSend={onSend} />}
         {isAdmin && <PrintButton inv={inv} iconOnly onPrint={onPrint} />}
       </div>
     </li>
@@ -85,6 +87,8 @@ export default function InvoicesTab() {
   const [filter, setFilter] = useState('All');
   const [open, setOpen] = useState(null); // { clientId, invId }
   const [printing, setPrinting] = useState(null); // { clientId, invId }
+  // The email dialog for a row lives here: once approved, the row moves to another panel (or out of the filter).
+  const [sending, setSending] = useState(null); // { clientId, invId }
 
   const all = invoicesOf(state.clients);
   const totals = owedTotals(state.clients, isAdmin ? state.payments : []); // staff never see money in, as in the rows
@@ -102,13 +106,15 @@ export default function InvoicesTab() {
   };
   const current = find(open);
   const toPrint = find(printing);
+  const toSend = find(sending);
 
   const rows = (list) => (
     <ul>
       {list.map(({ c, inv }) => (
         <InvoiceRow key={inv.id} c={c} inv={inv}
           onOpen={() => setOpen({ clientId: c.id, invId: inv.id })}
-          onPrint={() => setPrinting({ clientId: c.id, invId: inv.id })} />
+          onPrint={() => setPrinting({ clientId: c.id, invId: inv.id })}
+          onSend={() => setSending({ clientId: c.id, invId: inv.id })} />
       ))}
     </ul>
   );
@@ -146,6 +152,7 @@ export default function InvoicesTab() {
       <Drawer open={!!current} onClose={() => setOpen(null)} title={current?.inv.number || ''} width={560}>
         {current && <InvoiceEditor c={current.c} inv={current.inv} />}
       </Drawer>
+      {isAdmin && toSend && <SendInvoice key={toSend.inv.id} c={toSend.c} inv={toSend.inv} onClose={() => setSending(null)} />}
       {isAdmin && toPrint && <PrintSheet key={toPrint.inv.id} c={toPrint.c} inv={toPrint.inv} onDone={() => setPrinting(null)} />}
     </div>
   );

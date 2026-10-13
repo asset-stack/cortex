@@ -1441,8 +1441,12 @@ function LiveProvider({ userId, children }) {
         }
       },
       googleDisconnect: async () => {
-        const { data, error } = await supabase.rpc('google_disconnect');
-        return !error && Boolean(data);
+        try {
+          const { data, error } = await supabase.rpc('google_disconnect');
+          return !error && Boolean(data);
+        } catch {
+          return false;
+        }
       },
       refreshGoogle,
     });

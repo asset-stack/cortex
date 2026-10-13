@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 4322",
-    "test": "node scripts/test-sync.mjs && node scripts/test-db.mjs"
+    "test": "node scripts/test-sync.mjs && node scripts/test-db.mjs && node scripts/test-invoice.mjs && node scripts/test-google.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.3",
