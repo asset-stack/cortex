@@ -69,7 +69,10 @@ Keep the values below in the company password manager, never in the repo, an iss
 change or delete its files; Cortex opens a file through a link that expires after five minutes. Never switch it
 to **Public**, and don't add policies to it in the dashboard.
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0004_…`). Run each new file
+Then run `supabase/migrations/0004_clients_google.sql` the same way (client contacts and contracts, credits,
+and each admin's Google connection; see section 11).
+
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0005_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one.
 
 **0003 on a database that already has 0002**: **SQL Editor** → **+** → **Create a new snippet**, paste
@@ -77,6 +80,12 @@ once, in order, the same way. Never run an older file after a newer one.
 app saves `profiles.timezone`, which doesn't exist until then). It is one transaction and safe to re-run.
 Afterwards staff view Projects instead of editing it (give one person edit in **Settings → Team**), invoice dates
 follow Sydney, and each person's time zone is set the next time they open Cortex.
+
+**0004 on a database that already has 0003**: paste `supabase/migrations/0004_clients_google.sql` the same way and
+**Run** *before* the app version that uses it goes live (it loads `client_contacts`, which doesn't exist until then).
+One transaction, safe to re-run. Each client's key contact and email become its first contact, marked **Billing**
+(invoices go to billing contacts). Running it again after the deploy picks up a key contact typed into an old open
+tab in between, without duplicating. Then set up section 11.
 
 ### Upgrading an existing project
 
@@ -286,6 +295,64 @@ name or email.
   intend (Outreach is off for staff unless granted).
 - [ ] Security headers are live (step 6.7).
 - [ ] Leavers are deactivated in **Settings** → **Team** (by the SuperAdmin) the same day.
+- [ ] The `google` Edge Function's secrets are only `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`; nobody adds
+  `private` to the Data API's exposed schemas (that schema holds the admins' Google tokens).
+
+## 11. Invoice email and contracts (Google)
+
+Cortex emails approved invoices from the **approving admin's own Gmail** (with the PDF tax invoice attached), and
+makes each client's contract by copying the contract **Google Doc template** into the contracts folder with the Key
+Details filled in. Each admin connects their own Google account once. This goes through the `google` Edge Function in
+Supabase, which keeps the Google client secret and the admins' Google tokens on the server; the browser never sees
+them. Use a Google Workspace admin account for steps 1 and 2.
+
+1. **Google Cloud** (<https://console.cloud.google.com>, the project from section 3):
+   - **APIs & Services** → **Library**: open and **Enable** each of **Gmail API**, **Google Drive API** and
+     **Google Docs API**.
+   - **Google Auth Platform** → **Data Access** → **Add or remove scopes**: tick `.../auth/gmail.send` and
+     `.../auth/drive` (add them under **Manually add scopes** if they aren't listed) → **Update** → **Save**. The
+     consent screen is **Internal**, so Google doesn't review these.
+   - **Clients** → your Cortex client → **Authorised redirect URIs** → **+ Add URI**:
+     `https://<project-ref>.supabase.co/functions/v1/google/callback` → **Save**. Keep the existing
+     `…/auth/v1/callback` one (sign-in).
+   - Same page → **Client secrets** → **+ Add secret** and copy the new secret straight into the next step (never
+     into chat or email). The existing secret keeps working for sign-in.
+2. **Supabase** → **Edge Functions** → **Secrets** → add `GOOGLE_CLIENT_ID` (the client ID) and
+   `GOOGLE_CLIENT_SECRET` (the secret from step 1) → **Save**. `SUPABASE_URL` and the project keys are provided
+   automatically; don't add them.
+3. **Edge Functions** → **Deploy a new function** → **Via Editor**. Name it exactly `google` (it's part of the
+   redirect URI). Replace the starter code with the whole of `supabase/functions/google/index.ts` (GitHub → **Raw**,
+   copy all) → **Deploy function**. Then the function's **Details** (or settings) → turn **Enforce JWT verification**
+   (Verify JWT) **off** → **Save**: Google's return to `/callback` carries no Supabase token, and the function checks
+   every other request itself.
+4. **The contract template.** Open it in Google Docs. If its name ends in `.docx`, use **File** → **Save as Google
+   Docs** and use the new Doc (eSignature fields only work in Google Docs). Type placeholders where Cortex should
+   fill in values, for example in the Key Details table: `{{Customer}}`, `{{Platform}}`, `{{Start date}}`,
+   `{{End date}}`, `{{Annual fee}}`, `{{Payment terms}}`, `{{User limit}}`, `{{Customisations}}`, `{{Mobile app}}`,
+   `{{Governing law}}`; also available: `{{Customer ABN}}`, `{{Customer address}}`, `{{Contact name}}`,
+   `{{Contact email}}`, `{{Date}}`. Leave the eSignature fields as they are. Share the template and the contracts
+   folder with every admin (or keep both in a shared drive the admins belong to).
+5. **Cortex** → **Settings** → **Business**:
+   - **Contracts**: paste the template's link (`docs.google.com/document/d/…`) and the contracts folder's link
+     (`drive.google.com/drive/folders/…`; a link with `/file/d/` is a file, not the folder).
+   - **Google account**: each admin clicks **Connect Google**, picks **their own** @assetstackai.com account and
+     allows Gmail sending and Drive. Back in Cortex it says connected; click **Send test email** and check it arrives.
+
+**Using it**
+- **Invoices**: **Approve** opens a short email (to the client's **Billing** contacts; edit the message if you like)
+  → **Approve and send**. It goes from your Gmail with the PDF attached and lands in your Sent folder; the invoice
+  shows *Sent to …*. Without a connected account, Approve works as before (Print / PDF or Download PDF, email it
+  yourself, **Mark as sent**). Sending needs your ABN in **Business**.
+- **Contracts**: client → **Contract** → check the Key Details → **Create contract**. The filled-in Doc opens from
+  the contracts folder. In Google Docs: **Tools** → **eSignature** → **Request signature** (Google offers no way for
+  another app to start this). Back in Cortex: **Mark as sent for signature**, then **Mark signed** when it comes back,
+  which can also set up the client's billing plan from the contract.
+- **Credits**: each month, export usage from the client's platform as CSV → client → **Usage** → **Import usage**.
+  Importing the same file again replaces those months; nothing doubles.
+
+**Disconnecting**: **Settings** → **Business** → **Disconnect** removes your stored Google access from Cortex. To
+revoke it at Google too: <https://myaccount.google.com/connections>. When someone leaves, deactivating them in
+**Settings** → **Team** also stops their connection from being used.
 
 ## Troubleshooting
 
@@ -304,3 +371,9 @@ name or email.
 | Demo data on the live site | Supabase variables missing at build time (step 5.6). |
 | Red dot on the Cortex logo ("Not saved") | Hover it for the message. Changes stay queued and retry; check the browser console. A change the database refuses three times is put back the way the database has it (a duplicate invoice number or group name gets the next free one instead). |
 | Console: "Refused to load … Content Security Policy" | The origin isn't allowed in `public/_headers`. |
+| "Couldn't load your workspace … client_contacts" after an update | `0004_clients_google.sql` hasn't run yet (section 2). |
+| Connect Google: "Error 400: redirect_uri_mismatch" | Add `https://<project-ref>.supabase.co/functions/v1/google/callback` to the Google client (section 11.1). |
+| Connect Google comes back with "Connect the Google account for your own Cortex email" | You picked a different Google account. Each admin connects their own. |
+| "Reconnect your Google account in Settings" | Google withdrew Cortex's access (password change, revoked, or the scopes changed). **Connect Google** again. |
+| Create contract: "Template or folder not found" | The template or folder isn't shared with your Google account, or a link is wrong (section 11.4–5). |
+| Sending or creating a contract fails with a 401 / function error | The function isn't deployed as `google`, JWT verification is still on, or the Google secrets are missing (section 11.2–3). |

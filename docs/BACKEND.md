@@ -3,9 +3,11 @@
 ## Phase 2: team workflow
 
 The full contract is [`docs/PHASE2.md`](PHASE2.md); migration `supabase/migrations/0002_team_workflow.sql` runs
-once on top of `0001` (applied in production, never edited), and `0003_timezones_projects_view.sql` on top of
-`0002` ([PHASE2.md §8](PHASE2.md#8-0003-time-zones-and-projects-view-only)). The rest of this file is phase 1,
-corrected where 0002 and 0003 changed it.
+once on top of `0001` (applied in production, never edited), `0003_timezones_projects_view.sql` on top of `0002`
+([PHASE2.md §8](PHASE2.md#8-0003-time-zones-and-projects-view-only)) and `0004_clients_google.sql` on top of `0003`
+([PHASE2.md §9](PHASE2.md#9-0004-client-contacts-contracts-credits-and-google-invoice-email-contract-docs): client
+contacts and contracts, credits, the admins' Google accounts and the `google` Edge Function). The rest of this file is
+phase 1, corrected where 0002–0004 changed it.
 
 - **Roles**: `superadmin | admin | staff` (phase 1's `member` became `staff`). Admins (superadmin or admin) edit
   every module and see finance; only the SuperAdmin changes roles, active flags and module access, and the last
@@ -65,10 +67,14 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
                       updates: [{ id, user, text, ts }], subtasks: [{ id, text, done }] }] }] } },
   deals:   [{ id, name, sector, value, priority, stage, contact /* owner user id */, next, clientId?, contactId }],
   clients: [{ id, name, group, status, priority, next, sector, contact /* user id */, team: [userId],
-              lastContact /* 'YYYY-MM-DD' | '' */, demo, keyContact, email, demoUrl, avatar,
+              lastContact /* 'YYYY-MM-DD' | '' */, demo, demoUrl, platformUrl /* 0004 */, avatar,
               abn, billingAddress,
+              // 0004 (replaces keyContact / email): the client's people; invoices go to billing ones
+              contacts: [{ id, name, role, email, phone, billing }],
+              contracts: [{ id, status, title, docId, docUrl, startDate, endDate, annualFee, paymentTerms, userLimit,
+                            platform, customisations, mobileApp, governingLaw, createdBy, sentBy, sentAt, signedAt }],
               notes: [{ id, user, text, ts }], tasks: [{ id, text, done }],
-              invoices: [{ id, number, issued, due, status, planId, sentAt, paidOn, lines: [{ id, desc, qty, rate }] }],
+              invoices: [{ id, number, issued, due, status, planId, sentAt, paidOn, sentTo, lines: [{ id, desc, qty, rate }] }],
               access: [{ id, name, email, role }] }],
   contacts:  [{ id, name, org, email, stage, status, last, owner /* user id | '' */ }],
   emails:    [{ id, kind, contactId?, contact, subject, snippet, ts }],
@@ -104,7 +110,7 @@ maintained by a `touch()` trigger (the sync engine never sends these two columns
 | `items` | `board_key text not null`, `group_id uuid not null → board_groups cascade`, `position int`, `name text`, `values jsonb not null default '{}'` (`people`: user ids; 0002 replaced `owner`), `done bool not null default false` | `groups[].items[]` |
 | `item_updates` | `item_id → items cascade`, `user_id uuid → profiles`, `text text`, `created_at timestamptz` | `items[].updates[]` (newest first in state; order by `created_at desc`) |
 | `subtasks` | `item_id → items cascade`, `position int`, `text text`, `done bool` | `items[].subtasks[]` |
-| `clients` | `name, group_name, status, priority, next_step, sector text`, `contact_id uuid null → profiles`, `team uuid[] not null default '{}'`, `last_contact date null`, `demo, key_contact, email, demo_url, avatar, abn, billing_address text not null default ''`, `position int` | `clients[]` |
+| `clients` | `name, group_name, status, priority, next_step, sector text`, `contact_id uuid null → profiles`, `team uuid[] not null default '{}'`, `last_contact date null`, `demo, key_contact, email, demo_url, avatar, abn, billing_address text not null default ''`, `position int`; 0004: `platform_url text`, and `key_contact` / `email` are no longer synced (moved into `client_contacts`) | `clients[]` |
 | `deals` | `name, sector, priority, stage, next_step text`, `value numeric not null default 0`, `owner_id uuid null → profiles`, `client_id uuid null → clients on delete set null`, `contact_id uuid null → contacts on delete set null` (0002), `position int` | `deals[]` |
 | `client_notes` | `client_id → clients cascade`, `user_id → profiles`, `text text`, `created_at timestamptz` | `clients[].notes[]` (newest first) |
 | `client_tasks` | `client_id cascade`, `position int`, `text text`, `done bool` | `clients[].tasks[]` |
@@ -197,6 +203,9 @@ Text columns default to `''` and are `not null` unless noted, so the state never
   live mode leaves automations to the database (`rpc` and triggers), demo mode runs `src/lib/automations.js`.
 - `setMe` and `reset` are demo-only (no-ops in live).
 - Extra context value `sync: { state, message }` for a small status indicator.
+- Extra context value `google: { ready, demo, connected, email, connectedAt }` (0004): the signed-in admin's own Google
+  connection, read from `google_me()` (not synced state; demo: `{ demo: true, connected: false }`). Google work goes
+  through `src/integrations/google.js` → the store's `invoke()` → the `google` Edge Function.
 
 ## 5. Auth (`src/components/auth/AuthGate.jsx`)
 Live mode only (demo renders children directly). States: loading → signed out (Cortex card, **Sign in with Google**, note "Use your @assetstackai.com account") → signed in but no active profile ("Your account isn't active yet. Ask an admin.", Sign out) → app.

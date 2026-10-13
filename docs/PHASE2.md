@@ -244,3 +244,55 @@ The round-trip property must hold for every table. Rows the user can't read simp
   the selected person's local time.
 - **Tests**: `scripts/test-db.mjs` applies 0003 after the 0002 checks and checks the default, the per-person and
   Sydney dates, the follow-up's date, the time-zone guard and that staff can read but not write Projects.
+
+## 9. 0004: client contacts, contracts, credits and Google (invoice email, contract Docs)
+
+`supabase/migrations/0004_clients_google.sql` runs once on top of `0003` (one transaction, safe to re-run), before the
+app version that uses it.
+
+- **Owner's decisions**: whoever approves sends **from their own Google account** (each admin connects their own in
+  Settings → Business); each client has its **own platform address**; credits come from each platform's **CSV
+  export** and are for reporting only (billing stays subscription plans); contracts are copies of the **Google Doc
+  template** saved in **one Drive folder**, signed with Google Workspace **eSignature**, which has no API: the admin
+  requests signatures in Google Docs and Cortex tracks Draft → Sent for signature → Signed / Cancelled.
+- **Tables**: `client_contacts (client_id → clients cascade, position, name, role, email, phone, billing)` and
+  `client_contracts (client_id → clients cascade, position (from the end, newest on top), status check, title, doc_id,
+  doc_url, start_date, end_date, annual_fee, payment_terms, user_limit, platform, customisations, mobile_app,
+  governing_law, created_by, sent_by, sent_at, signed_at)`: module `clients` policies, touch, realtime. Each client's
+  `key_contact` / `email` moved into one billing contact (only for clients without contacts, so re-running is safe);
+  the old columns stay, blank and no longer synced. New columns: `clients.platform_url`, `client_usage.credits`,
+  `invoices.sent_to`, `org_settings.contract_template / contract_folder` (Drive links).
+- **Automations**: `ensure_todos` adds **Approve invoices** (admins, ref `approve:<day>`, category Clients) while any
+  invoice is *Awaiting approval*, and admins' first My Work load each day raises due invoices first
+  (`generate_due_invoices`), so recurring billing needs no cron. Trigger `client_contract_todo` (after insert on
+  `clients`): a new **Onboarding** client gives its owner if they're an admin, else the admin who added it,
+  **Prepare contract: <name>** on their own day (ref `contract:<id>`). Approving the last waiting invoice ticks the
+  approve to-dos; creating a contract ticks the client's contract to-do. Demo copies: `ensureTodosLocal`,
+  `clientCreatedLocal` (`src/lib/automations.js`).
+- **Google accounts**: `private.google_accounts (user_id pk → profiles cascade, email, refresh_token, scopes)` in a
+  schema the Data API doesn't expose, RLS on, no policies, not published. RPCs: `google_me()` (staff: the caller's
+  uid, name, email, admin flag, connected Google email and time; never the token), `google_disconnect()` (own row),
+  `google_save()` / `google_token()` (service_role only).
+- **Edge Function** `supabase/functions/google/index.ts` (one pasteable file, JWT verification off, checks callers
+  itself through `google_me()` with the caller's JWT; admins only): `connect` (Google consent URL for the caller's
+  own account: scopes `gmail.send` and `drive`, offline access, an HMAC-signed state), `callback` (code exchange; the
+  Google account must be the caller's own Cortex email; token saved with the secret key; back to Settings),
+  `send` (email from the caller's Gmail, optional PDF attachment), `contract` (Drive copy of the template into the
+  folder, a .docx converted to a Google Doc, `{{Placeholder}}` replaceAllText). It never writes Cortex rows: the
+  store records Sent / sentTo / contracts through normal sync.
+- **App**: state `clients[].platformUrl`, `contacts[]`, `contracts[]`, `usage[].credits`, `invoices[].sentTo`,
+  `org.contractTemplate / contractFolder`; the context's `google` value (`{ ready, demo, connected, email }` from
+  `google_me()`, not synced). The tax invoice (print and PDF) comes from one model (`src/lib/taxInvoice.js`, with
+  **Attn:** the billing contacts); the emailed PDF is built in the browser with pdf-lib (`src/lib/invoicePdf.js`,
+  loaded on demand). Contract Key Details defaults and placeholders: `src/lib/contract.js`. Usage export parsing:
+  `src/lib/usageImport.js` (credits summed per month, snapshots take the month's maximum; re-importing replaces).
+  Invoice and contract dates use Sydney's business day.
+- **Screens**: client Overview (Platform link, Contacts with a Billing switch), new **Contract** tab, Billing shows who
+  invoices go to, Usage credits and **Import usage**, invoice **Approve** → send dialog (or Approve only), **Send** /
+  **Resend**, **Download PDF**, *Sent to …*; Settings → Business: **Google account** (connect, test, disconnect) and
+  **Contracts** (template and folder links).
+- **Tests**: `scripts/test-db.mjs` phase 4 (move of the legacy contacts, RLS / realtime, module access, the two
+  to-dos, Google RPC privileges; the sync write check now runs after the newest migration); `scripts/test-sync.mjs`
+  (mapping, diffs, demo automations, migrate, usage import, importer); `scripts/test-invoice.mjs` (model, PDF,
+  contract helpers, integration seam); `scripts/test-google.mjs` (the Edge Function with fetch mocked).
+

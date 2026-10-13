@@ -14,10 +14,12 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
 - Keep demo mode working. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` the app runs on localStorage
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
-  migration that has been applied** (`0001` and `0002` are live in production; treat `0003` the same once it has
-  run): fix forward in the next file. Every table keeps row-level security on with policies that require `is_staff()`
-  (directly or through `is_admin()` / `can_view()` / `can_edit()`), and is added to the `supabase_realtime`
-  publication if it is synced. Extend `scripts/test-db.mjs` to cover it.
+  migration that has been applied** (`0001`–`0003` are live in production; treat `0004` the same once it has
+  run): fix forward in the next file. A migration must never mention `module_level` unless it redefines it
+  (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table keeps row-level
+  security on with policies that require `is_staff()` (directly or through `is_admin()` / `can_view()` /
+  `can_edit()`), and is added to the `supabase_realtime` publication if it is synced. Extend `scripts/test-db.mjs`
+  to cover it.
 - Roles are `superadmin | admin | staff`. Admins (superadmin or admin) always have edit; only the SuperAdmin
   changes roles, active flags and module access. Money in, expenses and software costs are admins only, and
   staff never approve, send or mark invoices paid.
@@ -37,7 +39,7 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
   `Asia/Manila`.
 - Finance files (bank screenshots, receipts) live in the private `finance` storage bucket and are opened through
   the store's `fileUrl()` (short-lived signed links). Never make the bucket public.
-- `npm test` must pass (sync mapping and database checks, no network).
+- `npm test` must pass (sync mapping, database, invoice and Edge Function checks, no network).
 - **This repo (asset-stack/cortex) is public; treat it as public even if it is made private.** Never commit real
   client names, emails, invoices, bank details or credentials. Seed people use `@example.com` placeholders (demo
   team: David superadmin, Josh admin, Hello staff), and real admin addresses only ever go into the Supabase SQL
@@ -45,8 +47,14 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
 - Never commit `.env` / `.env.local` or any key. Only `.env.example` (empty values) is tracked. The anon /
   publishable key is the only Supabase key the frontend may use; the `service_role` / secret key never goes
   anywhere in this repo, CI or Cloudflare.
-- No secrets in the frontend. Gmail and Claude calls go through `src/integrations/*`, which stay stubs until
-  a server endpoint exists.
+- No secrets in the frontend. Google (invoice email from the approver's own Gmail, contract Docs in Drive) goes
+  through `src/integrations/google.js` → the store's `invoke()` → the `google` Edge Function
+  (`supabase/functions/google/index.ts`: one self-contained, pasteable file with no imports, tested by
+  `scripts/test-google.mjs`). Admins' Google refresh tokens live only in `private.google_accounts`, read by the
+  function with the secret key, which exists only inside the Supabase function runtime (injected by Supabase).
+  Outreach's Gmail feed and the Claude agent (`src/integrations/gmail.js`, `claudeAgent.js`) are still stubs.
+- The printed tax invoice and the emailed PDF both come from `taxInvoiceModel()` (`src/lib/taxInvoice.js`); change
+  invoice content there, not in one renderer. pdf-lib loads only on demand (dynamic import).
 - Domain is `assetstackai.com` (never `assetstack.ai`, which belongs to another company).
 - Keep copy minimal: titles and actions only, no eyebrow or subtitle text (agreed with the user on the mockup).
 - Images go in `public/media/` as WebP, max 1920px, q82.

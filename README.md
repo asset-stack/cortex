@@ -11,7 +11,7 @@ One workspace for the team's daily work, the departments and team chat:
 | **Projects / Marketing** | Monday.com-style boards: grouped tables with coloured status/label cells, Kanban (drag to change status), calendar, and a task drawer with subtasks and updates. A **People** column assigns work to several people, and an `@Name` in an update adds that person. The old Admin board is part of Projects |
 | **Outreach** | Contacts CRM with owner and status, Gmail activity feed, sequences, approvals queue, and the Claude outreach agent (draft, then send or queue). A contact moving to *Replied* or *Meeting booked* creates or advances its deal in Pipeline and gives its owner a follow-up to-do |
 | **Pipeline** | Deal Kanban: Opportunities → First meetings → Demos → Won, with *Make client* on won deals; deals that came from a contact are marked |
-| **Clients** | Tabs **Clients · Invoices · Money in · Expenses · Usage**. Client cards and a drawer with overview, notes, tasks, invoices (line items, GST 10%, print/PDF), access, **billing plans** and monthly **usage**. Plans raise invoices *Awaiting approval*; admins **Approve** (sent by Gmail once connected, otherwise **Mark as sent** after sending the PDF), upload the weekly bank screenshot and **Mark paid**, log expenses with receipts and track software costs |
+| **Clients** | Tabs **Clients · Invoices · Money in · Expenses · Usage**. Client cards and a drawer with overview (platform link, contacts with a **Billing** switch), notes, tasks, invoices (line items, GST 10%, print, PDF), **billing plans**, **contracts**, monthly **usage** with credits imported from each platform's export, and access. Plans raise invoices *Awaiting approval* (and an **Approve invoices** to-do); admins **Approve and send**, which emails the PDF tax invoice from their own Gmail to the billing contacts (or approve, send the PDF yourself and **Mark as sent**). New clients get a **Prepare contract** to-do; **Create contract** fills the Google Doc template into the contracts folder, signed with Google eSignature. Admins upload the weekly bank screenshot and **Mark paid**, log expenses with receipts and track software costs |
 | **Timesheet** | At 16:30 on weekdays (each person's own time zone) staff are asked to fill eight hourly blocks, pre-filled from what they did that day. Admins review everyone's week in Settings |
 | **Team chat** | Slack-style dock at the bottom of every page: groups, create group, add members, @mentions with autocomplete and highlight, unread and mention counts |
 | **Settings** (admins) | **Team** (roles, active flags and staff module access; SuperAdmin only), **Routines**, **Timesheets**, **Business** details for invoices, CSV **Import** from the old platform |
@@ -78,24 +78,28 @@ Fill in the project URL and the anon (publishable) key from the Supabase dashboa
 - `scripts/test-sync.mjs` checks the state ⇄ row mapping round trip for every table, the diff for common
   edits, the sync queue (coalescing, ordering, retry) against a fake Supabase client, the access helpers, the
   timesheet suggestions and the demo-mode automations.
-- `scripts/test-db.mjs` runs `0001_cortex.sql`, `0002_team_workflow.sql` and `0003_timezones_projects_view.sql` in
-  PGlite (Postgres in WASM), as on the live database, and checks the sign-up domain gate, roles and module access,
-  the board merge, the automations, invoice generation, time zones, finance privacy and row-level security as
-  different users.
+- `scripts/test-db.mjs` runs `0001_cortex.sql` to `0004_clients_google.sql` in order in PGlite (Postgres in WASM),
+  as on the live database, and checks the sign-up domain gate, roles and module access, the board merge, the
+  automations, invoice generation, time zones, client contacts and contracts, Google token privacy, finance privacy
+  and row-level security as different users.
+- `scripts/test-invoice.mjs` checks the tax invoice model, the PDF and the contract helpers;
+  `scripts/test-google.mjs` checks the `google` Edge Function (connect, callback, send, contract) with Google and
+  Supabase mocked.
 
 ## Deploying
 
 [`DEPLOY.md`](DEPLOY.md) has the click-by-click setup: Supabase (Sydney), Google sign-in, Cloudflare Pages,
 the custom domain, inviting staff, importing old data, and a security checklist. A database set up before the
-team workflow needs one upgrade step (`0002_team_workflow.sql`, see *Upgrading an existing project*), and one
-with `0002` needs `0003_timezones_projects_view.sql`. Security
+team workflow needs one upgrade step (`0002_team_workflow.sql`, see *Upgrading an existing project*), then each
+newer migration in order (`0003_…`, `0004_…`). Invoice email and contracts need the Google setup in DEPLOY.md
+section 11. Security
 headers for Cloudflare Pages are in `public/_headers`.
 
 ## Still stubbed
 
-- **Gmail.** A server endpoint holds the Google OAuth client and per-user refresh tokens. Replace
-  `listThreads` / `sendEmail` / `sendInvoice` in `src/integrations/gmail.js`. Until then "sent" emails are only
-  logged to the feed, and approved invoices are sent by hand (print to PDF, then **Mark as sent**).
+- **Outreach Gmail.** Invoices are emailed for real (the `google` Edge Function, each admin's own Gmail), but the
+  Outreach feed and its sends still use `listThreads` / `sendEmail` in `src/integrations/gmail.js`: "sent" emails
+  are only logged to the feed for now.
 - **Claude agent.** A server endpoint calls the Anthropic Messages API with the AssetStack voice guide and the
   contact's history. Replace `draftOutreach` in `src/integrations/claudeAgent.js`. Drafts come from templates
   for now. API keys never go in this frontend.
