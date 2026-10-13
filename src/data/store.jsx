@@ -12,12 +12,12 @@ import { createSync } from '@/data/backend/sync';
 import { GateScreen, Spinner } from '@/components/auth/AuthGate';
 import { LEVELS, MODULES, ROLES, STAFF_DEFAULTS, canEdit, isAdmin, isSuperadmin } from '@/lib/access';
 import {
-  PLAN_MONTHS, addDays, addMonths, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isPlanDate, isYmd, makeTodo,
-  mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
+  PLAN_MONTHS, addDays, addMonths, clientCreatedLocal, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isPlanDate,
+  isYmd, makeTodo, mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
 } from '@/lib/automations';
-import { browserTimezone, daysBetween, emailSnippet, invoiceTotals, localYmd, parseAmount } from '@/lib/format';
+import { TEAM_TIMEZONE, browserTimezone, daysBetween, emailSnippet, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
 import { mentionedUserIds } from '@/lib/mentions';
-import { GMAIL_CONNECTED, sendInvoice } from '@/integrations/gmail';
+import { createContractDoc, googleConnectUrl, sendGoogleEmail, sendInvoiceEmail } from '@/integrations/google';
 
 const KEY = 'assetstack-ops:v1';
 // Who has had a day's routine to-dos made in this page load (`${me}|${day}`): My Work asks ensureTodos once per key.
@@ -43,6 +43,31 @@ const ymdOr = (v, fallback = '') => (isYmd(v) ? v : fallback);
 // Only admins approve, send, void or mark invoices paid; until an invoice leaves these it isn't issued.
 const ADMIN_STATUSES = ['Approved', 'Sent', 'Paid', 'Void'];
 const UNISSUED = ['Draft', 'Awaiting approval'];
+// Invoices are dated on the business day (Sydney), wherever the admin is.
+const teamToday = () => ymdIn(TEAM_TIMEZONE);
+const CONTRACT_STATUSES = ['Draft', 'Sent for signature', 'Signed', 'Cancelled'];
+const lowerTrim = (v) => textOf(v).trim().toLowerCase();
+
+// A client's person (client.contacts[]), cleaned. Not an outreach contact (state.contacts).
+const cleanPerson = (x = {}, id = uid()) => ({
+  id, name: textOf(x.name).trim(), role: textOf(x.role).trim(), email: lowerTrim(x.email), phone: textOf(x.phone).trim(),
+  billing: Boolean(x.billing),
+});
+
+// A contract's Key Details as typed (the Doc is filled from these). Dates must be real days, or empty.
+const cleanContract = (k = {}) => ({
+  title: textOf(k.title).trim(), startDate: ymdOr(k.startDate), endDate: ymdOr(k.endDate), annualFee: toNum(k.annualFee),
+  paymentTerms: textOf(k.paymentTerms).trim(), userLimit: textOf(k.userLimit).trim(), platform: textOf(k.platform).trim(),
+  customisations: textOf(k.customisations).trim(), mobileApp: textOf(k.mobileApp).trim(), governingLaw: textOf(k.governingLaw).trim(),
+});
+
+// Once nothing awaits approval, the admins' "Approve invoices" to-dos are done.
+function tickApproveTodos(d) {
+  if (d.clients.some((c) => c.invoices.some((i) => i.status === 'Awaiting approval'))) return;
+  d.todos.forEach((t) => {
+    if (t.source === 'automation' && t.ref.startsWith('approve:') && !t.done) Object.assign(t, { done: true, doneAt: nowIso() });
+  });
+}
 
 function load() {
   let data = null;
@@ -114,10 +139,11 @@ const newItem = (r, people = []) => {
 
 const newClient = (d, r) => ({
   group: 'Onboarding', status: 'Onboarding', priority: 'P2', next: '', sector: '', contact: d.me, team: [d.me],
-  lastContact: '', demo: '', keyContact: '', email: '', demoUrl: '', avatar: '#3b82f6', abn: '', billingAddress: '',
+  lastContact: '', demo: '', demoUrl: '', platformUrl: '', avatar: '#3b82f6', abn: '', billingAddress: '',
   ...r,
   id: uid(), notes: fresh(r.notes), tasks: fresh(r.tasks), access: fresh(r.access), plans: fresh(r.plans), usage: fresh(r.usage),
-  invoices: (r.invoices || []).map((inv) => ({ planId: '', sentAt: '', paidOn: '', ...inv, id: uid(), lines: fresh(inv.lines) })),
+  contacts: (r.contacts || []).map((x) => cleanPerson(x)), contracts: fresh(r.contracts),
+  invoices: (r.invoices || []).map((inv) => ({ planId: '', sentAt: '', paidOn: '', sentTo: '', ...inv, id: uid(), lines: fresh(inv.lines) })),
 });
 
 const newContact = (d, r) => ({
@@ -189,7 +215,7 @@ function createActions(mutate, mode) {
   const clashes = (d, t, day, assignee) => d.todos.some((x) => x.id !== t.id && x.assignee === assignee && x.day === day
     && ((t.routineId && x.routineId === t.routineId) || (t.source === 'automation' && x.source === 'automation' && x.ref === t.ref)));
 
-  return {
+  const actions = {
     reset: mode.reset,
     setMe: mode.setMe,
     signOut: mode.signOut,
@@ -240,7 +266,9 @@ function createActions(mutate, mode) {
       }
       if (!canEdit(d, module)) return false;
       if (kind === 'clients') {
-        d.clients.unshift(...takeNew(d.clients, records, (r) => newClient(d, r), result));
+        const added = takeNew(d.clients, records, (r) => newClient(d, r), result);
+        d.clients.unshift(...added);
+        if (!mode.live) added.forEach((c) => clientCreatedLocal(d, c.id)); // live: the client_contract_todo trigger
       } else if (kind === 'contacts') {
         const added = takeNew(d.contacts, records, (r) => newContact(d, r), result);
         d.contacts.unshift(...added);
@@ -404,9 +432,16 @@ function createActions(mutate, mode) {
     }),
     // The signed-in user's routine to-dos for `day` (and an admin's Monday bank reminder). Safe to call repeatedly.
     // → Promise<number added | false>
+    // Admins first raise any invoices that are due, so "Approve invoices" shows up on their first visit of the day.
     ensureTodos: async (day = localYmd()) => {
       if (!isYmd(day)) return false;
-      if (!mode.live) return mutate((d) => ensureTodosLocal(d, day));
+      if (!mode.live) {
+        return mutate((d) => {
+          if (isAdmin(d)) generateDueInvoicesLocal(d);
+          return ensureTodosLocal(d, day);
+        });
+      }
+      if (mode.read(isAdmin)) await actions.generateDueInvoices();
       const added = await mode.rpc('ensure_todos', { p_day: day });
       if (added > 0) await mode.pull('todos', { assignee_id: mode.read((s) => s.me), day });
       return added;
@@ -446,12 +481,16 @@ function createActions(mutate, mode) {
       if (existing) { deal.clientId = existing.id; return existing.id; }
       // The deal owner keeps the client; fall back to whoever converts it.
       const owner = userExists(d, deal.contact) ? deal.contact : d.me;
+      // The outreach contact the deal came from becomes the client's first, billing contact.
+      const from = d.contacts.find((c) => c.id === deal.contactId);
       const client = newClient(d, {
         name: deal.name, priority: deal.priority === 'P3' ? 'P2' : deal.priority, next: 'Schedule onboarding kick-off',
         sector: deal.sector, contact: owner, team: Array.from(new Set([owner, d.me])), lastContact: localYmd(),
+        contacts: from && (from.name || from.email) ? [{ name: from.name, email: from.email, billing: true }] : [],
       });
       d.clients.unshift(client);
       deal.clientId = client.id;
+      if (!mode.live) clientCreatedLocal(d, client.id); // live: the client_contract_todo trigger
       return client.id;
     }),
 
@@ -460,7 +499,28 @@ function createActions(mutate, mode) {
     addClient: (name) => editing('clients', (d) => {
       const c = newClient(d, { name, lastContact: localYmd() });
       d.clients.unshift(c);
+      if (!mode.live) clientCreatedLocal(d, c.id); // live: the client_contract_todo trigger
       return c.id;
+    }),
+    // A client's people: name, role, email, phone and whether invoices go to them (billing). → id
+    addClientContact: (clientId, person = {}) => editing('clients', (d) => {
+      const c = findClient(d, clientId);
+      if (!c) return false;
+      const x = cleanPerson(person);
+      c.contacts.push(x);
+      return x.id;
+    }),
+    updateClientContact: (clientId, personId, patch = {}) => editing('clients', (d) => {
+      const x = findClient(d, clientId)?.contacts.find((p) => p.id === personId);
+      if (!x) return false;
+      Object.assign(x, cleanPerson({ ...x, ...patch }, x.id));
+      return true;
+    }),
+    removeClientContact: (clientId, personId) => editing('clients', (d) => {
+      const c = findClient(d, clientId);
+      if (!c?.contacts.some((p) => p.id === personId)) return false;
+      c.contacts = c.contacts.filter((p) => p.id !== personId);
+      return true;
     }),
     updateClient: (clientId, patch) => editing('clients', (d) => {
       const c = findClient(d, clientId);
@@ -490,10 +550,10 @@ function createActions(mutate, mode) {
     addInvoice: (clientId) => editing('clients', (d) => {
       const c = findClient(d, clientId);
       if (!c) return false;
-      const issued = localYmd();
+      const issued = teamToday();
       const inv = {
         id: uid(), number: nextInvoiceNumber(d), issued, due: addDays(issued, termsOf(d)), status: 'Draft', planId: '', sentAt: '',
-        paidOn: '', lines: [{ id: uid(), desc: 'Platform licence', qty: 1, rate: 0 }],
+        paidOn: '', sentTo: '', lines: [{ id: uid(), desc: 'Platform licence', qty: 1, rate: 0 }],
       };
       c.invoices.unshift(inv);
       return inv.id;
@@ -509,49 +569,63 @@ function createActions(mutate, mode) {
       if (!byAdmin && ((status !== was && ADMIN_STATUSES.includes(status)) || ('paidOn' in patch && patch.paidOn !== inv.paidOn))) return false;
       if (UNISSUED.includes(was) && !UNISSUED.includes(status)) {
         const kept = daysBetween(inv.issued, inv.due);
-        const today = localYmd();
+        const today = teamToday();
         inv.issued = today;
         inv.due = addDays(today, Number.isInteger(kept) && kept >= 0 ? kept : termsOf(d));
       }
       Object.assign(inv, patch, { id: inv.id });
       if (status === 'Sent' && !inv.sentAt) inv.sentAt = nowIso();
-      if (byAdmin && status === 'Paid' && !inv.paidOn) inv.paidOn = localYmd();
+      if (byAdmin && status === 'Paid' && !inv.paidOn) inv.paidOn = teamToday();
       if (byAdmin && was === 'Paid' && status !== 'Paid' && !('paidOn' in patch)) inv.paidOn = '';
+      if (was === 'Awaiting approval') tickApproveTodos(d);
       return true;
     }),
-    // Admins. Approved, issued today and due after the payment terms; then sent from Gmail once that is connected
-    // (until then it stays Approved and the PDF goes out by hand: markInvoiceSent).
-    // → Promise<'Approved' | 'Sent' | false>
-    approveInvoice: async (clientId, invId) => {
+    // Admins. Approved, issued today (Sydney) and due after the payment terms. With `email` ({ to, subject, text }) it
+    // is then emailed from the approver's own Gmail and marked Sent; otherwise the PDF goes out by hand (Mark as sent).
+    // → Promise<{ status: 'Approved' | 'Sent', error? } | false>
+    approveInvoice: async (clientId, invId, email = null) => {
       const approved = admin((d) => {
-        const client = findClient(d, clientId);
-        const invoice = client?.invoices.find((i) => i.id === invId);
+        const invoice = findInvoice(d, clientId, invId);
         if (!invoice || !UNISSUED.includes(invoice.status)) return false;
-        const today = localYmd();
+        const today = teamToday();
         Object.assign(invoice, { status: 'Approved', issued: today, due: addDays(today, termsOf(d)) });
-        return { client, invoice, org: d.org };
-      });
-      if (!approved) return false;
-      if (!GMAIL_CONNECTED) return 'Approved';
-      const res = await sendInvoice(approved).catch(() => null);
-      if (!res?.sent) return 'Approved';
-      const sent = admin((d) => {
-        const inv = findInvoice(d, clientId, invId);
-        if (inv?.status !== 'Approved') return false;
-        Object.assign(inv, { status: 'Sent', sentAt: nowIso() });
+        tickApproveTodos(d);
         return true;
       });
-      return sent ? 'Sent' : 'Approved';
+      if (!approved) return false;
+      if (!email) return { status: 'Approved' };
+      const res = await actions.emailInvoice(clientId, invId, email);
+      return res.ok ? { status: 'Sent' } : { status: 'Approved', error: res.error };
+    },
+    // Admins: email an Approved (or resend a Sent) invoice from your own Gmail, with its PDF. Recorded as Sent to
+    // those addresses. → Promise<{ ok: true } | { ok: false, error }>
+    emailInvoice: async (clientId, invId, { to = [], subject = '', text = '' } = {}) => {
+      const found = mode.read((s) => {
+        const client = s.clients.find((c) => c.id === clientId);
+        const invoice = client?.invoices.find((i) => i.id === invId);
+        return isAdmin(s) && invoice && ['Approved', 'Sent'].includes(invoice.status) ? { client, invoice, org: s.org } : null;
+      });
+      if (!found) return { ok: false, error: 'Only an approved invoice can be emailed.' };
+      const res = await sendInvoiceEmail(mode.invoke, { ...found, to, subject, text });
+      if (!res.ok) return res;
+      admin((d) => {
+        const inv = findInvoice(d, clientId, invId);
+        if (!inv || !['Approved', 'Sent'].includes(inv.status)) return false;
+        Object.assign(inv, { status: 'Sent', sentAt: nowIso(), sentTo: to.join(', ') });
+        return true;
+      });
+      return { ok: true };
     },
     // Admins: the PDF went out by hand.
     markInvoiceSent: (clientId, invId) => admin((d) => {
       const inv = findInvoice(d, clientId, invId);
       if (!inv || inv.status === 'Paid' || inv.status === 'Void') return false;
       if (UNISSUED.includes(inv.status)) {
-        const today = localYmd();
+        const today = teamToday();
         Object.assign(inv, { issued: today, due: addDays(today, termsOf(d)) });
       }
       Object.assign(inv, { status: 'Sent', sentAt: nowIso() });
+      tickApproveTodos(d);
       return true;
     }),
     addInvoiceLine: (clientId, invId) => editing('clients', (d) => {
@@ -622,13 +696,113 @@ function createActions(mutate, mode) {
       if (!c || !isYmd(m)) return false;
       let row = c.usage.find((u) => u.month === m);
       if (!row) {
-        row = { id: uid(), month: m, assets: 0, sites: 0, seats: 0, notes: '' };
+        row = { id: uid(), month: m, assets: 0, sites: 0, seats: 0, credits: 0, notes: '' };
         c.usage = [...c.usage, row].sort((a, b) => (a.month < b.month ? 1 : a.month > b.month ? -1 : 0)); // newest first
       }
       ['assets', 'sites', 'seats'].forEach((k) => { if (k in patch) row[k] = toInt(patch[k], row[k]); });
+      if ('credits' in patch) row.credits = Math.max(0, toNum(patch.credits));
       if ('notes' in patch) row.notes = textOf(patch.notes);
       return row.id;
     }),
+    // A platform export, totalled per month (src/lib/usageImport.js): each month's figures replace what was there, so
+    // importing the same file again changes nothing. → number of months, or false.
+    importUsage: (clientId, months = []) => editing('clients', (d) => {
+      const c = findClient(d, clientId);
+      const rows = (months || []).filter((x) => /^\d{4}-\d{2}-01$/.test(textOf(x?.month)));
+      if (!c || !rows.length) return false;
+      rows.forEach((x) => {
+        let row = c.usage.find((u) => u.month === x.month);
+        if (!row) {
+          row = { id: uid(), month: x.month, assets: 0, sites: 0, seats: 0, credits: 0, notes: '' };
+          c.usage.push(row);
+        }
+        if (x.credits != null) row.credits = Math.max(0, toNum(x.credits));
+        ['assets', 'sites', 'seats'].forEach((k) => { if (x[k] != null) row[k] = toInt(x[k], row[k]); });
+      });
+      c.usage.sort((a, b) => (a.month < b.month ? 1 : a.month > b.month ? -1 : 0)); // newest first
+      return rows.length;
+    }),
+
+    // ── Contracts (admins make them from the Google Doc template; everyone with clients access sees them) ──
+
+    // Copies the template into the contracts folder, filled from `details`, as the signed-in admin (their Google
+    // account). With `docUrl` an existing Doc is linked instead. → Promise<{ ok: true, id, url } | { ok: false, error }>
+    createContract: async (clientId, details = {}, { docUrl = '' } = {}) => {
+      const ctx = mode.read((s) => {
+        const client = s.clients.find((c) => c.id === clientId);
+        return isAdmin(s) && client ? { client, org: s.org } : null;
+      });
+      if (!ctx) return { ok: false, error: 'Only admins can make contracts.' };
+      const k = cleanContract(details);
+      let doc = { id: '', url: textOf(docUrl).trim(), name: k.title };
+      if (!doc.url) {
+        const res = await createContractDoc(mode.invoke, { client: ctx.client, org: ctx.org, contract: k });
+        if (!res.ok) return res;
+        doc = res;
+      }
+      const id = admin((d) => {
+        const c = findClient(d, clientId);
+        if (!c) return false;
+        const row = {
+          id: uid(), status: 'Draft', ...k, title: k.title || doc.name || 'Software Subscription Agreement', docId: doc.id || '',
+          docUrl: doc.url, createdBy: d.me, sentBy: '', sentAt: '', signedAt: '',
+        };
+        c.contracts.unshift(row);
+        d.todos.forEach((t) => {
+          if (t.source === 'automation' && t.ref === `contract:${clientId}` && !t.done) Object.assign(t, { done: true, doneAt: nowIso() });
+        });
+        return row.id;
+      });
+      return id ? { ok: true, id, url: doc.url } : { ok: false, error: 'The client is gone.' };
+    },
+    // Admins. Key Details while it's a Draft; status moves Draft → Sent for signature → Signed (or Cancelled).
+    // `plan` (Signed only): also set up billing from it ({ amount, frequency, nextDate, description }). → true | false
+    updateContract: (clientId, contractId, patch = {}, { plan = null } = {}) => admin((d) => {
+      const c = findClient(d, clientId);
+      const k = c?.contracts.find((x) => x.id === contractId);
+      if (!k) return false;
+      const status = patch.status ?? k.status;
+      if (!CONTRACT_STATUSES.includes(status)) return false;
+      if (k.status === 'Draft') Object.assign(k, cleanContract({ ...k, ...patch }));
+      if ('docUrl' in patch) k.docUrl = textOf(patch.docUrl).trim();
+      if (status !== k.status) {
+        if (status === 'Sent for signature') Object.assign(k, { sentBy: d.me, sentAt: nowIso() });
+        if (status === 'Signed') k.signedAt = ymdOr(patch.signedAt, teamToday());
+        k.status = status;
+      }
+      if (plan && status === 'Signed') {
+        c.plans.push(cleanPlan({
+          description: plan.description || `${k.platform || 'AssetStack'} subscription`, amount: plan.amount ?? k.annualFee,
+          frequency: plan.frequency || 'annually', nextDate: ymdOr(plan.nextDate, k.startDate || teamToday()), active: true,
+        }, uid()));
+      }
+      return true;
+    }),
+    removeContract: (clientId, contractId) => admin((d) => {
+      const c = findClient(d, clientId);
+      if (!c?.contracts.some((x) => x.id === contractId)) return false;
+      c.contracts = c.contracts.filter((x) => x.id !== contractId);
+      return true;
+    }),
+
+    // ── Your Google account (admins): Gmail for invoices, Drive and Docs for contracts ──
+
+    // → Promise<{ ok: true, url } | { ok: false, error }>: the browser goes to `url` (Google) and comes back to Settings.
+    connectGoogle: () => googleConnectUrl(mode.invoke, window.location.origin),
+    disconnectGoogle: async () => {
+      const ok = await mode.googleDisconnect();
+      await mode.refreshGoogle();
+      return ok;
+    },
+    refreshGoogle: () => mode.refreshGoogle(),
+    // A short email to yourself, from yourself. → Promise<{ ok } | { ok: false, error }>
+    sendTestEmail: async () => {
+      const me = mode.read((s) => s.users.find((u) => u.id === s.me));
+      if (!me?.email) return { ok: false, error: 'Your profile has no email.' };
+      return sendGoogleEmail(mode.invoke, {
+        to: [me.email], subject: 'Cortex test email', text: 'This is a test from Cortex. Invoice emails will come from this address.',
+      });
+    },
 
     // ── Money in, expenses, software costs: admins only ──
 
@@ -789,6 +963,7 @@ function createActions(mutate, mode) {
       return true;
     }),
   };
+  return actions;
 }
 
 // ── Demo mode: localStorage, shared between tabs ───────────────────────────────
@@ -858,11 +1033,21 @@ function DemoProvider({ children }) {
     },
     fileUrl: async (path) => files.current.get(path) || '',
     removeFile: (path) => { files.current.delete(path); },
+    // Google (Gmail, Drive, Docs) needs the server function: live mode only.
+    invoke: async () => ({ ok: false, error: 'Google works in live mode only.' }),
+    googleDisconnect: async () => false,
+    refreshGoogle: async () => {},
   }), [mutate, commit]);
 
-  const value = useMemo(() => ({ state, actions, sync: SAVED }), [state, actions]);
+  const value = useMemo(() => ({ state, actions, sync: SAVED, google: DEMO_GOOGLE }), [state, actions]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
+
+// The signed-in admin's own Google account (Settings → Business): not synced state, read from google_me().
+const DEMO_GOOGLE = { ready: true, demo: true, connected: false, email: '' };
+const googleFrom = (me) => ({
+  ready: true, demo: false, connected: Boolean(me?.google_email), email: me?.google_email || '', connectedAt: me?.connected_at || '',
+});
 
 // ── Live mode: Supabase rows ⇄ state ───────────────────────────────────────────
 
@@ -878,7 +1063,7 @@ function keepOrphans(prev, next, ops) {
 const MODULE_OF = {
   deals: 'pipeline', contacts: 'outreach', emails: 'outreach', sequences: 'outreach', approvals: 'outreach',
   clients: 'clients', client_notes: 'clients', client_tasks: 'clients', invoices: 'clients', invoice_lines: 'clients',
-  client_access: 'clients', billing_plans: 'clients', client_usage: 'clients',
+  client_access: 'clients', billing_plans: 'clients', client_usage: 'clients', client_contacts: 'clients', client_contracts: 'clients',
 };
 function moduleOf(table, row, rows) {
   if (table === 'board_groups' || table === 'items') return row.board_key;
@@ -1142,6 +1327,7 @@ function LiveProvider({ userId, children }) {
   const [phase, setPhase] = useState({ status: 'loading' });
   const [sync, setSync] = useState(SAVED);
   const [attempt, setAttempt] = useState(0);
+  const [google, setGoogle] = useState({ ready: false, demo: false, connected: false, email: '' });
   const engine = useRef(null);
 
   useEffect(() => {
@@ -1183,6 +1369,18 @@ function LiveProvider({ userId, children }) {
       return true;
     });
   }, [phase.status, myZone, userId]);
+
+  // Your Google connection (admins only: google_me() works for staff too, but only admins use it).
+  const refreshGoogle = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.rpc('google_me');
+      setGoogle(error ? { ready: true, demo: false, connected: false, email: '', error: error.message } : googleFrom(data));
+    } catch (e) {
+      setGoogle({ ready: true, demo: false, connected: false, email: '', error: e?.message || 'Unavailable' });
+    }
+  }, []);
+  const ready = phase.status === 'ready';
+  useEffect(() => { if (ready) refreshGoogle(); }, [ready, refreshGoogle]);
 
   const actions = useMemo(() => {
     const fail = (message) => { setSync({ state: 'error', message }); };
@@ -1231,10 +1429,26 @@ function LiveProvider({ userId, children }) {
         }
       },
       removeFile: (path) => { supabase.storage.from(BUCKET).remove([path]).catch(() => {}); },
+      // The google Edge Function (supabase/functions/google). → { ok: true, ...data } | { ok: false, error }
+      invoke: async (name, body) => {
+        try {
+          const { data, error } = await supabase.functions.invoke(name, { body });
+          if (!error) return { ok: true, ...(data || {}) };
+          const detail = await error.context?.json?.().catch(() => null);
+          return { ok: false, error: detail?.error || error.message || 'Google request failed' };
+        } catch (e) {
+          return { ok: false, error: e?.message || 'Google request failed' };
+        }
+      },
+      googleDisconnect: async () => {
+        const { data, error } = await supabase.rpc('google_disconnect');
+        return !error && Boolean(data);
+      },
+      refreshGoogle,
     });
-  }, [mutate]);
+  }, [mutate, refreshGoogle]);
 
-  const value = useMemo(() => ({ state, actions, sync }), [state, actions, sync]);
+  const value = useMemo(() => ({ state, actions, sync, google }), [state, actions, sync, google]);
 
   if (phase.status === 'error') {
     return (

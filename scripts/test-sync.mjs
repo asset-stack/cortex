@@ -54,6 +54,7 @@ const fixture = () => ({
     businessName: 'Example Pty Ltd', abn: '00 000 000 000', address: '1 Example St', email: 'accounts@example.com',
     phone: '0000 000 000', bankAccountName: 'Example', bsb: '000-000', accountNumber: '00000000',
     paymentTermsDays: 14, invoicePrefix: 'EX-',
+    contractTemplate: 'https://docs.google.com/document/d/template-id/edit', contractFolder: 'https://drive.google.com/drive/folders/folder-id',
   },
   boards: {
     projects: {
@@ -84,19 +85,36 @@ const fixture = () => ({
   clients: [
     {
       id: 'c-1', name: 'Client one', group: 'Onboarding', status: 'Onboarding', priority: 'P1', next: 'Kick-off', sector: 'Utilities',
-      contact: U1, team: [U1, U2], lastContact: '2026-10-01', demo: 'Live', keyContact: 'Pat Doe', email: 'pat@example.com',
-      demoUrl: 'https://demo.example.com', avatar: '#3b82f6', abn: '11 111 111 111', billingAddress: '2 Example Rd',
+      contact: U1, team: [U1, U2], lastContact: '2026-10-01', demo: 'Live', demoUrl: 'https://demo.example.com',
+      platformUrl: 'https://client-one.example.com', avatar: '#3b82f6', abn: '11 111 111 111', billingAddress: '2 Example Rd',
+      contacts: [
+        { id: 'pc-1', name: 'Pat Doe', role: 'Asset manager', email: 'pat@example.com', phone: '0400 000 000', billing: false },
+        { id: 'pc-2', name: 'Accounts', role: 'Finance', email: 'accounts@example.com', phone: '', billing: true },
+      ],
+      contracts: [
+        {
+          id: 'k-2', status: 'Draft', title: 'Renewal', docId: 'doc-2', docUrl: 'https://docs.google.com/document/d/doc-2/edit',
+          startDate: '2027-11-01', endDate: '', annualFee: 5000, paymentTerms: 'Invoiced annually in advance', userLimit: '', platform: 'Asset Management',
+          customisations: '', mobileApp: '', governingLaw: 'New South Wales', createdBy: U1, sentBy: '', sentAt: '', signedAt: '',
+        },
+        {
+          id: 'k-1', status: 'Signed', title: 'Software Subscription Agreement', docId: 'doc-1', docUrl: 'https://docs.google.com/document/d/doc-1/edit',
+          startDate: '2026-11-01', endDate: '2027-10-31', annualFee: 4500.5, paymentTerms: 'Invoiced annually in advance, payable within 14 days',
+          userLimit: '1 master user', platform: 'Property Management', customisations: 'Ten per 12-month period', mobileApp: 'Included',
+          governingLaw: 'New South Wales', createdBy: U1, sentBy: U2, sentAt: '2026-10-20T01:00:00.000Z', signedAt: '2026-10-22',
+        },
+      ],
       notes: [
         { id: 'n-2', user: U2, text: 'Newer note', ts: '2026-10-05T00:00:00.000Z' },
         { id: 'n-1', user: U1, text: 'Older note', ts: '2026-10-04T00:00:00.000Z' },
       ],
       tasks: [{ id: 't-1', text: 'Book meeting', done: false }],
       invoices: [
-        { id: 'i-2', number: 'EX-1002', issued: '2026-10-08', due: '', status: 'Awaiting approval', planId: 'bp-1', sentAt: '', paidOn: '', lines: [
+        { id: 'i-2', number: 'EX-1002', issued: '2026-10-08', due: '', status: 'Awaiting approval', planId: 'bp-1', sentAt: '', paidOn: '', sentTo: '', lines: [
           { id: 'l-3', desc: 'Licence', qty: 1, rate: 18450 },
         ] },
         { id: 'i-1', number: 'EX-1001', issued: '2026-09-01', due: '2026-10-01', status: 'Paid', planId: '', sentAt: '2026-09-01T02:00:00.000Z',
-          paidOn: '2026-09-20', lines: [
+          paidOn: '2026-09-20', sentTo: 'accounts@example.com, pat@example.com', lines: [
             { id: 'l-1', desc: 'Capture', qty: '2', rate: '1,000' },
             { id: 'l-2', desc: 'Travel', qty: 1, rate: 250.5 },
           ] },
@@ -107,14 +125,14 @@ const fixture = () => ({
         { id: 'bp-2', description: 'Support', amount: 99.5, frequency: 'annually', nextDate: '', anchorDay: 0, active: false },
       ],
       usage: [
-        { id: 'cu-2', month: '2026-10-01', assets: 5200, sites: 12, seats: 6, notes: 'Import' },
-        { id: 'cu-1', month: '2026-09-01', assets: 3400, sites: 9, seats: 5, notes: '' },
+        { id: 'cu-2', month: '2026-10-01', assets: 5200, sites: 12, seats: 6, credits: 1840.5, notes: 'Import' },
+        { id: 'cu-1', month: '2026-09-01', assets: 3400, sites: 9, seats: 5, credits: 0, notes: '' },
       ],
     },
     {
       id: 'c-0', name: 'Client two', group: 'Active', status: 'Passive', priority: 'P2', next: '', sector: '', contact: '', team: [],
-      lastContact: '', demo: '', keyContact: '', email: '', demoUrl: '', avatar: '#f59e0b', abn: '', billingAddress: '',
-      notes: [], tasks: [], invoices: [], access: [], plans: [], usage: [],
+      lastContact: '', demo: '', demoUrl: '', platformUrl: '', avatar: '#f59e0b', abn: '', billingAddress: '',
+      contacts: [], contracts: [], notes: [], tasks: [], invoices: [], access: [], plans: [], usage: [],
     },
   ],
   contacts: [
@@ -207,7 +225,8 @@ await check('flatten: DB column shapes', () => {
   assert.deepEqual(rows.org_settings.get('1'), {
     id: 1, business_name: 'Example Pty Ltd', abn: '00 000 000 000', address: '1 Example St', email: 'accounts@example.com',
     phone: '0000 000 000', bank_account_name: 'Example', bsb: '000-000', account_number: '00000000', invoice_prefix: 'EX-',
-    payment_terms_days: 14,
+    payment_terms_days: 14, contract_template: 'https://docs.google.com/document/d/template-id/edit',
+    contract_folder: 'https://drive.google.com/drive/folders/folder-id',
   });
   assert.deepEqual(rows.deals.get('d-2'), {
     id: 'd-2', name: 'Client one', sector: 'Utilities', priority: 'P1', stage: 'Won', next_step: '', value: 1500,
@@ -302,7 +321,9 @@ await check('flatten: phase 2 tables and columns', () => {
     id: 'bp-2', client_id: 'c-1', description: 'Support', amount: 99.5, frequency: 'annually', next_date: null, anchor_day: 0, active: false,
     position: 1,
   });
-  assert.deepEqual(rows.client_usage.get('cu-2'), { id: 'cu-2', client_id: 'c-1', month: '2026-10-01', assets: 5200, sites: 12, seats: 6, notes: 'Import' });
+  assert.deepEqual(rows.client_usage.get('cu-2'), {
+    id: 'cu-2', client_id: 'c-1', month: '2026-10-01', assets: 5200, sites: 12, seats: 6, credits: 1840.5, notes: 'Import',
+  });
   assert.deepEqual(rows.routines.get('r-1').weekdays, [1, 2, 3, 4, 5]);
   assert.equal(rows.routines.get('r-1').start_time, '09:00');
   assert.equal(rows.routines.get('r-2').start_time, null);
@@ -324,6 +345,34 @@ await check('flatten: phase 2 tables and columns', () => {
   assert.equal(rows.subscriptions.get('sub-2').renews_on, null);
   assert.deepEqual(rows.time_entries.get('te-2'), {
     id: 'te-2', user_id: U2, day: '2026-10-09', start_time: '10:00', minutes: 60, category: 'Outreach', note: '', source: 'manual', position: 1,
+  });
+});
+
+await check('flatten: client contacts, contracts, platform, credits and sentTo (0004)', () => {
+  const rows = flatten(fixture());
+  assert.equal(rows.clients.get('c-1').platform_url, 'https://client-one.example.com');
+  assert.ok(!('key_contact' in rows.clients.get('c-1')) && !('email' in rows.clients.get('c-1')), 'legacy columns are no longer synced');
+  assert.deepEqual(rows.client_contacts.get('pc-2'), {
+    id: 'pc-2', client_id: 'c-1', position: 1, name: 'Accounts', role: 'Finance', email: 'accounts@example.com', phone: '', billing: true,
+  });
+  assert.equal(rows.client_contacts.get('pc-1').position, 0);
+  // Contracts are added at the top, like invoices: positions count from the end.
+  assert.deepEqual(rows.client_contracts.get('k-1'), {
+    id: 'k-1', client_id: 'c-1', position: 0, status: 'Signed', title: 'Software Subscription Agreement', doc_id: 'doc-1',
+    doc_url: 'https://docs.google.com/document/d/doc-1/edit', start_date: '2026-11-01', end_date: '2027-10-31', annual_fee: 4500.5,
+    payment_terms: 'Invoiced annually in advance, payable within 14 days', user_limit: '1 master user', platform: 'Property Management',
+    customisations: 'Ten per 12-month period', mobile_app: 'Included', governing_law: 'New South Wales', created_by: U1, sent_by: U2,
+    sent_at: '2026-10-20T01:00:00.000Z', signed_at: '2026-10-22',
+  });
+  assert.deepEqual([rows.client_contracts.get('k-2').position, rows.client_contracts.get('k-2').end_date, rows.client_contracts.get('k-2').sent_by],
+    [1, null, null]);
+  assert.equal(rows.invoices.get('i-1').sent_to, 'accounts@example.com, pat@example.com');
+  assert.equal(rows.invoices.get('i-2').sent_to, '');
+  // Both new tables come after clients (FK order) and nest under it (cascade-aware deletes).
+  const order = TABLES.map((t) => t.name);
+  ['client_contacts', 'client_contracts'].forEach((t) => {
+    assert.ok(order.indexOf(t) > order.indexOf('clients'), t);
+    assert.deepEqual(TABLES.find((x) => x.name === t).parent, ['clients', 'client_id']);
   });
 });
 
@@ -476,6 +525,18 @@ await check('diff: plans, usage, payments, expenses and subscriptions', () => {
     'upsert billing_plans bp-1', 'upsert client_usage cu-3', 'upsert expenses x-3', 'upsert payments pay-2', 'upsert subscriptions sub-2',
   ]); // the new expense goes on top without renumbering the others
   assert.equal(ops.find((o) => o.key === 'x-3').row.position, 2);
+});
+
+await check('diff: a new client contact or contract writes only that row; deleting a client deletes them', () => {
+  const added = opsAfter((s) => {
+    s.clients[0].contacts.push({ id: 'pc-3', name: 'New', role: '', email: 'new@example.com', phone: '', billing: false });
+    s.clients[0].contracts.unshift({ ...s.clients[0].contracts[0], id: 'k-3', status: 'Draft', title: 'Another' });
+  });
+  assert.deepEqual(labels(added), ['upsert client_contacts pc-3', 'upsert client_contracts k-3']);
+  assert.equal(added.find((o) => o.key === 'k-3').row.position, 2, 'on top without renumbering the others');
+  const removed = opsAfter((s) => { s.clients.shift(); });
+  ['delete client_contacts pc-1', 'delete client_contacts pc-2', 'delete client_contracts k-1', 'delete client_contracts k-2', 'delete clients c-1']
+    .forEach((l) => assert.ok(labels(removed).includes(l), l));
 });
 
 await check('diff: deleting a plan unlinks its invoices before the plan goes', () => {
@@ -1254,6 +1315,47 @@ await check('automations: ensureTodosLocal adds the Monday bank reminder for adm
   assert.ok(!st.todos.some((t) => t.assignee === 'stu' && t.source === 'automation'), 'staff never get it');
 });
 
+const format = await import('../src/lib/format.js');
+
+await check('automations: "Approve invoices" for admins while any invoice awaits approval, once a day (0004)', () => {
+  const st = workState();
+  st.clients = [{ id: 'cl', name: 'Client', status: 'Active', contact: 'al', invoices: [{ id: 'iv', status: 'Awaiting approval' }] }];
+  auto.ensureTodosLocal(st, '2026-10-13', { me: 'al' });
+  const approve = st.todos.filter((t) => t.ref === 'approve:2026-10-13');
+  assert.equal(approve.length, 1);
+  assert.deepEqual([approve[0].assignee, approve[0].title, approve[0].category, approve[0].source], ['al', auto.APPROVE_TODO_TITLE, 'Clients', 'automation']);
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-13', { me: 'al' }), 0, 'once a day');
+  auto.ensureTodosLocal(st, '2026-10-13', { me: 'stu' });
+  assert.ok(!st.todos.some((t) => t.assignee === 'stu' && t.ref.startsWith('approve:')), 'staff never get it');
+  st.clients[0].invoices[0].status = 'Approved';
+  auto.ensureTodosLocal(st, '2026-10-14', { me: 'al' });
+  assert.ok(!st.todos.some((t) => t.ref === 'approve:2026-10-14'), 'nothing awaiting: no to-do');
+});
+
+await check('automations: clientCreatedLocal gives an admin owner a "Prepare contract" to-do on their own day (0004)', () => {
+  const st = {
+    me: 'al',
+    users: [{ ...person('al', 'admin'), timezone: 'Pacific/Pago_Pago' }, { ...person('stu', 'staff'), timezone: 'Pacific/Kiritimati' },
+      { ...person('su', 'superadmin'), timezone: 'Pacific/Kiritimati' }],
+    clients: [
+      { id: 'c-new', name: ' Example Body Corporate ', status: 'Onboarding', contact: 'su' },
+      { id: 'c-staff', name: 'Staff owned', status: 'Onboarding', contact: 'stu' },
+      { id: 'c-active', name: 'Imported', status: 'Active', contact: 'al' },
+      { id: 'c-blank', name: '  ', status: 'Onboarding', contact: '' },
+    ],
+    todos: [],
+  };
+  const todo = auto.clientCreatedLocal(st, 'c-new');
+  assert.deepEqual([todo.assignee, todo.createdBy, todo.title, todo.category, todo.source, todo.ref],
+    ['su', 'al', 'Prepare contract: Example Body Corporate', 'Clients', 'automation', 'contract:c-new']);
+  assert.equal(todo.day, format.ymdIn('Pacific/Kiritimati'), "the owner's own today");
+  assert.equal(auto.clientCreatedLocal(st, 'c-new'), null, 'once per client and day');
+  assert.equal(auto.clientCreatedLocal(st, 'c-staff').assignee, 'al', 'a staff owner: the admin who added it');
+  assert.equal(auto.clientCreatedLocal(st, 'c-staff', { me: 'stu' }), null, 'staff adding a staff-owned client: nobody');
+  assert.equal(auto.clientCreatedLocal(st, 'c-active'), null, 'only Onboarding clients');
+  assert.equal(auto.clientCreatedLocal(st, 'c-blank').title, 'Prepare contract: new client');
+});
+
 const outreachState = () => ({
   me: 'al',
   users: [person('al', 'admin'), person('stu', 'staff')],
@@ -1265,8 +1367,6 @@ const outreachState = () => ({
   deals: [{ id: 'd0', name: 'Existing', sector: '', value: 5, priority: 'P1', stage: 'Opportunities', contact: 'al', next: '', contactId: '' }],
   todos: [],
 });
-
-const format = await import('../src/lib/format.js');
 
 await check('format: dates and clocks in a time zone', () => {
   const at = new Date('2026-10-12T13:30:00Z'); // Tue 00:30 in Sydney (AEDT), 17:30 Mon in Tbilisi, 21:30 Mon in Manila
@@ -1351,7 +1451,7 @@ await check('automations: generateDueInvoicesLocal catches up every period, numb
   assert.deepEqual(cB.invoices.map((i) => [i.number, i.issued, i.due]), [['EX-1007', '2026-10-12', '2026-10-26'], ['EX-1006', '2025-10-12', '2025-10-26']]);
   assert.deepEqual(cA.invoices.map((i) => [i.number, i.issued]), [['EX-1009', '2026-09-30'], ['EX-1008', '2026-08-31'], ['EX-1005', undefined]]);
   assert.deepEqual(cA.invoices[0], {
-    id: 'id7', number: 'EX-1009', issued: '2026-09-30', due: '2026-10-14', status: 'Awaiting approval', planId: 'pA', sentAt: '', paidOn: '',
+    id: 'id7', number: 'EX-1009', issued: '2026-09-30', due: '2026-10-14', status: 'Awaiting approval', planId: 'pA', sentAt: '', paidOn: '', sentTo: '',
     lines: [{ id: 'id8', desc: 'Plan pA', qty: '1', rate: '2400' }],
   });
   assert.equal(cB.invoices[0].lines[0].rate, '99.5');
@@ -1513,6 +1613,26 @@ if (migrate) {
       [['admin', 'Australia/Sydney'], ['superadmin', 'Australia/Sydney'], ['staff', 'Asia/Manila']], 'a time zone already set is kept');
     const s = createSeed();
     assert.deepEqual(migrate(structuredClone(s)), s);
+  });
+
+  await check('migrate: 0004 turns the key contact / email into a billing contact, once', () => {
+    const p = migrate(phase1());
+    const old = structuredClone(p);
+    old.clients[0].keyContact = 'Dale Example';
+    old.clients[0].email = ' Dale@Example.com ';
+    delete old.clients[0].contacts;
+    delete old.clients[0].contracts;
+    delete old.clients[0].platformUrl;
+    old.clients[0].usage = [{ id: 'u', month: '2026-10-01', assets: 1, sites: 1, seats: 1, notes: '' }];
+    old.clients[0].invoices.forEach((inv) => { delete inv.sentTo; });
+    const m = migrate(old);
+    const c = m.clients[0];
+    assert.deepEqual(c.contacts.map(({ id: _id, ...x }) => x), [{ name: 'Dale Example', role: '', email: 'dale@example.com', phone: '', billing: true }]);
+    assert.ok(!('keyContact' in c) && !('email' in c));
+    assert.deepEqual([c.platformUrl, c.contracts, c.usage[0].credits, c.invoices[0].sentTo], ['', [], 0, '']);
+    assert.deepEqual(migrate(structuredClone(m)), m, 'running it again changes nothing');
+    assert.deepEqual(phase1().clients.map((x) => migrate({ ...phase1(), clients: [{ ...x, keyContact: '', email: '' }] }).clients[0].contacts), [[]],
+      'no key contact: no contacts');
   });
 }
 

@@ -85,7 +85,7 @@ export function generateDueInvoicesLocal(state, today = ymdIn(TEAM_TIMEZONE), { 
     for (let k = 1; date <= today; k++) {
       client.invoices.unshift({
         id: newId(), number: nextInvoiceNumber(state), issued: date, due: addDays(date, terms), status: 'Awaiting approval',
-        planId: plan.id, sentAt: '', paidOn: '',
+        planId: plan.id, sentAt: '', paidOn: '', sentTo: '',
         lines: [{ id: newId(), desc: plan.description, qty: '1', rate: String(Number(plan.amount) || 0) }],
       });
       made++;
@@ -100,6 +100,7 @@ export function generateDueInvoicesLocal(state, today = ymdIn(TEAM_TIMEZONE), { 
 // ── My Work ────────────────────────────────────────────────────────────────────────────────────────────────
 
 export const BANK_TODO_TITLE = "Upload this week's bank screenshot";
+export const APPROVE_TODO_TITLE = 'Approve invoices';
 
 // A to-do with every field set (state never holds null or missing fields).
 export function makeTodo(fields = {}, newId = uid) {
@@ -120,7 +121,8 @@ const hasAutomation = (state, assignee, ref, day) => state.todos
 const RUNS_KEPT_DAYS = 14;
 
 // ensure_todos(day) for `me`: a to-do for each of their active routines that runs on that weekday, and for admins on
-// a Monday the bank screenshot reminder until that week's statement is in. A routine runs once per person and day
+// a Monday the bank screenshot reminder until that week's statement is in, and "Approve invoices" while any invoice
+// awaits approval (0004). A routine runs once per person and day
 // (state.routineRuns, '<day>|<routine id>|<user id>', as the routine_runs table does in the database), so a to-do
 // deleted or moved to another day doesn't come back. → to-dos added.
 export function ensureTodosLocal(state, day = localYmd(), { me = state.me, uid: newId = uid } = {}) {
@@ -156,7 +158,36 @@ export function ensureTodosLocal(state, day = localYmd(), { me = state.me, uid: 
     state.todos.push(makeTodo({ assignee: me, createdBy: me, title: BANK_TODO_TITLE, day, category: 'Admin', source: 'automation', ref }, newId));
     added++;
   }
+
+  const approve = `approve:${day}`;
+  if (adminRole(state, me) && (state.clients || []).some((c) => (c.invoices || []).some((i) => i.status === 'Awaiting approval'))
+    && !hasAutomation(state, me, approve, day)) {
+    state.todos.push(makeTodo({
+      assignee: me, createdBy: me, title: APPROVE_TODO_TITLE, day, category: 'Clients', source: 'automation', ref: approve,
+    }, newId));
+    added++;
+  }
   return added;
+}
+
+// The client_contract_todo trigger (0004): a new client in Onboarding gives its owner, if they're an admin, else `me`
+// if they are, a "Prepare contract" to-do on their own today. Staff can't make contracts. → the to-do, or null.
+export function clientCreatedLocal(state, clientId, { me = state.me, uid: newId = uid } = {}) {
+  const c = (state.clients || []).find((x) => x.id === clientId);
+  if (!c || c.status !== 'Onboarding') return null;
+  const owner = [c.contact, me].find((id) => id && adminRole(state, id));
+  if (!owner) return null;
+  const tz = (state.users || []).find((u) => u.id === owner)?.timezone || TEAM_TIMEZONE;
+  const day = ymdIn(tz);
+  const ref = `contract:${c.id}`;
+  state.todos ||= [];
+  if (hasAutomation(state, owner, ref, day)) return null;
+  const todo = makeTodo({
+    assignee: owner, createdBy: me, title: `Prepare contract: ${String(c.name ?? '').trim() || 'new client'}`, day,
+    category: 'Clients', source: 'automation', ref,
+  }, newId);
+  state.todos.push(todo);
+  return todo;
 }
 
 // ── Outreach → Pipeline ────────────────────────────────────────────────────────────────────────────────────

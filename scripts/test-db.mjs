@@ -2,7 +2,8 @@
 // of a minimal Supabase stub and checks the sign-up gate, triggers and row-level security as
 // different users; then applies 0002_team_workflow.sql on top of the rows those checks leave behind (as on
 // the live database) and checks roles, module access, the board merge, automations, finance and storage; then
-// 0003_timezones_projects_view.sql (Sydney business day, per-person time zones, Projects view-only for staff).
+// 0003_timezones_projects_view.sql (Sydney business day, per-person time zones, Projects view-only for staff); then
+// 0004_clients_google.sql (client contacts and contracts, credits, approve / contract to-dos, Google accounts).
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -14,6 +15,7 @@ const root = new URL('../', import.meta.url);
 const migration = await readFile(new URL('supabase/migrations/0001_cortex.sql', root), 'utf8');
 const migration2 = await readFile(new URL('supabase/migrations/0002_team_workflow.sql', root), 'utf8');
 const migration3 = await readFile(new URL('supabase/migrations/0003_timezones_projects_view.sql', root), 'utf8');
+const migration4 = await readFile(new URL('supabase/migrations/0004_clients_google.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -25,6 +27,7 @@ const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), '
 const SUPABASE_STUB = `
   create role anon nologin;
   create role authenticated nologin;
+  create role service_role nologin bypassrls;
   create schema extensions;
   create schema auth;
   grant usage on schema auth to anon, authenticated;
@@ -1118,85 +1121,6 @@ async function phase2({ alice, boss, early, carol, client, item, invoice, projec
       && staffUpload !== null && staffRename === 0 && staffDelete === 0 && superFiles === 1,
     { bucket, adminUpload, adminFiles, otherBucket, staffFiles, staffUpload, staffRename, staffDelete, superFiles });
 
-  // 22. The sync engine's writes: the superadmin (who may write every table) saves flatten() rows for every synced
-  // table the way PostgREST sends them, and reading them back the way PostgREST returns them (json) gives the same
-  // rows. Catches a column, type or FK order that schema.js and the migrations disagree on, and policies that refuse
-  // a normal save.
-
-  await as(david);
-  const [grp, grp2, itm, cli, inv, pln, con, chn, rtn, stm] = Array.from({ length: 10 }, uid);
-  const flat = flatten({
-    me: david,
-    users: [],
-    org: {},
-    moduleAccess: [{ userId: hello, module: 'outreach', level: 'view' }],
-    boards: {
-      projects: { groups: [{ id: grp, name: 'Sync check', color: '#d6e4ff', items: [{
-        id: itm, name: 'Item', values: { people: [david, alice], status: 'Done', due: '2026-10-30' }, done: true,
-        updates: [{ id: uid(), user: david, text: 'Update', ts: '2026-10-01T03:00:00.000Z' }], subtasks: [{ id: uid(), text: 'Sub', done: true }],
-      }] }] },
-      marketing: { groups: [{ id: grp2, name: 'Sync check', color: '#bfe9ff', items: [] }] },
-    },
-    clients: [{
-      id: cli, name: 'Example Client', group: 'Active', status: 'Active', priority: 'P1', next: 'Call', sector: 'Utilities',
-      contact: david, team: [david, alice], lastContact: '2026-10-01', demo: '', keyContact: 'Pat', email: 'pat@example.com',
-      demoUrl: '', avatar: '#3b82f6', abn: '', billingAddress: '1 Example St',
-      notes: [{ id: uid(), user: david, text: 'Note', ts: '2026-10-02T00:00:00.000Z' }], tasks: [{ id: uid(), text: 'Task', done: false }],
-      invoices: [{
-        id: inv, number: 'SYNC-1001', issued: '2026-10-08', due: '', status: 'Paid', planId: pln, sentAt: '2026-10-08T02:00:00.000Z',
-        paidOn: '2026-10-10', lines: [{ id: uid(), desc: 'Line', qty: '1,000', rate: 0.125 }],
-      }],
-      access: [{ id: uid(), name: 'Pat', email: 'pat@example.com', role: 'Viewer' }],
-      plans: [{ id: pln, description: 'Licence', amount: 1500.5, frequency: 'quarterly', nextDate: '2026-11-01', active: true }],
-      usage: [{ id: uid(), month: '2026-09-01', assets: 1200, sites: 4, seats: 9, notes: 'Pilot' }],
-    }],
-    deals: [{
-      id: uid(), name: 'Example Client', sector: 'Utilities', value: '1,500.50', priority: 'P1', stage: 'Won', contact: alice, next: '',
-      clientId: cli, contactId: con,
-    }],
-    contacts: [{ id: con, name: 'Pat', org: 'Example Org', email: 'pat@example.com', stage: 'Won', status: 'Opened', last: '', owner: alice }],
-    emails: [{ id: uid(), kind: 'sent', contactId: con, contact: 'Pat', subject: 'Hello', snippet: 'Hi', ts: '2026-10-04T00:00:00.000Z' }],
-    sequences: [{ id: uid(), name: 'Intro', steps: 3, enrolled: 2, replyRate: 0.25 }],
-    approvals: [{ id: uid(), contactId: con, contact: 'Pat', subject: 'Draft', body: 'Body', by: david, ts: '2026-10-05T00:00:00.000Z' }],
-    channels: [{ id: chn, name: 'sync-check', members: [david, boss] }],
-    messages: [{ id: uid(), channel: chn, user: david, text: 'hello', ts: '2026-10-06T00:00:00.000Z' }],
-    lastRead: { [david]: { [chn]: '2026-10-06T00:00:00.000Z' } },
-    routines: [{ id: rtn, title: 'Sync routine', category: 'LinkedIn', minutes: 20, assignee: david, weekdays: [1, 3, 5], start: '08:00', active: true }],
-    todos: [{
-      id: uid(), assignee: david, createdBy: david, title: 'Sync to-do', notes: 'Note', day: '2026-10-12', start: '09:30', minutes: 45,
-      category: 'Demos', source: 'routine', routineId: rtn, ref: '', done: true, doneAt: '2026-10-12T01:00:00.000Z',
-    }],
-    bankStatements: [{
-      id: stm, weekStart: '2026-10-05', filePath: `statements/${uid()}-week.png`, note: 'Week 41', uploadedBy: david,
-      createdAt: '2026-10-06T00:00:00.000Z',
-    }],
-    payments: [{ id: uid(), invoiceId: inv, clientId: cli, amount: 1650.55, receivedOn: '2026-10-10', reference: 'EFT 123', statementId: stm }],
-    expenses: [{
-      id: uid(), date: '2026-10-03', vendor: 'Example Hosting', category: 'Software', amount: 110, gst: 10, clientId: cli,
-      receiptPath: `receipts/${uid()}-receipt.pdf`, notes: '', createdBy: david,
-    }],
-    subscriptions: [{
-      id: uid(), name: 'Example Suite', vendor: 'Example Co', category: 'Software', amount: 29.99, cycle: 'monthly', renewsOn: '2026-11-01',
-      active: true, notes: '',
-    }],
-    timeEntries: [{ id: uid(), user: david, day: '2026-10-12', start: '09:00', minutes: 60, category: 'Demos', note: 'Prep', source: 'suggested' }],
-  });
-  const writeErrors = {};
-  const mismatched = {};
-  for (const t of TABLES.filter((x) => !x.update)) { // profiles / org_settings are plain updates (checked in 5. and 20.)
-    const sent = [...flat[t.name].values()];
-    if (!sent.length) { writeErrors[t.name] = 'fixture has no rows'; continue; }
-    const err = await postgrestUpsert(t.name, sent, t);
-    if (err) { writeErrors[t.name] = err; continue; }
-    const back = (await one(`select coalesce(json_agg(x), '[]') as rows from public.${t.name} x`)).rows
-      .map((r) => normalizeRow(t.name, r));
-    const byKey = new Map(back.map((r) => [t.key(r), r]));
-    const diffs = sent.filter((r) => stable(byKey.get(t.key(r))) !== stable(r));
-    if (diffs.length) mismatched[t.name] = { sent: diffs[0], back: byKey.get(t.key(diffs[0])) ?? null };
-  }
-  check('sync: flatten() rows for every synced table save as PostgREST sends them and read back unchanged',
-    !Object.keys(writeErrors).length && !Object.keys(mismatched).length, { writeErrors, mismatched });
-
   // 23. Still nothing for inactive accounts or anon ----------------------------------------------------------
 
   await as(carol);
@@ -1367,13 +1291,333 @@ async function phase3({ alice, boss, david, hello, carol, projectsActive, market
   check('26. the SuperAdmin can still give one staff member edit on Projects', granted === 1, granted);
 
   await as(null);
+  return { alice, boss, david, hello, carol, newcomer, projectsActive, marketingGroup };
+}
+
+// Phase 4: 0004_clients_google.sql on top of 0003 and the rows above ----------------------------------------------
+
+async function applyMigration4() {
+  await as(null);
+  try {
+    await db.exec(migration4);
+    return null;
+  } catch (e) {
+    await db.exec('rollback').catch(() => {});
+    return e.message;
+  }
+}
+
+async function phase4({ alice, boss, david, hello, carol, newcomer }) {
+  // 27. 0004 on a database that already holds rows ---------------------------------------------------------------
+
+  // Clients as 0001-0003 left them: a key contact and email, an email only, neither.
+  await as(null);
+  const legacy = async (name, keyContact, email) => (await one(`insert into clients (name, status, key_contact, email)
+    values ($1, 'Active', $2, $3) returning id`, [name, keyContact, email])).id;
+  const both = await legacy('Legacy Both', 'Pat Example', ' Pat@Example.com ');
+  const emailOnly = await legacy('Legacy Email', '', 'accounts@example.com');
+  const neither = await legacy('Legacy Neither', '', '');
+  const publishedBefore = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'")).n;
+
+  const first = await applyMigration4();
+  const body = migration4.replace(/--.*$/gm, '').trim();
+  check('27. 0004 runs on top of 0003 and its rows, as one transaction', first === null && /^begin;/i.test(body) && /commit;$/i.test(body), first);
+  if (first) return null;
+  const second = await applyMigration4();
+  check('27. 0004 re-runs cleanly', second === null, second);
+  if (second) return null;
+  check("27. 0004 never mentions module_level (test-sync reads the staff defaults from the newest file that does)",
+    !migration4.includes('module_level'));
+
+  const contactsOf = async (client) => rows(`select name, role, email, phone, billing, position from client_contacts
+    where client_id = $1 order by position`, [client]);
+  const moved = { both: await contactsOf(both), emailOnly: await contactsOf(emailOnly), neither: await contactsOf(neither) };
+  const blanked = await one(`select count(*)::int as n from clients where key_contact <> '' or email <> ''`);
+  check("27. each client's key contact / email became one billing contact (trimmed, email lower case); the old fields are blank",
+    stable(moved) === stable({
+      both: [{ name: 'Pat Example', role: '', email: 'pat@example.com', phone: '', billing: true, position: 0 }],
+      emailOnly: [{ name: '', role: '', email: 'accounts@example.com', phone: '', billing: true, position: 0 }],
+      neither: [],
+    }) && blanked.n === 0, { moved, blanked });
+
+  // An old browser tab still writing key_contact after the upgrade: re-running picks it up for clients without
+  // contacts, and never duplicates.
+  await db.query("update clients set key_contact = 'Late Example' where id in ($1, $2)", [both, neither]);
+  await applyMigration4();
+  const rerun = { both: (await contactsOf(both)).length, neither: (await contactsOf(neither)).map((x) => x.name) };
+  check('27. re-running picks up a late key contact for a client with none, and never duplicates',
+    rerun.both === 1 && stable(rerun.neither) === stable(['Late Example']), rerun);
+
+  const cols = await one(`select
+    (select column_default from information_schema.columns where table_name = 'clients' and column_name = 'platform_url') as platform,
+    (select column_default from information_schema.columns where table_name = 'client_usage' and column_name = 'credits') as credits,
+    (select column_default from information_schema.columns where table_name = 'invoices' and column_name = 'sent_to') as sent_to,
+    (select contract_template || '|' || contract_folder from org_settings where id = 1) as org`);
+  check("27. new columns: clients.platform_url '', client_usage.credits 0, invoices.sent_to '', org contract links ''",
+    /''/.test(cols.platform) && cols.credits === '0' && /''/.test(cols.sent_to) && cols.org === '|', cols);
+
+  const noRls = (await rows(`select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname in ('public', 'private') and c.relkind = 'r' and not c.relrowsecurity`)).map((r) => r.relname);
+  const published = await rows(`select tablename from pg_publication_tables where pubname = 'supabase_realtime'
+    and tablename in ('client_contacts', 'client_contracts', 'google_accounts') order by tablename`);
+  const publishedAfter = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'")).n;
+  const touched = (await rows(`select c.relname from pg_trigger t join pg_class c on c.oid = t.tgrelid
+    where t.tgname = 'touch' and c.relname in ('client_contacts', 'client_contracts', 'google_accounts')`)).map((r) => r.relname).sort();
+  check('27. RLS on every table (private.google_accounts too); the two new tables are published to realtime (33), the tokens never',
+    noRls.length === 0 && stable(published.map((r) => r.tablename)) === stable(['client_contacts', 'client_contracts'])
+      && publishedAfter === publishedBefore + 2 && publishedAfter === 33
+      && stable(touched) === stable(['client_contacts', 'client_contracts', 'google_accounts']),
+    { noRls, published, publishedBefore, publishedAfter, touched });
+
+  // 28. Contacts and contracts belong to the clients module ---------------------------------------------------
+
+  const contractRow = "insert into client_contracts (client_id, title, annual_fee) values ($1, 'Agreement', 4500) returning id";
+  await as(boss);
+  const bossContact = await error("insert into client_contacts (client_id, name, email, billing) values ($1, 'Bo Example', 'bo@example.com', true)", [both]);
+  const bossContract = (await one(contractRow, [both])).id;
+  const contract = await one('select status, created_by, start_date, annual_fee from client_contracts where id = $1', [bossContract]);
+  await as(newcomer); // staff, clients view (default)
+  const viewSees = await one(`select (select count(*)::int from client_contacts where client_id = $1) as contacts,
+    (select count(*)::int from client_contracts where client_id = $1) as contracts`, [both]);
+  const viewWrites = {
+    contact: await error("insert into client_contacts (client_id, name) values ($1, 'Nope')", [both]),
+    contract: await error(contractRow, [both]),
+    edit: await affected("update client_contacts set billing = false where client_id = $1", [both]),
+    sign: await affected("update client_contracts set status = 'Signed' where id = $1", [bossContract]),
+    drop: await affected('delete from client_contracts where id = $1', [bossContract]),
+  };
+  await as(alice); // staff with clients edit (17.)
+  const editWrite = await error("insert into client_contacts (client_id, name) values ($1, 'Alice adds')", [both]);
+  const badStatus = await error("update client_contracts set status = 'Pending' where id = $1", [bossContract]);
+  await as(carol);
+  const inactive = await one('select (select count(*)::int from client_contacts) as contacts, (select count(*)::int from client_contracts) as contracts');
+  await db.exec('set role anon');
+  const anon = await error('select * from public.client_contacts');
+  await as(null);
+  check('28. admins add contacts and contracts (Draft, created_by them); staff with view read but cannot write; with edit they can',
+    bossContact === null && contract.status === 'Draft' && contract.created_by === boss && contract.start_date === null
+      && Number(contract.annual_fee) === 4500 && viewSees.contacts >= 2 && viewSees.contracts === 1
+      && typeof viewWrites.contact === 'string' && typeof viewWrites.contract === 'string' && viewWrites.edit === 0
+      && viewWrites.sign === 0 && viewWrites.drop === 0 && editWrite === null && typeof badStatus === 'string',
+    { bossContact, contract, viewSees, viewWrites, editWrite, badStatus });
+  check('28. inactive accounts and anon see no contacts or contracts', inactive.contacts === 0 && inactive.contracts === 0 && anon !== null,
+    { inactive, anon });
+
+  // 29. "Approve invoices" and "Prepare contract" to-dos -----------------------------------------------------
+
+  await as(null);
+  const awaiting = (await one("select count(*)::int as n from invoices where status = 'Awaiting approval'")).n;
+  const tuesday = '2026-11-03';
+  const ensure = async (user, day) => {
+    await as(user);
+    return attempt('select public.ensure_todos($1) as n', [day]);
+  };
+  await ensure(boss, tuesday);
+  const again = await ensure(boss, tuesday);
+  await ensure(newcomer, tuesday);
+  await as(null);
+  const approveTodos = await rows(`select assignee_id, title, category, source from todos where ref = 'approve:' || $1`, [tuesday]);
+  check('29. while invoices await approval, an admin\'s ensure_todos adds "Approve invoices" once a day; staff never get it',
+    awaiting > 0 && again?.n === 0 && approveTodos.length === 1 && approveTodos[0].assignee_id === boss
+      && approveTodos[0].title === 'Approve invoices' && approveTodos[0].category === 'Clients' && approveTodos[0].source === 'automation',
+    { awaiting, again, approveTodos });
+
+  await db.query("update invoices set status = 'Approved' where status = 'Awaiting approval'");
+  const wednesday = await ensure(boss, '2026-11-04');
+  await as(null);
+  const noneLeft = (await one("select count(*)::int as n from todos where ref = 'approve:2026-11-04'")).n;
+  // The rest of ensure_todos is as 0002: a Monday still gives the bank reminder, a routine still runs once.
+  const routine = (await one(`insert into routines (title, category, minutes, assignee_id, weekdays, active)
+    values ('Check the pipeline', 'Meetings', 15, $1, '{1,2,3,4,5}', true) returning id`, [boss])).id;
+  const monday = await ensure(boss, '2026-11-09');
+  const mondayAgain = await ensure(boss, '2026-11-09');
+  await as(null);
+  const mondayTodos = (await rows("select ref, routine_id from todos where assignee_id = $1 and day = '2026-11-09'", [boss]))
+    .map((r) => r.routine_id === routine ? 'routine' : r.ref).sort();
+  const fn = await one("select prosecdef, array_to_string(proconfig, ',') as config from pg_proc where proname = 'ensure_todos'");
+  check('29. nothing awaiting: no approve to-do; routines and the Monday bank reminder work as before; still security definer',
+    wednesday?.n === 0 && noneLeft === 0 && monday?.n === 2 && mondayAgain?.n === 0
+      && stable(mondayTodos) === stable(['bank:2026-11-09', 'routine']) && fn.prosecdef === true && /search_path=public/.test(fn.config),
+    { wednesday, noneLeft, monday, mondayAgain, mondayTodos, fn });
+
+  const contractTodos = async (client) => rows(`select assignee_id, title, category, source, day = public.user_today(assignee_id) as today
+    from todos where ref = 'contract:' || $1`, [client]);
+  const addClient = async (user, name, status, owner) => {
+    await as(user);
+    return (await one('insert into clients (name, status, contact_id) values ($1, $2, $3) returning id', [name, status, owner])).id;
+  };
+  const own = await addClient(boss, ' Example Strata ', 'Onboarding', boss);
+  const staffOwned = await addClient(boss, 'Staff Owned', 'Onboarding', alice);
+  const imported = await addClient(boss, 'Imported Active', 'Active', boss);
+  const byStaff = await addClient(alice, 'Added By Staff', 'Onboarding', alice);
+  const forDavid = await addClient(alice, 'For David', 'Onboarding', david);
+  await as(null);
+  const made = {
+    own: await contractTodos(own), staffOwned: await contractTodos(staffOwned), imported: await contractTodos(imported),
+    byStaff: await contractTodos(byStaff), forDavid: await contractTodos(forDavid),
+  };
+  // The sync engine re-saving an existing client (an upsert that updates) makes no second to-do.
+  await as(boss);
+  const resave = await postgrestUpsert('clients', [{ id: own, name: 'Example Strata', status: 'Onboarding', contact_id: boss }]);
+  await as(null);
+  const afterResave = (await contractTodos(own)).length;
+  check('29. a new Onboarding client gives its admin owner (else the admin who added it) "Prepare contract: <name>" on their own today',
+    made.own.length === 1 && made.own[0].assignee_id === boss && made.own[0].title === 'Prepare contract: Example Strata'
+      && made.own[0].category === 'Clients' && made.own[0].source === 'automation' && made.own[0].today === true
+      && made.staffOwned.length === 1 && made.staffOwned[0].assignee_id === boss
+      && made.imported.length === 0 && made.byStaff.length === 0
+      && made.forDavid.length === 1 && made.forDavid[0].assignee_id === david
+      && resave === null && afterResave === 1,
+    { made, resave, afterResave });
+
+  // 30. Each admin's own Google account ------------------------------------------------------------------------
+
+  await as(boss);
+  const meBefore = await attempt('select public.google_me() as me');
+  const tokenTable = await error('select * from private.google_accounts');
+  const saveAsUser = await error("select public.google_save($1, 'x@assetstackai.com', 'token', 'scope')", [boss]);
+  const readAsUser = await error('select public.google_token($1)', [boss]);
+  await as(newcomer);
+  const staffMe = await attempt('select public.google_me() as me');
+  await as(carol);
+  const inactiveMe = await attempt('select public.google_me() as me');
+  await db.exec('set role anon');
+  const anonMe = await error('select public.google_me()');
+  const anonSave = await error("select public.google_save($1, 'x', 'y', 'z')", [boss]);
+
+  await db.exec('set role service_role');
+  await db.query("select public.google_save($1, 'Boss@AssetStackAI.com', 'refresh-boss', 'gmail.send drive')", [boss]);
+  await db.query("select public.google_save($1, 'super.example@assetstackai.com', 'refresh-david', 'gmail.send drive')", [david]);
+  await db.query("select public.google_save($1, 'boss@assetstackai.com', 'refresh-boss-2', 'gmail.send drive')", [boss]);
+  const token = (await one('select public.google_token($1) as t', [boss])).t;
+  const noToken = (await one('select public.google_token($1) as t', [newcomer])).t;
+  await as(boss);
+  const meAfter = (await one('select public.google_me() as me')).me;
+  const disconnect = (await one('select public.google_disconnect() as ok')).ok;
+  const disconnectAgain = (await one('select public.google_disconnect() as ok')).ok;
+  await as(null);
+  const left = (await rows('select user_id from private.google_accounts')).map((r) => r.user_id);
+  const grants = await one(`select
+    has_function_privilege('authenticated', 'public.google_save(uuid, text, text, text)', 'execute') as user_save,
+    has_function_privilege('authenticated', 'public.google_token(uuid)', 'execute') as user_token,
+    has_function_privilege('service_role', 'public.google_token(uuid)', 'execute') as service_token,
+    has_function_privilege('anon', 'public.google_me()', 'execute') as anon_me,
+    has_schema_privilege('authenticated', 'private', 'usage') as user_private`);
+  check("30. google_me: the caller's own profile and connection (never the token); staff too; inactive and anon refused",
+    meBefore?.me?.uid === boss && meBefore.me.admin === true && meBefore.me.email === 'boss@assetstackai.com' && meBefore.me.google_email === null
+      && staffMe?.me?.admin === false && typeof inactiveMe === 'string' && anonMe !== null
+      && meAfter.google_email === 'boss@assetstackai.com' && !JSON.stringify(meAfter).includes('refresh'),
+    { meBefore, staffMe, inactiveMe, anonMe, meAfter });
+  check('30. tokens: only the secret key (service_role) saves and reads them (one per person, replaced on reconnect); the table is out of reach',
+    tokenTable !== null && saveAsUser !== null && readAsUser !== null && anonSave !== null
+      && token?.refresh_token === 'refresh-boss-2' && token.email === 'boss@assetstackai.com' && noToken === null
+      && grants.user_save === false && grants.user_token === false && grants.service_token === true && grants.anon_me === false
+      && grants.user_private === false,
+    { tokenTable, saveAsUser, readAsUser, anonSave, token, noToken, grants });
+  check('30. google_disconnect removes only your own connection', disconnect === true && disconnectAgain === false
+    && stable(left) === stable([david]), { disconnect, disconnectAgain, left });
+
+  return { alice, boss, david, hello };
+}
+
+// 22. (After the newest migration, since flatten() writes every synced column and table.)
+async function syncWriteCheck({ david, alice, boss, hello }) {
+  // The sync engine's writes: the superadmin (who may write every table) saves flatten() rows for every synced
+  // table the way PostgREST sends them, and reading them back the way PostgREST returns them (json) gives the same
+  // rows. Catches a column, type or FK order that schema.js and the migrations disagree on, and policies that refuse
+  // a normal save.
+
+  await as(david);
+  const [grp, grp2, itm, cli, inv, pln, con, chn, rtn, stm] = Array.from({ length: 10 }, uid);
+  const flat = flatten({
+    me: david,
+    users: [],
+    org: {},
+    moduleAccess: [{ userId: hello, module: 'outreach', level: 'view' }],
+    boards: {
+      projects: { groups: [{ id: grp, name: 'Sync check', color: '#d6e4ff', items: [{
+        id: itm, name: 'Item', values: { people: [david, alice], status: 'Done', due: '2026-10-30' }, done: true,
+        updates: [{ id: uid(), user: david, text: 'Update', ts: '2026-10-01T03:00:00.000Z' }], subtasks: [{ id: uid(), text: 'Sub', done: true }],
+      }] }] },
+      marketing: { groups: [{ id: grp2, name: 'Sync check', color: '#bfe9ff', items: [] }] },
+    },
+    clients: [{
+      id: cli, name: 'Example Client', group: 'Active', status: 'Active', priority: 'P1', next: 'Call', sector: 'Utilities',
+      contact: david, team: [david, alice], lastContact: '2026-10-01', demo: '', demoUrl: '', platformUrl: 'https://example-client.example.com',
+      avatar: '#3b82f6', abn: '', billingAddress: '1 Example St',
+      contacts: [{ id: uid(), name: 'Pat', role: 'Finance', email: 'pat@example.com', phone: '0400 000 000', billing: true }],
+      contracts: [{
+        id: uid(), status: 'Signed', title: 'Software Subscription Agreement', docId: 'doc', docUrl: 'https://docs.google.com/document/d/doc/edit',
+        startDate: '2026-11-01', endDate: '2027-10-31', annualFee: 4500.5, paymentTerms: 'Invoiced annually in advance', userLimit: '1 master user',
+        platform: 'Property Management', customisations: 'Ten', mobileApp: 'Included', governingLaw: 'New South Wales', createdBy: david,
+        sentBy: alice, sentAt: '2026-10-20T01:00:00.000Z', signedAt: '2026-10-22',
+      }],
+      notes: [{ id: uid(), user: david, text: 'Note', ts: '2026-10-02T00:00:00.000Z' }], tasks: [{ id: uid(), text: 'Task', done: false }],
+      invoices: [{
+        id: inv, number: 'SYNC-1001', issued: '2026-10-08', due: '', status: 'Paid', planId: pln, sentAt: '2026-10-08T02:00:00.000Z',
+        paidOn: '2026-10-10', sentTo: 'pat@example.com', lines: [{ id: uid(), desc: 'Line', qty: '1,000', rate: 0.125 }],
+      }],
+      access: [{ id: uid(), name: 'Pat', email: 'pat@example.com', role: 'Viewer' }],
+      plans: [{ id: pln, description: 'Licence', amount: 1500.5, frequency: 'quarterly', nextDate: '2026-11-01', active: true }],
+      usage: [{ id: uid(), month: '2026-09-01', assets: 1200, sites: 4, seats: 9, credits: 1840.25, notes: 'Pilot' }],
+    }],
+    deals: [{
+      id: uid(), name: 'Example Client', sector: 'Utilities', value: '1,500.50', priority: 'P1', stage: 'Won', contact: alice, next: '',
+      clientId: cli, contactId: con,
+    }],
+    contacts: [{ id: con, name: 'Pat', org: 'Example Org', email: 'pat@example.com', stage: 'Won', status: 'Opened', last: '', owner: alice }],
+    emails: [{ id: uid(), kind: 'sent', contactId: con, contact: 'Pat', subject: 'Hello', snippet: 'Hi', ts: '2026-10-04T00:00:00.000Z' }],
+    sequences: [{ id: uid(), name: 'Intro', steps: 3, enrolled: 2, replyRate: 0.25 }],
+    approvals: [{ id: uid(), contactId: con, contact: 'Pat', subject: 'Draft', body: 'Body', by: david, ts: '2026-10-05T00:00:00.000Z' }],
+    channels: [{ id: chn, name: 'sync-check', members: [david, boss] }],
+    messages: [{ id: uid(), channel: chn, user: david, text: 'hello', ts: '2026-10-06T00:00:00.000Z' }],
+    lastRead: { [david]: { [chn]: '2026-10-06T00:00:00.000Z' } },
+    routines: [{ id: rtn, title: 'Sync routine', category: 'LinkedIn', minutes: 20, assignee: david, weekdays: [1, 3, 5], start: '08:00', active: true }],
+    todos: [{
+      id: uid(), assignee: david, createdBy: david, title: 'Sync to-do', notes: 'Note', day: '2026-10-12', start: '09:30', minutes: 45,
+      category: 'Demos', source: 'routine', routineId: rtn, ref: '', done: true, doneAt: '2026-10-12T01:00:00.000Z',
+    }],
+    bankStatements: [{
+      id: stm, weekStart: '2026-10-05', filePath: `statements/${uid()}-week.png`, note: 'Week 41', uploadedBy: david,
+      createdAt: '2026-10-06T00:00:00.000Z',
+    }],
+    payments: [{ id: uid(), invoiceId: inv, clientId: cli, amount: 1650.55, receivedOn: '2026-10-10', reference: 'EFT 123', statementId: stm }],
+    expenses: [{
+      id: uid(), date: '2026-10-03', vendor: 'Example Hosting', category: 'Software', amount: 110, gst: 10, clientId: cli,
+      receiptPath: `receipts/${uid()}-receipt.pdf`, notes: '', createdBy: david,
+    }],
+    subscriptions: [{
+      id: uid(), name: 'Example Suite', vendor: 'Example Co', category: 'Software', amount: 29.99, cycle: 'monthly', renewsOn: '2026-11-01',
+      active: true, notes: '',
+    }],
+    timeEntries: [{ id: uid(), user: david, day: '2026-10-12', start: '09:00', minutes: 60, category: 'Demos', note: 'Prep', source: 'suggested' }],
+  });
+  const writeErrors = {};
+  const mismatched = {};
+  for (const t of TABLES.filter((x) => !x.update)) { // profiles / org_settings are plain updates (checked in 5. and 20.)
+    const sent = [...flat[t.name].values()];
+    if (!sent.length) { writeErrors[t.name] = 'fixture has no rows'; continue; }
+    const err = await postgrestUpsert(t.name, sent, t);
+    if (err) { writeErrors[t.name] = err; continue; }
+    const back = (await one(`select coalesce(json_agg(x), '[]') as rows from public.${t.name} x`)).rows
+      .map((r) => normalizeRow(t.name, r));
+    const byKey = new Map(back.map((r) => [t.key(r), r]));
+    const diffs = sent.filter((r) => stable(byKey.get(t.key(r))) !== stable(r));
+    if (diffs.length) mismatched[t.name] = { sent: diffs[0], back: byKey.get(t.key(diffs[0])) ?? null };
+  }
+  check('sync: flatten() rows for every synced table save as PostgREST sends them and read back unchanged',
+    !Object.keys(writeErrors).length && !Object.keys(mismatched).length, { writeErrors, mismatched });
+
+  await as(null);
 }
 
 // An unexpected exception (e.g. a policy now raising where a check expected 0 rows) is a failure too.
 try {
   const ctx = await main();
   const ctx2 = ctx && await phase2(ctx);
-  if (ctx2) await phase3(ctx2);
+  const ctx3 = ctx2 && await phase3(ctx2);
+  const ctx4 = ctx3 && await phase4(ctx3);
+  if (ctx4) await syncWriteCheck(ctx4);
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);
 }

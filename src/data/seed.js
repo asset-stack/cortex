@@ -4,7 +4,7 @@
 // placeholders (example.com). Never put real client names, ABNs, bank or contact details in this file.
 // Relative imports with extensions, so scripts/test-sync.mjs can load this file in Node.
 import {
-  addDays, addMonths, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isoDow, makeTodo,
+  addDays, addMonths, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isoDow, makeTodo, uid,
 } from '../lib/automations.js';
 import { TEAM_TIMEZONE, localYmd } from '../lib/format.js';
 import { withPeople } from './boards.js';
@@ -26,7 +26,7 @@ export const USERS = [
 // Business details for invoices. Left blank in the demo: the real ones are entered in Settings.
 export const ORG = {
   businessName: 'AssetStack', abn: '', address: '', email: '', phone: '', bankAccountName: '', bsb: '', accountNumber: '',
-  paymentTermsDays: 30, invoicePrefix: 'INV-',
+  paymentTermsDays: 30, invoicePrefix: 'INV-', contractTemplate: '', contractFolder: '',
 };
 
 const item = (name, values, extra = {}) => ({
@@ -85,13 +85,21 @@ const deal = (name, sector, value, priority, stage, contact, next, contactId = '
 });
 
 const invoice = (number, issued, due, status, desc, rate, extra = {}) => ({
-  id: id('i'), number, issued, due, status, planId: '', sentAt: '', paidOn: '',
+  id: id('i'), number, issued, due, status, planId: '', sentAt: '', paidOn: '', sentTo: '',
   lines: [{ id: id('l'), desc, qty: 1, rate }], ...extra,
 });
 const plan = (description, amount, frequency, nextDate, active = true) => ({
   id: id('bp'), description, amount, frequency, nextDate, anchorDay: nextDate ? Number(nextDate.slice(8, 10)) : 0, active,
 });
-const usage = (month, assets, sites, seats, notes = '') => ({ id: id('cu'), month, assets, sites, seats, notes });
+const usage = (month, assets, sites, seats, credits = 0, notes = '') => ({ id: id('cu'), month, assets, sites, seats, credits, notes });
+// A client's own people (client.contacts): invoices go to those marked billing.
+const clientPerson = (name, role, email, billing = false, phone = '') => ({ id: id('pc'), name, role, email, phone, billing });
+const contract = (fields) => ({
+  id: id('k'), status: 'Draft', title: 'Software Subscription Agreement', docId: '', docUrl: '', startDate: '', endDate: '',
+  annualFee: 0, paymentTerms: 'Invoiced annually in advance, payable within 14 days', userLimit: '1 master user & unlimited view only',
+  platform: 'AssetStack - Property Management', customisations: 'Ten per 12-month period (clause 6)', mobileApp: 'Included',
+  governingLaw: 'New South Wales', createdBy: 'david', sentBy: '', sentAt: '', signedAt: '', ...fields,
+});
 
 function clients(today) {
   const thisMonth = `${today.slice(0, 7)}-01`;
@@ -102,8 +110,16 @@ function clients(today) {
     {
       id: id('c'), name: 'Westbay Council', group: 'Onboarding', status: 'Onboarding', priority: 'P1',
       next: 'David to finalise onboarding meeting', sector: 'Government', contact: 'josh', team: ['josh', 'david'],
-      lastContact: '2026-05-19', demo: 'Live site with client', keyContact: 'Alex Taylor', email: 'alex.taylor@example.com',
-      demoUrl: 'https://demo.example.com', avatar: '#3b82f6', abn: '', billingAddress: '',
+      lastContact: '2026-05-19', demo: 'Live site with client', demoUrl: 'https://demo.example.com',
+      platformUrl: 'https://westbay.example.com', avatar: '#3b82f6', abn: '', billingAddress: '',
+      contacts: [
+        clientPerson('Alex Taylor', 'Asset manager', 'alex.taylor@example.com', false, '0400 000 001'),
+        clientPerson('Accounts payable', 'Finance', 'accounts.westbay@example.com', true),
+      ],
+      contracts: [contract({
+        status: 'Sent for signature', startDate: '2026-11-01', endDate: '2027-10-31', annualFee: 28800, platform: 'AssetStack - Asset Management',
+        paymentTerms: 'Invoiced monthly in advance, payable within 30 days', sentBy: 'josh', sentAt: hoursAgo(30),
+      })],
       notes: [
         { id: id('n'), user: 'david', text: 'Kick-off went well. Alex wants the asset register imported before training.', ts: hoursAgo(72) },
         { id: id('n'), user: 'josh', text: 'Sent the capability statement and onboarding plan.', ts: hoursAgo(120) },
@@ -121,12 +137,15 @@ function clients(today) {
         { id: id('a'), name: 'Josh', email: 'josh@example.com', role: 'AssetStack' },
       ],
       plans: [westbayPlan],
-      usage: [usage('2026-10-01', 5200, 12, 6, 'Asset register import'), usage('2026-09-01', 3400, 9, 5), usage('2026-08-01', 1250, 4, 3)],
+      usage: [
+        usage('2026-10-01', 5200, 12, 6, 1840, 'Asset register import'), usage('2026-09-01', 3400, 9, 5, 1210), usage('2026-08-01', 1250, 4, 3, 430),
+      ],
     },
     {
       id: id('c'), name: 'Northside Diocese', group: 'Active', status: 'Proposal sent', priority: 'P1',
       next: 'Josh to send scope', sector: 'Healthcare', contact: 'josh', team: ['hello', 'david', 'josh'],
-      lastContact: '2026-05-17', demo: 'Demo with client', keyContact: 'Jordan Price', email: 'jordan.price@example.com', demoUrl: '', avatar: '#6366f1', abn: '', billingAddress: '',
+      lastContact: '2026-05-17', demo: 'Demo with client', demoUrl: '', platformUrl: '', avatar: '#6366f1', abn: '', billingAddress: '',
+      contacts: [clientPerson('Jordan Price', 'Facilities lead', 'jordan.price@example.com', true)], contracts: [],
       notes: [], tasks: [{ id: id('t'), text: 'Send scope document', done: false }], invoices: [],
       access: [{ id: id('a'), name: 'Jordan Price', email: 'jordan.price@example.com', role: 'Client admin' }, { id: id('a'), name: 'Hello', email: 'hello@example.com', role: 'AssetStack' }],
       plans: [plan('Support retainer (from signing)', 1800, 'monthly', '', false)],
@@ -135,21 +154,28 @@ function clients(today) {
     {
       id: id('c'), name: 'Coastal Rail', group: 'Active', status: 'Passive', priority: 'P2',
       next: 'Re-send demo link (blocked on their network)', sector: 'Transport', contact: 'hello', team: ['hello'],
-      lastContact: '2026-08-11', demo: 'Re-send demo link', keyContact: 'Casey Ng', email: 'casey.ng@example.com', demoUrl: '', avatar: '#f59e0b', abn: '', billingAddress: '',
+      lastContact: '2026-08-11', demo: 'Re-send demo link', demoUrl: '', platformUrl: '', avatar: '#f59e0b', abn: '', billingAddress: '',
+      contacts: [clientPerson('Casey Ng', 'Senior engineer', 'casey.ng@example.com', true)], contracts: [],
       notes: [{ id: id('n'), user: 'hello', text: 'Spoke with their senior engineer. Previous demo link would not open on their network.', ts: hoursAgo(1400) }],
       tasks: [], invoices: [], access: [], plans: [], usage: [],
     },
     {
       id: id('c'), name: 'Harbour Construction', group: 'Active', status: 'Active', priority: 'P2',
       next: 'Pilot running on two sites', sector: 'Construction', contact: 'david', team: ['david', 'hello'],
-      lastContact: '2026-10-02', demo: 'Pilot', keyContact: 'Jamie Park', email: 'jamie.park@example.com', demoUrl: '', avatar: '#ef4444', abn: '', billingAddress: '',
+      lastContact: '2026-10-02', demo: 'Pilot', demoUrl: '', platformUrl: 'https://harbour.example.com', avatar: '#ef4444', abn: '', billingAddress: '',
+      contacts: [clientPerson('Jamie Park', 'Project director', 'jamie.park@example.com', true)],
+      contracts: [contract({
+        status: 'Signed', startDate: '2026-07-01', endDate: '2027-06-30', annualFee: 29000, platform: 'AssetStack - Construction',
+        paymentTerms: 'Invoiced quarterly in advance, payable within 30 days', createdBy: 'david', sentBy: 'david',
+        sentAt: '2026-06-20T01:00:00.000Z', signedAt: '2026-06-24',
+      })],
       notes: [], tasks: [],
       invoices: [invoice('INV-1014', '2026-09-12', '2026-10-12', 'Paid', 'Pilot licence (quarterly)', 7250, {
         planId: harbourPlan.id, sentAt: '2026-09-12T01:00:00.000Z', paidOn: '2026-10-06',
       })],
       access: [{ id: id('a'), name: 'Jamie Park', email: 'jamie.park@example.com', role: 'Client admin' }],
       plans: [harbourPlan],
-      usage: [usage('2026-10-01', 960, 2, 4), usage('2026-09-01', 820, 2, 4, 'Pilot')],
+      usage: [usage('2026-10-01', 960, 2, 4, 310), usage('2026-09-01', 820, 2, 4, 280, 'Pilot')],
     },
   ];
 }
@@ -307,7 +333,6 @@ export function createSeed() {
   todo({ assignee: 'hello', createdBy: 'josh', title: 'Golf Day photos to the Marketing board', minutes: 30, category: 'Marketing' });
   todo({ assignee: 'hello', createdBy: 'josh', title: 'Book a room for Thursday onboarding', minutes: 15, category: 'Admin', done: true, doneAt: new Date(now).toISOString() });
   todo({ assignee: 'josh', createdBy: 'josh', title: 'Prepare Shire of Southcliff walkthrough', start: '10:00', minutes: 60, category: 'Demos' });
-  todo({ assignee: 'david', createdBy: 'david', title: "Approve this month's invoices", minutes: 20, category: 'Clients' });
   return state;
 }
 
@@ -364,7 +389,18 @@ export function migrate(data) {
     c.plans ??= [];
     c.plans.forEach((p) => { p.anchorDay ??= /^\d{4}-\d{2}-\d{2}$/.test(p.nextDate || '') ? Number(p.nextDate.slice(8, 10)) : 0; });
     c.usage ??= [];
-    (c.invoices ||= []).forEach((inv) => { inv.planId ??= ''; inv.sentAt ??= ''; inv.paidOn ??= ''; });
+    c.usage.forEach((u) => { u.credits ??= 0; });
+    (c.invoices ||= []).forEach((inv) => { inv.planId ??= ''; inv.sentAt ??= ''; inv.paidOn ??= ''; inv.sentTo ??= ''; });
+    // 0004: the key contact / email become the client's first, billing contact; platform link and contracts are new.
+    if (!Array.isArray(c.contacts)) {
+      const name = String(c.keyContact ?? '').trim();
+      const email = String(c.email ?? '').trim().toLowerCase();
+      c.contacts = name || email ? [{ id: uid(), name, role: '', email, phone: '', billing: true }] : [];
+    }
+    delete c.keyContact;
+    delete c.email;
+    c.platformUrl ??= '';
+    c.contracts ??= [];
   });
   COLLECTIONS.forEach((k) => { data[k] ??= []; });
   // Demo only: which routine runs ensureTodosLocal has made (the database's routine_runs), from the to-dos older

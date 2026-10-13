@@ -7,8 +7,9 @@ import { useStore } from '@/data/store';
 import { INVOICE_STATUS } from '@/data/boards';
 import { useAccess } from '@/lib/access';
 import { LabelPicker } from '@/components/ui';
-import { daysBetween, formatAbn, formatBsb, fullDate, invoiceTotals, isBadAmount, money2, paidTowards, parseAmount, unitMoney } from '@/lib/format';
+import { fullDate, invoiceTotals, isBadAmount, money2, paidTowards } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { taxInvoiceModel } from '@/lib/taxInvoice';
 import { ADMIN_STATUSES, UNISSUED, hasBadAmounts } from './shared';
 
 const str = (v) => String(v ?? '').trim();
@@ -16,39 +17,32 @@ const str = (v) => String(v ?? '').trim();
 // Staff never move an invoice to (or away from) the statuses only admins set.
 const STAFF_STATUS = Object.fromEntries(Object.entries(INVOICE_STATUS).filter(([s]) => !ADMIN_STATUSES.includes(s)));
 
-// The printed copy (Print / PDF): an Australian tax invoice. Hidden on screen and in an ordinary browser print;
-// shown only for its own Print / PDF (html.printing-invoice in index.css, which also styles .tax-invoice).
-export function TaxInvoice({ c, inv, org, t }) {
-  const abn = str(org.abn);
-  const kind = abn ? 'Tax invoice' : 'Invoice'; // without the supplier's ABN it isn't a valid tax invoice
-  // Terms come from the invoice's own dates, so the printed copy can't contradict itself if Settings change later.
-  const orgDays = parseInt(org.paymentTermsDays, 10);
-  const days = daysBetween(inv.issued, inv.due) ?? (orgDays >= 0 ? orgDays : 30);
-  const contact = [str(org.email), str(org.phone)].filter(Boolean).join(' · ');
-  const bank = [['Account name', str(org.bankAccountName)], ['BSB', formatBsb(org.bsb)], ['Account number', str(org.accountNumber)]].filter(([, v]) => v);
+// The printed copy (Print / PDF): an Australian tax invoice, from the same model as the emailed PDF
+// (src/lib/taxInvoice.js). Hidden on screen and in an ordinary browser print; shown only for its own Print / PDF
+// (html.printing-invoice in index.css, which also styles .tax-invoice).
+export function TaxInvoice({ c, inv, org }) {
+  const m = taxInvoiceModel({ client: c, invoice: inv, org });
   return (
     <div className="tax-invoice hidden">
       <header className="ti-row">
-        <h1>{UNISSUED.includes(inv.status) ? `Draft ${kind.toLowerCase()}` : kind}</h1>
+        <h1>{m.title}</h1>
         <div className="ti-supplier">
-          <div className="ti-name">{str(org.businessName) || 'AssetStack'}</div>
-          {abn && <div>ABN {formatAbn(abn)}</div>}
-          {str(org.address) && <div className="ti-pre">{str(org.address)}</div>}
-          {contact && <div>{contact}</div>}
+          <div className="ti-name">{m.supplier.name}</div>
+          {m.supplier.abn && <div>{m.supplier.abn}</div>}
+          {m.supplier.address && <div className="ti-pre">{m.supplier.address}</div>}
+          {m.supplier.contact && <div>{m.supplier.contact}</div>}
         </div>
       </header>
       <section className="ti-row ti-parties">
         <div>
           <h2>Bill to</h2>
-          <div className="ti-name">{c.name}</div>
-          {str(c.abn) && <div>ABN {formatAbn(c.abn)}</div>}
-          {str(c.billingAddress) && <div className="ti-pre">{str(c.billingAddress)}</div>}
+          <div className="ti-name">{m.billTo.name}</div>
+          {m.billTo.abn && <div>{m.billTo.abn}</div>}
+          {m.billTo.address && <div className="ti-pre">{m.billTo.address}</div>}
+          {m.billTo.attn && <div>{m.billTo.attn}</div>}
         </div>
         <dl className="ti-meta">
-          <dt>Invoice number</dt><dd>{inv.number}</dd>
-          <dt>Issue date</dt><dd>{fullDate(inv.issued)}</dd>
-          <dt>Due date</dt><dd>{fullDate(inv.due)}</dd>
-          {['Paid', 'Overdue', 'Void'].includes(inv.status) && <><dt>Status</dt><dd>{inv.status}</dd></>}
+          {m.meta.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}
         </dl>
       </section>
       <table className="ti-lines">
@@ -56,28 +50,24 @@ export function TaxInvoice({ c, inv, org, t }) {
           <tr><th>Description</th><th className="num">Qty</th><th className="num">Unit price (ex GST)</th><th className="num">GST</th><th className="num">Amount (inc GST)</th></tr>
         </thead>
         <tbody>
-          {inv.lines.map((l, i) => (
-            <tr key={l.id}>
-              <td className="ti-pre">{l.desc}</td><td className="num">{str(l.qty)}</td><td className="num">{unitMoney(parseAmount(l.rate) || 0)}</td>
-              <td className="num">{money2(t.lines[i].gst)}</td><td className="num">{money2(t.lines[i].inc)}</td>
+          {m.lines.map((l, i) => (
+            <tr key={inv.lines[i].id}>
+              <td className="ti-pre">{l.desc}</td><td className="num">{l.qty}</td><td className="num">{l.unit}</td>
+              <td className="num">{l.gst}</td><td className="num">{l.inc}</td>
             </tr>
           ))}
         </tbody>
       </table>
       <table className="ti-totals">
         <tbody>
-          <tr><th>Subtotal (ex GST)</th><td className="num">{money2(t.subtotal)}</td></tr>
-          <tr><th>GST 10%</th><td className="num">{money2(t.gst)}</td></tr>
-          <tr className="ti-total"><th>Total (inc GST)</th><td className="num">{money2(t.total)}</td></tr>
+          {m.totals.map(([k, v], i) => <tr key={k} className={i === m.totals.length - 1 ? 'ti-total' : undefined}><th>{k}</th><td className="num">{v}</td></tr>)}
         </tbody>
       </table>
-      <p className="ti-gst-note">Total includes GST of {money2(t.gst)}</p>
+      <p className="ti-gst-note">{m.gstNote}</p>
       <section className="ti-pay">
         <h2>Payment</h2>
         <dl className="ti-meta">
-          {bank.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}
-          <dt>Reference</dt><dd>{inv.number}</dd>
-          <dt>Terms</dt><dd>{days === 0 ? 'Due on receipt' : `Due in ${days} ${days === 1 ? 'day' : 'days'}`}</dd>
+          {m.payment.map(([k, v]) => <Fragment key={k}><dt>{k}</dt><dd>{v}</dd></Fragment>)}
         </dl>
       </section>
     </div>
@@ -111,7 +101,7 @@ export function PrintSheet({ c, inv, onDone }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return createPortal(
     <div ref={ref} className="invoice-card print-sheet" aria-hidden="true">
-      <TaxInvoice c={c} inv={inv} org={state.org || {}} t={invoiceTotals(inv)} />
+      <TaxInvoice c={c} inv={inv} org={state.org || {}} />
     </div>,
     document.body,
   );
@@ -227,7 +217,7 @@ export function InvoiceEditor({ c, inv }) {
           </div>
         )}
       </div>
-      <TaxInvoice c={c} inv={inv} org={org} t={t} />
+      <TaxInvoice c={c} inv={inv} org={org} />
     </div>
   );
 }

@@ -6,7 +6,7 @@ const BOARD_KEYS = ['projects', 'marketing']; // the board_groups.board_key chec
 
 const DEFAULT_ORG = {
   businessName: '', abn: '', address: '', email: '', phone: '', bankAccountName: '', bsb: '', accountNumber: '',
-  paymentTermsDays: 30, invoicePrefix: 'INV-',
+  paymentTermsDays: 30, invoicePrefix: 'INV-', contractTemplate: '', contractFolder: '',
 };
 
 // Column converters. Rows built from state (flatten) and rows read from Postgres (normalizeRow) go through
@@ -49,15 +49,16 @@ const COLUMNS = {
   module_access: { user_id: 'id', module: t, level: t },
   org_settings: {
     id: 'int', business_name: t, abn: t, address: t, email: t, phone: t, bank_account_name: t, bsb: t,
-    account_number: t, invoice_prefix: t, payment_terms_days: 'int',
+    account_number: t, invoice_prefix: t, payment_terms_days: 'int', contract_template: t, contract_folder: t,
   },
   board_groups: { id: 'id', board_key: t, name: t, color: t, position: 'int' },
   items: { id: 'id', board_key: t, group_id: 'id', position: 'int', name: t, values: 'json', done: 'bool' },
   item_updates: { id: 'id', item_id: 'id', user_id: 'fk', text: t, created_at: 'ts' },
   subtasks: { id: 'id', item_id: 'id', position: 'int', text: t, done: 'bool' },
+  // key_contact / email are no longer synced: 0004 moved them into client_contacts.
   clients: {
     id: 'id', name: t, group_name: t, status: t, priority: t, next_step: t, sector: t, contact_id: 'fk', team: 'uuids',
-    last_contact: 'date', demo: t, key_contact: t, email: t, demo_url: t, avatar: t, abn: t, billing_address: t, position: 'int',
+    last_contact: 'date', demo: t, demo_url: t, platform_url: t, avatar: t, abn: t, billing_address: t, position: 'int',
   },
   deals: {
     id: 'id', name: t, sector: t, priority: t, stage: t, next_step: t, value: 'num', owner_id: 'fk', client_id: 'fk', contact_id: 'fk',
@@ -72,11 +73,17 @@ const COLUMNS = {
   },
   invoices: {
     id: 'id', client_id: 'id', number: t, issued: 'date', due: 'date', status: t, plan_id: 'fk', sent_at: 'ts', paid_on: 'date',
-    position: 'int',
+    sent_to: t, position: 'int',
   },
   invoice_lines: { id: 'id', invoice_id: 'id', position: 'int', description: t, qty: t, rate: t },
   client_access: { id: 'id', client_id: 'id', position: 'int', name: t, email: t, role: t },
-  client_usage: { id: 'id', client_id: 'id', month: 'date', assets: 'int', sites: 'int', seats: 'int', notes: t },
+  client_usage: { id: 'id', client_id: 'id', month: 'date', assets: 'int', sites: 'int', seats: 'int', credits: 'num', notes: t },
+  client_contacts: { id: 'id', client_id: 'id', position: 'int', name: t, role: t, email: t, phone: t, billing: 'bool' },
+  client_contracts: {
+    id: 'id', client_id: 'id', position: 'int', status: t, title: t, doc_id: t, doc_url: t, start_date: 'date', end_date: 'date',
+    annual_fee: 'num', payment_terms: t, user_limit: t, platform: t, customisations: t, mobile_app: t, governing_law: t,
+    created_by: 'fk', sent_by: 'fk', sent_at: 'ts', signed_at: 'date',
+  },
   bank_statements: { id: 'id', week_start: 'date', file_path: t, note: t, uploaded_by: 'fk', created_at: 'ts' },
   payments: { id: 'id', invoice_id: 'fk', client_id: 'id', amount: 'num', received_on: 'date', reference: t, statement_id: 'fk' },
   expenses: {
@@ -133,6 +140,11 @@ export const TABLES = [
   { name: 'invoice_lines', key: byId, parent: ['invoices', 'invoice_id'] },
   { name: 'client_access', key: byId, parent: ['clients', 'client_id'] },
   { name: 'client_usage', key: byId, parent: ['clients', 'client_id'] },
+  { name: 'client_contacts', key: byId, parent: ['clients', 'client_id'] },
+  {
+    name: 'client_contracts', key: byId, parent: ['clients', 'client_id'],
+    setNull: { created_by: 'profiles', sent_by: 'profiles' },
+  },
   { name: 'bank_statements', key: byId },
   // After invoices and bank_statements.
   { name: 'payments', key: byId, setNull: { invoice_id: 'invoices', statement_id: 'bank_statements' } },
@@ -188,6 +200,7 @@ export function flatten(state) {
     id: 1, business_name: org.businessName, abn: org.abn, address: org.address, email: org.email, phone: org.phone,
     bank_account_name: org.bankAccountName, bsb: org.bsb, account_number: org.accountNumber,
     invoice_prefix: org.invoicePrefix ?? DEFAULT_ORG.invoicePrefix, payment_terms_days: org.paymentTermsDays ?? DEFAULT_ORG.paymentTermsDays,
+    contract_template: org.contractTemplate, contract_folder: org.contractFolder,
   });
 
   BOARD_KEYS.forEach((board) => (state.boards?.[board]?.groups || []).forEach((g, gi) => {
@@ -214,15 +227,25 @@ export function flatten(state) {
   (state.clients || []).forEach((c, ci) => {
     put('clients', {
       id: c.id, name: c.name, group_name: c.group, status: c.status, priority: c.priority, next_step: c.next, sector: c.sector,
-      contact_id: c.contact, team: c.team, last_contact: c.lastContact, demo: c.demo, key_contact: c.keyContact, email: c.email,
-      demo_url: c.demoUrl, avatar: c.avatar, abn: c.abn, billing_address: c.billingAddress, position: fromEnd(state.clients, ci),
+      contact_id: c.contact, team: c.team, last_contact: c.lastContact, demo: c.demo, demo_url: c.demoUrl, platform_url: c.platformUrl,
+      avatar: c.avatar, abn: c.abn, billing_address: c.billingAddress, position: fromEnd(state.clients, ci),
     });
+    // A client's own people (client.contacts) — not the outreach contacts (state.contacts).
+    (c.contacts || []).forEach((x, i) => put('client_contacts', {
+      id: x.id, client_id: c.id, position: i, name: x.name, role: x.role, email: x.email, phone: x.phone, billing: x.billing,
+    }));
+    (c.contracts || []).forEach((k, i) => put('client_contracts', {
+      id: k.id, client_id: c.id, position: fromEnd(c.contracts, i), status: k.status, title: k.title, doc_id: k.docId,
+      doc_url: k.docUrl, start_date: k.startDate, end_date: k.endDate, annual_fee: k.annualFee, payment_terms: k.paymentTerms,
+      user_limit: k.userLimit, platform: k.platform, customisations: k.customisations, mobile_app: k.mobileApp,
+      governing_law: k.governingLaw, created_by: k.createdBy, sent_by: k.sentBy, sent_at: k.sentAt, signed_at: k.signedAt,
+    }));
     (c.notes || []).forEach((n) => put('client_notes', { id: n.id, client_id: c.id, user_id: n.user, text: n.text, created_at: n.ts }));
     (c.tasks || []).forEach((x, i) => put('client_tasks', { id: x.id, client_id: c.id, position: i, text: x.text, done: x.done }));
     (c.invoices || []).forEach((inv, i) => {
       put('invoices', {
         id: inv.id, client_id: c.id, number: inv.number, issued: inv.issued, due: inv.due, status: inv.status, plan_id: inv.planId,
-        sent_at: inv.sentAt, paid_on: inv.paidOn, position: fromEnd(c.invoices, i),
+        sent_at: inv.sentAt, paid_on: inv.paidOn, sent_to: inv.sentTo, position: fromEnd(c.invoices, i),
       });
       (inv.lines || []).forEach((l, li) => put('invoice_lines', {
         id: l.id, invoice_id: inv.id, position: li, description: l.desc, qty: l.qty, rate: l.rate,
@@ -234,7 +257,7 @@ export function flatten(state) {
       anchor_day: p.anchorDay, active: p.active !== false, position: i,
     }));
     (c.usage || []).forEach((u) => put('client_usage', {
-      id: u.id, client_id: c.id, month: u.month, assets: u.assets, sites: u.sites, seats: u.seats, notes: u.notes,
+      id: u.id, client_id: c.id, month: u.month, assets: u.assets, sites: u.sites, seats: u.seats, credits: u.credits, notes: u.notes,
     }));
   });
 
@@ -343,15 +366,26 @@ export function assemble(rowsByTable, { me } = {}) {
   const access = groupBy(all('client_access'), 'client_id');
   const plans = groupBy(all('billing_plans'), 'client_id');
   const usage = groupBy(all('client_usage'), 'client_id');
+  const people = groupBy(all('client_contacts'), 'client_id');
+  const contracts = groupBy(all('client_contracts'), 'client_id');
   const clients = all('clients').sort(byPosDesc).map((c) => ({
     id: c.id, name: c.name, group: c.group_name, status: c.status, priority: c.priority, next: c.next_step, sector: c.sector,
-    contact: c.contact_id ?? '', team: [...c.team], lastContact: c.last_contact ?? '', demo: c.demo, keyContact: c.key_contact,
-    email: c.email, demoUrl: c.demo_url, avatar: c.avatar, abn: c.abn, billingAddress: c.billing_address,
+    contact: c.contact_id ?? '', team: [...c.team], lastContact: c.last_contact ?? '', demo: c.demo, demoUrl: c.demo_url,
+    platformUrl: c.platform_url, avatar: c.avatar, abn: c.abn, billingAddress: c.billing_address,
+    contacts: kids(people, c.id, byPos).map((x) => ({
+      id: x.id, name: x.name, role: x.role, email: x.email, phone: x.phone, billing: x.billing,
+    })),
+    contracts: kids(contracts, c.id, byPosDesc).map((k) => ({
+      id: k.id, status: k.status, title: k.title, docId: k.doc_id, docUrl: k.doc_url, startDate: k.start_date ?? '',
+      endDate: k.end_date ?? '', annualFee: k.annual_fee, paymentTerms: k.payment_terms, userLimit: k.user_limit,
+      platform: k.platform, customisations: k.customisations, mobileApp: k.mobile_app, governingLaw: k.governing_law,
+      createdBy: k.created_by ?? '', sentBy: k.sent_by ?? '', sentAt: k.sent_at ?? '', signedAt: k.signed_at ?? '',
+    })),
     notes: kids(notes, c.id, newest('created_at')).map((n) => ({ id: n.id, user: n.user_id ?? '', text: n.text, ts: n.created_at ?? '' })),
     tasks: kids(tasks, c.id, byPos).map((x) => ({ id: x.id, text: x.text, done: x.done })),
     invoices: kids(invoices, c.id, byPosDesc).map((inv) => ({
       id: inv.id, number: inv.number, issued: inv.issued ?? '', due: inv.due ?? '', status: inv.status,
-      planId: inv.plan_id ?? '', sentAt: inv.sent_at ?? '', paidOn: inv.paid_on ?? '',
+      planId: inv.plan_id ?? '', sentAt: inv.sent_at ?? '', paidOn: inv.paid_on ?? '', sentTo: inv.sent_to,
       lines: kids(lines, inv.id, byPos).map((l) => ({ id: l.id, desc: l.description, qty: l.qty, rate: l.rate })),
     })),
     access: kids(access, c.id, byPos).map((a) => ({ id: a.id, name: a.name, email: a.email, role: a.role })),
@@ -361,7 +395,7 @@ export function assemble(rowsByTable, { me } = {}) {
     })),
     // Newest month first.
     usage: kids(usage, c.id, newest('month')).map((u) => ({
-      id: u.id, month: u.month ?? '', assets: u.assets, sites: u.sites, seats: u.seats, notes: u.notes,
+      id: u.id, month: u.month ?? '', assets: u.assets, sites: u.sites, seats: u.seats, credits: u.credits, notes: u.notes,
     })),
   }));
 
@@ -370,6 +404,7 @@ export function assemble(rowsByTable, { me } = {}) {
     businessName: o.business_name, abn: o.abn, address: o.address, email: o.email, phone: o.phone,
     bankAccountName: o.bank_account_name, bsb: o.bsb, accountNumber: o.account_number,
     paymentTermsDays: o.payment_terms_days, invoicePrefix: o.invoice_prefix,
+    contractTemplate: o.contract_template, contractFolder: o.contract_folder,
   } : { ...DEFAULT_ORG };
 
   const members = groupBy(all('channel_members'), 'channel_id');
