@@ -389,7 +389,11 @@ version that uses it.
     right. On a personal page the drawer offers other groups only.
 - **Old app tabs**: trigger `place_on_board` (before insert or update on `board_groups` and `items`) fills a missing
   `board_id`, as an app version from before 0006 writes rows without it: a new group lands on **General** / **Posting
-  schedule** (else the module's first team board), a task on its group's board. Reloading the tab ends it.
+  schedule** (else the module's first team board), a task on its group's board. Reloading the tab ends it. Until
+  then an old tab groups rows by module only, so its Projects and Marketing pages also show the new boards' starting
+  groups (several *Active* and *To do* groups), and a task added to one of them lands on that board, possibly
+  someone's own page. So everyone closes Cortex before 0006 runs, and the new app is deployed straight after
+  (`DEPLOY.md`).
 - **App**: `state.boards` is an array (`docs/BACKEND.md` §1): Projects then Marketing; personal boards first (by
   owner's name), then team boards in order. Sync: `boards` → `board_groups` → `items`; team board positions count
   within their module, personal boards are 0. Pure helpers in `src/lib/boards.js` (`findBoard`, `personalBoard`,

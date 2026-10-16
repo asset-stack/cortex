@@ -89,9 +89,9 @@ transaction each and safe to re-run. Each client's key contact and email become 
 (invoices go to billing contacts). Running it again after the deploy picks up a key contact typed into an old open
 tab in between, without duplicating. Then set up section 11.
 
-**0006 on an existing database**: `0004` and `0005` must have run first (run them in order if not, as above). Then
-paste `supabase/migrations/0006_boards.sql` into a new snippet and **Run** it *before* the app version that uses it goes
-live (it loads the `boards` table, which doesn't exist until then). It is one transaction and safe to re-run.
+**0006 on an existing database**: `0004` and `0005` must have run first (run them in order if not, as above). Ask
+everyone to **close Cortex** first. Then paste `supabase/migrations/0006_boards.sql` into a new snippet and **Run** it
+*before* the app version that uses it goes live (it loads the `boards` table, which doesn't exist until then). It is one transaction and safe to re-run.
 The editor warns about destructive operations because the file drops and recreates its own policies on the board
 tables: choose **Run this query**. Afterwards:
 - Projects has the team boards **Landing Page**, **Tender Portal** and **General** (the existing Projects groups and
@@ -105,8 +105,10 @@ tables: choose **Run this query**. Afterwards:
   sets Projects to **View** for them in **Settings** → **Team**.
 - Tasks move between groups and between team boards, but not onto or off someone's own page (who can see them would
   change).
-- Deploy the new app straight after and ask everyone to reload. Until they do, an old open tab still saves, and a
-  group it adds goes on **General** / **Posting schedule**.
+- Deploy the new app straight after, then everyone opens Cortex again (or reloads). A tab left open on the old app
+  until then still saves, but it shows the new boards' starting groups (several **Active** / **To do** groups) on one
+  page, and a task added to one of those goes to that board, possibly someone's own page. A group it adds goes on
+  **General** / **Posting schedule**.
 
 ### Upgrading an existing project
 
@@ -401,6 +403,7 @@ revoke it at Google too: <https://myaccount.google.com/connections>. When someon
 | An admin can't see another admin's Projects page | By design: admins see their own and staff's pages; only the SuperAdmin sees everyone's. |
 | No rename or delete on someone's Projects page | Personal pages come and go with their person. Only team boards are renamed or deleted (by admins). |
 | A new group turned up on **General** or **Posting schedule** after the 0006 update | An old open tab (the app from before 0006) added it. Move its tasks where they belong, delete it, and reload that tab. |
+| A task added just after the 0006 update isn't on **General** / **Posting schedule** | An old open tab added it to another board's starting group (another team board, or someone's own page). Find it in **My Work** → **On boards** for the people on it, or as the SuperAdmin on each page, and move it to a team board from its drawer (or re-create it there if it is on someone's page). |
 | Connect Google: "Error 400: redirect_uri_mismatch" | Add `https://<project-ref>.supabase.co/functions/v1/google/callback` to the Google client (section 11.1). |
 | Connect Google comes back with "Connect the Google account for your own Cortex email" | You picked a different Google account. Each admin connects their own. |
 | "Reconnect your Google account in Settings" | Google withdrew Cortex's access (password change, revoked, or the scopes changed). **Connect Google** again. |

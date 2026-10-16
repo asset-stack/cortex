@@ -154,7 +154,8 @@ Text columns default to `''` and are `not null` unless noted, so the state never
   also `sees_person(owner_id)`), insert/update/delete team boards only and `is_admin()`; `board_groups, items` select
   `can_view_board(board_id)`, write `can_edit_board(board_id)`; `item_updates, subtasks` by their item's board
   (`item_board_id(item_id)`). `board_level(board)` is a team board's module level, or `'edit'` on a personal board
-  for whoever `sees_person()` its owner (yourself; staff's for admins; everyone's for the SuperAdmin), else `'none'`.
+  for whoever `sees_person()` its owner (yourself; staff's for admins; everyone's for the SuperAdmin) while they can
+  view Projects (`can_view('projects')`), else `'none'`.
 - Finance (0002): `bank_statements, payments, expenses, subscriptions` and the `finance` storage bucket: `is_admin()` only.
   `todos`: select/insert/update own (`assignee_id`) or admin, delete creator or admin. `time_entries`: write own only,
   select own or admin. `routines`: select `is_staff()`, write admin. `module_access`: select own or admin, write
