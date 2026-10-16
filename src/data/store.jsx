@@ -17,6 +17,7 @@ import {
 } from '@/lib/automations';
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, emailSnippet, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
 import { mentionedUserIds } from '@/lib/mentions';
+import { cleanTool } from '@/lib/tools';
 import { createContractDoc, googleConnectUrl, sendGoogleEmail, sendInvoiceEmail } from '@/integrations/google';
 
 const KEY = 'assetstack-ops:v1';
@@ -446,6 +447,41 @@ function createActions(mutate, mode) {
       if (added > 0) await mode.pull('todos', { assignee_id: mode.read((s) => s.me), day });
       return added;
     },
+
+    // ── Tools (each person's logins and links in My Work): your own, or anyone's for admins ──
+
+    // → id
+    addTool: (userId, fields = {}) => mutate((d) => {
+      if (!userExists(d, userId) || !(userId === d.me || isAdmin(d))) return false;
+      const x = { ...cleanTool(fields), id: uid(), user: userId, createdBy: d.me };
+      if (!x.name && !x.url) return false;
+      d.tools.push(x);
+      return x.id;
+    }),
+    updateTool: (id, patch = {}) => mutate((d) => {
+      const x = d.tools.find((t) => t.id === id);
+      if (!x || !(x.user === d.me || isAdmin(d))) return false;
+      Object.assign(x, cleanTool({ ...x, ...patch }));
+      return true;
+    }),
+    removeTool: (id) => mutate((d) => {
+      const x = d.tools.find((t) => t.id === id);
+      if (!x || !(x.user === d.me || isAdmin(d))) return false;
+      d.tools = d.tools.filter((t) => t.id !== id);
+      return true;
+    }),
+    // One place up (-1) or down (1) within that person's list.
+    moveTool: (id, dir) => mutate((d) => {
+      const x = d.tools.find((t) => t.id === id);
+      if (!x || !(x.user === d.me || isAdmin(d))) return false;
+      const mine = d.tools.filter((t) => t.user === x.user);
+      const other = mine[mine.indexOf(x) + (dir < 0 ? -1 : 1)];
+      if (!other) return false;
+      const i = d.tools.indexOf(x);
+      const j = d.tools.indexOf(other);
+      [d.tools[i], d.tools[j]] = [d.tools[j], d.tools[i]];
+      return true;
+    }),
 
     // ── Timesheet ──
 

@@ -70,9 +70,9 @@ change or delete its files; Cortex opens a file through a link that expires afte
 to **Public**, and don't add policies to it in the dashboard.
 
 Then run `supabase/migrations/0004_clients_google.sql` the same way (client contacts and contracts, credits,
-and each admin's Google connection; see section 11).
+and each admin's Google connection; see section 11), then `0005_work_tools.sql` (each person's Tools in My Work).
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0005_…`). Run each new file
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0006_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one.
 
 **0003 on a database that already has 0002**: **SQL Editor** → **+** → **Create a new snippet**, paste
@@ -83,7 +83,8 @@ follow Sydney, and each person's time zone is set the next time they open Cortex
 
 **0004 on a database that already has 0003**: paste `supabase/migrations/0004_clients_google.sql` the same way and
 **Run** *before* the app version that uses it goes live (it loads `client_contacts`, which doesn't exist until then).
-One transaction, safe to re-run. Each client's key contact and email become its first contact, marked **Billing**
+Then run `supabase/migrations/0005_work_tools.sql` the same way (each person's Tools in My Work). Both are one
+transaction each and safe to re-run. Each client's key contact and email become its first contact, marked **Billing**
 (invoices go to billing contacts). Running it again after the deploy picks up a key contact typed into an old open
 tab in between, without duplicating. Then set up section 11.
 
@@ -372,6 +373,7 @@ revoke it at Google too: <https://myaccount.google.com/connections>. When someon
 | Red dot on the Cortex logo ("Not saved") | Hover it for the message. Changes stay queued and retry; check the browser console. A change the database refuses three times is put back the way the database has it (a duplicate invoice number or group name gets the next free one instead). |
 | Console: "Refused to load … Content Security Policy" | The origin isn't allowed in `public/_headers`. |
 | "Couldn't load your workspace … client_contacts" after an update | `0004_clients_google.sql` hasn't run yet (section 2). |
+| "Couldn't load your workspace … work_tools" after an update | `0005_work_tools.sql` hasn't run yet (section 2). |
 | Connect Google: "Error 400: redirect_uri_mismatch" | Add `https://<project-ref>.supabase.co/functions/v1/google/callback` to the Google client (section 11.1). |
 | Connect Google comes back with "Connect the Google account for your own Cortex email" | You picked a different Google account. Each admin connects their own. |
 | "Reconnect your Google account in Settings" | Google withdrew Cortex's access (password change, revoked, or the scopes changed). **Connect Google** again. |

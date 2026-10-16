@@ -298,3 +298,21 @@ app version that uses it.
   (mapping, diffs, demo automations, migrate, usage import, importer); `scripts/test-invoice.mjs` (model, PDF,
   contract helpers, integration seam); `scripts/test-google.mjs` (the Edge Function with fetch mocked).
 
+## 10. 0005: each person's Tools in My Work
+
+`supabase/migrations/0005_work_tools.sql` runs once on top of `0004` (one transaction, safe to re-run), before the app
+version that uses it.
+
+- **Owner's decision**: each person has their own list of the tools they use (Gmail, Apollo, Claude, …), so a new
+  starter opens My Work and finds their links and how to sign in. **No passwords** are stored: a tool has a name, a
+  link, the username / login email and a short sign-in note (Google sign-in, an invite, the team password manager).
+- **Table** `work_tools (user_id → profiles cascade, position (within the person's list), name, url, username, how,
+  notes, created_by)`: RLS like `todos` (your own, or anyone's for admins), touch, realtime; trigger
+  `protect_work_tool` pins `created_by` to whoever added it.
+- **App**: state `tools: [{ id, user, name, url, username, how, notes, createdBy }]` (by person, then order); store
+  `addTool(userId, fields)`, `updateTool`, `removeTool`, `moveTool(id, ±1)` (own or admin). **My Work → Tools** (right
+  column) shows the person being viewed: letter tile, link (through `safeUrl`, so only http(s) links), username with
+  copy, sign-in note; admins pick anyone in the person switcher and set up their list, starting from presets
+  (`src/lib/tools.js`). The demo seed gives Hello Gmail, Google Drive, Apollo and Claude.
+- **Tests**: `scripts/test-db.mjs` phase 5 (own / admin access, `created_by` pinned, inactive and anon see nothing,
+  realtime); `scripts/test-sync.mjs` (mapping, per-person positions, diff, seed, migrate).

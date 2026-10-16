@@ -8,6 +8,7 @@ import TodoList from '@/components/work/TodoList';
 import AddTodo from '@/components/work/AddTodo';
 import OnBoards from '@/components/work/OnBoards';
 import Mentions, { mentionsOf } from '@/components/work/Mentions';
+import Tools from '@/components/work/Tools';
 import TimesheetModal from '@/components/timesheet/TimesheetModal';
 import { useAccess } from '@/lib/access';
 import { addDays } from '@/lib/automations';
@@ -94,7 +95,10 @@ export default function MyWork() {
           </TodoList>
           <OnBoards personId={personId} />
         </div>
-        <Mentions mentions={mentions} person={person} />
+        <div className="flex min-w-0 flex-col gap-6">
+          <Mentions mentions={mentions} person={person} />
+          <Tools key={personId} person={person} />
+        </div>
       </div>
 
       <TimesheetModal open={logging} onClose={() => setLogging(false)} day={day} />

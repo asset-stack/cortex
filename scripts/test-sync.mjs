@@ -177,6 +177,12 @@ const fixture = () => ({
     { id: 'te-3', user: U1, day: '2026-10-09', start: '09:00', minutes: 30, category: 'Admin', note: '', source: 'manual' },
     { id: 'te-2', user: U2, day: '2026-10-09', start: '10:00', minutes: 60, category: 'Outreach', note: '', source: 'manual' },
   ],
+  // By person, then their own order (as assemble gives them back).
+  tools: [
+    { id: 'wt-1', user: U1, name: 'Gmail', url: 'https://mail.google.com', username: 'ana@example.com', how: 'Sign in with Google', notes: '', createdBy: U1 },
+    { id: 'wt-3', user: U1, name: 'Claude', url: 'https://claude.ai', username: '', how: '', notes: 'Team plan', createdBy: '' },
+    { id: 'wt-2', user: U2, name: 'Apollo', url: 'app.apollo.io', username: 'ben@example.com', how: 'Invite from Ana', notes: '', createdBy: U1 },
+  ],
   payments: [
     { id: 'pay-1', invoiceId: 'i-1', clientId: 'c-1', amount: 2750.55, receivedOn: '2026-09-20', reference: 'EX-1001', statementId: 'bs-1' },
     { id: 'pay-0', invoiceId: '', clientId: 'c-0', amount: 100, receivedOn: '2026-09-02', reference: '', statementId: '' },
@@ -255,7 +261,7 @@ await check('assemble: order and state fields', () => {
   const back = assemble(flatten(s), { me: U1 });
   assert.deepEqual(Object.keys(back).sort(), ['approvals', 'boards', 'channels', 'clients', 'contacts', 'deals', 'emails', 'lastRead',
     'messages', 'org', 'sequences', 'users', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements',
-    'expenses', 'subscriptions'].sort());
+    'expenses', 'subscriptions', 'tools'].sort());
   assert.deepEqual(Object.keys(back.boards), ['projects', 'marketing']);
   assert.deepEqual(back.boards.projects.groups.map((g) => g.id), ['g-1', 'g-2', 'g-3']);
   assert.deepEqual(back.boards.projects.groups[0].items.map((i) => i.id), ['it-1', 'it-2']);
@@ -277,7 +283,7 @@ await check('assemble: order and state fields', () => {
   assert.deepEqual(back.users, s.users);
   // Parts of the fixture already in canonical form come back exactly (no extra or missing fields).
   ['boards', 'contacts', 'emails', 'sequences', 'approvals', 'messages', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments',
-    'bankStatements', 'expenses', 'subscriptions'].forEach((k) => assert.deepEqual(back[k], s[k], k));
+    'bankStatements', 'expenses', 'subscriptions', 'tools'].forEach((k) => assert.deepEqual(back[k], s[k], k));
   assert.deepEqual(back.clients[1], s.clients[1]);
   assert.deepEqual(back.clients[0].plans, s.clients[0].plans);
   assert.deepEqual(back.clients[0].usage, s.clients[0].usage); // newest month first
@@ -299,7 +305,7 @@ await check('profiles: time zones round trip; a blank or missing one is Sydney (
 await check('assemble: empty rows give a usable state', () => {
   const back = assemble({}, { me: U1 });
   assert.deepEqual(back.boards, { projects: { groups: [] }, marketing: { groups: [] } });
-  ['moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements', 'expenses', 'subscriptions']
+  ['moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'tools']
     .forEach((k) => assert.deepEqual(back[k], [], k));
   assert.equal(back.org.paymentTermsDays, 30);
   assert.equal(back.org.invoicePrefix, 'INV-');
@@ -537,6 +543,20 @@ await check('diff: a new client contact or contract writes only that row; deleti
   const removed = opsAfter((s) => { s.clients.shift(); });
   ['delete client_contacts pc-1', 'delete client_contacts pc-2', 'delete client_contracts k-1', 'delete client_contracts k-2', 'delete clients c-1']
     .forEach((l) => assert.ok(labels(removed).includes(l), l));
+});
+
+await check('flatten: work tools are numbered within each person\'s list; a new one writes only itself (0005)', () => {
+  const rows = flatten(fixture());
+  assert.deepEqual(rows.work_tools.get('wt-3'), {
+    id: 'wt-3', user_id: U1, position: 1, name: 'Claude', url: 'https://claude.ai', username: '', how: '', notes: 'Team plan', created_by: null,
+  });
+  assert.deepEqual(['wt-1', 'wt-2'].map((k) => rows.work_tools.get(k).position), [0, 0]);
+  assert.equal(rows.work_tools.get('wt-2').url, 'app.apollo.io', 'the link is kept as typed');
+  const ops = opsAfter((s) => {
+    s.tools.push({ id: 'wt-4', user: U2, name: 'LinkedIn', url: 'https://www.linkedin.com', username: '', how: '', notes: '', createdBy: U1 });
+  });
+  assert.deepEqual(labels(ops), ['upsert work_tools wt-4']);
+  assert.equal(ops[0].row.position, 1);
 });
 
 await check('diff: deleting a plan unlinks its invoices before the plan goes', () => {
@@ -1531,7 +1551,8 @@ if (createSeed) {
     const paid = invoices.find((i) => i.status === 'Paid');
     assert.equal(s.payments.filter((p) => p.invoiceId === paid.id).reduce((t, p) => t + p.amount, 0), 7975);
     assert.ok(s.bankStatements.some((b) => b.filePath === ''));
-    ['expenses', 'subscriptions', 'timeEntries'].forEach((k) => assert.ok(s[k].length, k));
+    ['expenses', 'subscriptions', 'timeEntries', 'tools'].forEach((k) => assert.ok(s[k].length, k));
+    assert.ok(s.tools.every((t) => t.user === 'hello' && t.username.endsWith('@example.com') && t.url.startsWith('https://')));
     assert.ok(s.clients.some((c) => c.usage.length));
     assert.equal(auto.generateDueInvoicesLocal(s, today), 0, 'plans are up to date');
   });
@@ -1588,7 +1609,7 @@ if (migrate) {
     assert.equal(m.contacts[0].owner, '');
     assert.deepEqual([m.clients[0].plans, m.clients[0].usage, m.clients[0].abn], [[], [], '']);
     assert.deepEqual(['planId', 'sentAt', 'paidOn'].map((k) => m.clients[0].invoices[0][k]), ['', '', '']);
-    ['moduleAccess', 'todos', 'routines', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'timeEntries'].forEach((k) => assert.deepEqual(m[k], [], k));
+    ['moduleAccess', 'todos', 'routines', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'timeEntries', 'tools'].forEach((k) => assert.deepEqual(m[k], [], k));
     assert.deepEqual(m.lastRead.dale, { ch1: '2026-10-01T00:00:00.000Z' });
     assert.equal(m.org.invoicePrefix, 'INV-');
     assert.deepEqual(migrate(structuredClone(m)), m, 'running it again changes nothing');

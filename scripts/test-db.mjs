@@ -3,7 +3,8 @@
 // different users; then applies 0002_team_workflow.sql on top of the rows those checks leave behind (as on
 // the live database) and checks roles, module access, the board merge, automations, finance and storage; then
 // 0003_timezones_projects_view.sql (Sydney business day, per-person time zones, Projects view-only for staff); then
-// 0004_clients_google.sql (client contacts and contracts, credits, approve / contract to-dos, Google accounts).
+// 0004_clients_google.sql (client contacts and contracts, credits, approve / contract to-dos, Google accounts); then
+// 0005_work_tools.sql (each person's Tools in My Work).
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -16,6 +17,7 @@ const migration = await readFile(new URL('supabase/migrations/0001_cortex.sql', 
 const migration2 = await readFile(new URL('supabase/migrations/0002_team_workflow.sql', root), 'utf8');
 const migration3 = await readFile(new URL('supabase/migrations/0003_timezones_projects_view.sql', root), 'utf8');
 const migration4 = await readFile(new URL('supabase/migrations/0004_clients_google.sql', root), 'utf8');
+const migration5 = await readFile(new URL('supabase/migrations/0005_work_tools.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -1593,6 +1595,77 @@ async function phase4({ alice, boss, david, hello, carol, newcomer }) {
     ]) && picked.both && picked.neither && picked.late?.billing === false && picked.late?.position === 1 && picked.blank === 0,
     { rerunLate, picked });
 
+  return { alice, boss, david, hello, carol, newcomer };
+}
+
+// Phase 5: 0005_work_tools.sql ------------------------------------------------------------------------------
+
+async function applyMigration5() {
+  await as(null);
+  try {
+    await db.exec(migration5);
+    return null;
+  } catch (e) {
+    await db.exec('rollback').catch(() => {});
+    return e.message;
+  }
+}
+
+async function phase5({ alice, boss, david, hello, carol, newcomer }) {
+  // 32. Each person's Tools ----------------------------------------------------------------------------------
+
+  const publishedBefore = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'")).n;
+  const first = await applyMigration5();
+  const body = migration5.replace(/--.*$/gm, '').trim();
+  check('32. 0005 runs as one transaction and re-runs cleanly',
+    first === null && /^begin;/i.test(body) && /commit;$/i.test(body) && (first ?? await applyMigration5()) === null, first);
+  if (first) return null;
+  check('32. 0005 never mentions module_level', !migration5.includes('module_level'));
+  const shape = await one(`select c.relrowsecurity as rls,
+      exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'work_tools') as published,
+      exists (select 1 from pg_trigger t where t.tgrelid = c.oid and t.tgname = 'touch') as touched,
+      (select count(*)::int from pg_publication_tables where pubname = 'supabase_realtime') as total
+    from pg_class c where c.oid = 'public.work_tools'::regclass`);
+  check('32. work_tools: RLS on, touch, published to realtime (34 tables)',
+    shape.rls && shape.published && shape.touched && shape.total === publishedBefore + 1 && shape.total === 34, { shape, publishedBefore });
+
+  const tool = "insert into work_tools (user_id, name, url, username, how) values ($1, $2, 'https://example.com', $3, 'Sign in with Google') returning id, created_by";
+  await as(boss); // admin: sets up anyone's list
+  const forHello = await one(tool, [hello, 'Apollo', 'hello@example.com']);
+  const forAlice = await one(tool, [alice, 'Gmail', 'alice@example.com']);
+  await as(hello);
+  const own = await one(tool, [hello, 'Notes', '']);
+  const helloSees = (await rows('select name from work_tools order by name')).map((r) => r.name);
+  const forOther = await error(tool, [alice, 'Nope', '']);
+  const editOwn = await affected("update work_tools set username = 'hello.new@example.com' where id = $1", [forHello.id]);
+  const editOther = await affected("update work_tools set name = 'Mine' where id = $1", [forAlice.id]);
+  const handOver = await error('update work_tools set user_id = $2 where id = $1', [own.id, alice]);
+  const forged = await affected('update work_tools set created_by = $2 where id = $1', [own.id, boss]);
+  const forgedRow = await one('select created_by from work_tools where id = $1', [own.id]);
+  const insertForged = await one("insert into work_tools (user_id, name, created_by) values ($1, 'Forged', $2) returning created_by", [hello, boss]);
+  const deleteOther = await affected('delete from work_tools where id = $1', [forAlice.id]);
+  const deleteOwn = await affected('delete from work_tools where id = $1', [own.id]);
+  await as(david);
+  const adminSees = (await one('select count(*)::int as n from work_tools')).n;
+  const adminDelete = await affected('delete from work_tools where id = $1', [insertForged ? (await one("select id from work_tools where name = 'Forged'")).id : null]);
+  await as(carol);
+  const inactive = (await one('select count(*)::int as n from work_tools')).n;
+  const inactiveAdd = await error(tool, [carol, 'Nope', '']);
+  await as(newcomer);
+  const newcomerSees = (await one('select count(*)::int as n from work_tools')).n;
+  await db.exec('set role anon');
+  const anon = await error('select * from public.work_tools');
+  await as(null);
+  check("32. admins set up anyone's tools; people see and edit only their own; nobody else's",
+    forHello.created_by === boss && forAlice.created_by === boss && own.created_by === hello
+      && stable(helloSees) === stable(['Apollo', 'Notes']) && typeof forOther === 'string' && editOwn === 1 && editOther === 0
+      && typeof handOver === 'string' && deleteOther === 0 && deleteOwn === 1 && adminSees === 3 && adminDelete === 1 && newcomerSees === 0,
+    { forHello, forAlice, own, helloSees, forOther, editOwn, editOther, handOver, deleteOther, deleteOwn, adminSees, adminDelete, newcomerSees });
+  check('32. created_by is whoever added it and never changes; inactive accounts and anon see nothing',
+    forged === 1 && forgedRow.created_by === hello && insertForged?.created_by === hello
+      && inactive === 0 && typeof inactiveAdd === 'string' && anon !== null,
+    { forged, forgedRow, insertForged, inactive, inactiveAdd, anon });
+
   return { alice, boss, david, hello };
 }
 
@@ -1667,6 +1740,7 @@ async function syncWriteCheck({ david, alice, boss, hello }) {
       active: true, notes: '',
     }],
     timeEntries: [{ id: uid(), user: david, day: '2026-10-12', start: '09:00', minutes: 60, category: 'Demos', note: 'Prep', source: 'suggested' }],
+    tools: [{ id: uid(), user: hello, name: 'Apollo', url: 'https://app.apollo.io', username: 'hello@example.com', how: 'Invite', notes: '', createdBy: david }],
   });
   const writeErrors = {};
   const mismatched = {};
@@ -1693,7 +1767,8 @@ try {
   const ctx2 = ctx && await phase2(ctx);
   const ctx3 = ctx2 && await phase3(ctx2);
   const ctx4 = ctx3 && await phase4(ctx3);
-  if (ctx4) await syncWriteCheck(ctx4);
+  const ctx5 = ctx4 && await phase5(ctx4);
+  if (ctx5) await syncWriteCheck(ctx5);
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);
 }

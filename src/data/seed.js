@@ -8,6 +8,7 @@ import {
 } from '../lib/automations.js';
 import { TEAM_TIMEZONE, localYmd } from '../lib/format.js';
 import { withPeople } from './boards.js';
+import { TOOL_PRESETS } from '../lib/tools.js';
 
 let n = 0;
 const id = (p) => `${p}_${(++n).toString(36)}`;
@@ -314,6 +315,11 @@ export function createSeed() {
       { id: id('sub'), name: 'Project boards', vendor: 'Boards app', category: 'Software', amount: 48, cycle: 'monthly', renewsOn: '', active: false, notes: 'Replaced by Cortex' },
     ],
     timeEntries: timesheet(lastWorkday),
+    // Hello's logins and links in My Work (set up by an admin).
+    tools: ['Gmail', 'Google Drive', 'Apollo', 'Claude'].map((name) => {
+      const preset = TOOL_PRESETS.find((x) => x.name === name);
+      return { id: id('wt'), user: 'hello', ...preset, username: 'hello@example.com', notes: '', createdBy: 'david' };
+    }),
   };
 
   // The automations, run the way the app runs them, so the demo data follows the same rules.
@@ -336,7 +342,7 @@ export function createSeed() {
   return state;
 }
 
-const COLLECTIONS = ['moduleAccess', 'todos', 'routines', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'timeEntries'];
+const COLLECTIONS = ['moduleAccess', 'todos', 'routines', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'timeEntries', 'tools'];
 
 // Brings demo data saved by older builds (localStorage) up to the current shape. Safe to run more than once.
 export function migrate(data) {

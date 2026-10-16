@@ -7,7 +7,7 @@ One workspace for the team's daily work, the departments and team chat:
 
 | Area | What it does |
 |---|---|
-| **My Work** | Each person's daily to-do list: work admins assign, daily routines (generated each morning), automation follow-ups, carried-over items, the board items they're on and @mentions. Day navigator; admins pick anyone and add to their day. **Log time** for any day |
+| **My Work** | Each person's daily to-do list: work admins assign, daily routines (generated each morning), automation follow-ups, carried-over items, the board items they're on and @mentions. Day navigator; admins pick anyone and add to their day. **Log time** for any day. **Tools**: each person's own logins and links (Gmail, Apollo, Claude…: link, username, how to sign in; no passwords), set up by admins from presets |
 | **Projects / Marketing** | Monday.com-style boards: grouped tables with coloured status/label cells, Kanban (drag to change status), calendar, and a task drawer with subtasks and updates. A **People** column assigns work to several people, and an `@Name` in an update adds that person. The old Admin board is part of Projects |
 | **Outreach** | Contacts CRM with owner and status, Gmail activity feed, sequences, approvals queue, and the Claude outreach agent (draft, then send or queue). A contact moving to *Replied* or *Meeting booked* creates or advances its deal in Pipeline and gives its owner a follow-up to-do |
 | **Pipeline** | Deal Kanban: Opportunities → First meetings → Demos → Won, with *Make client* on won deals; deals that came from a contact are marked |

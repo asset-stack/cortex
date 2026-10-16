@@ -112,6 +112,7 @@ const COLUMNS = {
   time_entries: {
     id: 'id', user_id: 'id', day: 'date', start_time: 'time', minutes: 'int', category: t, note: t, source: t, position: 'int',
   },
+  work_tools: { id: 'id', user_id: 'id', position: 'int', name: t, url: t, username: t, how: t, notes: t, created_by: 'fk' },
 };
 
 const byId = (r) => String(r.id);
@@ -164,6 +165,7 @@ export const TABLES = [
   { name: 'routines', key: byId },
   { name: 'todos', key: byId, setNull: { routine_id: 'routines' } }, // after routines (todos.routine_id)
   { name: 'time_entries', key: byId },
+  { name: 'work_tools', key: byId, setNull: { created_by: 'profiles' } },
 ];
 
 const TABLE = Object.fromEntries(TABLES.map((x) => [x.name, x]));
@@ -322,6 +324,11 @@ export function flatten(state) {
     id: e.id, user_id: e.user, day: e.day, start_time: e.start, minutes: e.minutes, category: e.category, note: e.note, source: e.source,
     position: nextIn('time', e.user, CONVERT.date(e.day)),
   }));
+  // Each person's tools are numbered within their own list.
+  (state.tools || []).forEach((x) => put('work_tools', {
+    id: x.id, user_id: x.user, position: nextIn('tool', x.user), name: x.name, url: x.url, username: x.username, how: x.how,
+    notes: x.notes, created_by: x.createdBy,
+  }));
 
   return rows;
 }
@@ -460,6 +467,10 @@ export function assemble(rowsByTable, { me } = {}) {
     timeEntries: all('time_entries').sort(byDay).map((e) => ({
       id: e.id, user: e.user_id, day: e.day ?? '', start: e.start_time ?? '', minutes: e.minutes, category: e.category, note: e.note,
       source: e.source,
+    })),
+    // By person, then their own order.
+    tools: all('work_tools').sort((a, b) => cmp(a.user_id, b.user_id) || byPos(a, b)).map((x) => ({
+      id: x.id, user: x.user_id, name: x.name, url: x.url, username: x.username, how: x.how, notes: x.notes, createdBy: x.created_by ?? '',
     })),
     // Newest first.
     payments: all('payments').sort(newest('received_on')).map((p) => ({

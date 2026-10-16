@@ -186,3 +186,15 @@ export function localClock(timezone, at = new Date()) {
   const time = localTime(timezone, at);
   return time && `${timezone.split('/').pop().replace(/_/g, ' ')} · ${time}`;
 }
+
+/** A free-text link (demo, platform, a pasted Doc, a tool) as an http(s) URL to link to: https:// is added when there is no
+ *  scheme; anything else is null. */
+export function safeUrl(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s.replace(/^\/+/, '')}`;
+  try {
+    const u = new URL(withScheme);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
+  } catch { return null; }
+}

@@ -83,6 +83,7 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
   channels:  [{ id, name, members: [userId] }],
   messages:  [{ id, channel, user, text, ts }],
   lastRead:  { [userId]: { [channelId]: isoTs } },   // live: only the current user's map
+  // 0005: tools: [{ id, user, name, url, username, how, notes, createdBy }]  (each person's logins and links)
   // phase 2: moduleAccess, todos, routines, payments, bankStatements, expenses, subscriptions, timeEntries,
   // clients[].plans and clients[].usage (docs/PHASE2.md §2)
 }
