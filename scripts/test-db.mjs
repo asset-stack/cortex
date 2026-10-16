@@ -1763,7 +1763,8 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
 
   // 34. Starting team boards and everyone's own page --------------------------------------------------------------
 
-  check('34. the starting team boards, once each: Projects Landing Page, Tender Portal, General (0-2); Marketing Daily Automation, Posting schedule, Campaigns, Events (0-3)',
+  check('34. the starting team boards, once each: Landing Page, Tender Portal, General (Projects 0-2); '
+    + 'Daily Automation, Posting schedule, Campaigns, Events (Marketing 0-3)',
     afterFirst.team === 'marketing:Daily Automation:0,marketing:Posting schedule:1,marketing:Campaigns:2,marketing:Events:3,'
       + 'projects:Landing Page:0,projects:Tender Portal:1,projects:General:2',
     afterFirst.team);
@@ -1891,7 +1892,8 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
   await as(alice); // staff with Projects view, on their own page
   const ownOld = await attempt("insert into items (board_key, group_id, name) values ('projects', $1, 'From an old tab') returning id, board_id",
     [pageGroup[alice]]);
-  check("37. old tabs: a new group without board_id lands on General / Posting schedule; a task takes its group's board; changing only group_id moves it along",
+  check("37. old tabs: a new group without board_id lands on General / Posting schedule; a task takes its group's board; "
+    + 'changing only group_id moves it along',
     oldGroups.projects?.board_id === board.General && oldGroups.marketing?.board_id === board['Posting schedule']
       && oldTask?.board_id === board['Landing Page'] && regrouped?.board_id === board['Tender Portal'] && ownOld?.board_id === page[alice],
     { oldGroups, oldTask, regrouped, ownOld });
@@ -1978,8 +1980,9 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
   const teamSeen = async (user) => {
     await as(user);
     const list = (await rows("select module || ':' || name as b from boards where owner_id is null order by module, position, name")).map((r) => r.b);
-    const groups = await one(`select (select count(*)::int from board_groups g join boards b on b.id = g.board_id where b.owner_id is null and b.module = 'projects') as projects,
-      (select count(*)::int from board_groups g join boards b on b.id = g.board_id where b.owner_id is null and b.module = 'marketing') as marketing`);
+    const groups = await one(`select
+      count(*) filter (where b.module = 'projects')::int as projects, count(*) filter (where b.module = 'marketing')::int as marketing
+      from board_groups g join boards b on b.id = g.board_id where b.owner_id is null`);
     await as(null);
     return { list, groups };
   };
@@ -1989,7 +1992,8 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
   check('38. team boards (and their groups) show to anyone who can view the module: staff see both modules, Projects at none hides Projects',
     allTeam.list.length === 7 && allTeam.groups.projects > 0 && allTeam.groups.marketing > 0
       && stable(team.alice) === stable(allTeam) && stable(team.newcomer) === stable(allTeam)
-      && stable(team.hello.list) === stable(marketingOnly) && team.hello.groups.projects === 0 && team.hello.groups.marketing === allTeam.groups.marketing
+      && stable(team.hello.list) === stable(marketingOnly) && team.hello.groups.projects === 0
+      && team.hello.groups.marketing === allTeam.groups.marketing
       && team.carol.list.length === 0 && team.carol.groups.projects === 0 && team.carol.groups.marketing === 0,
     { allTeam, team });
 
@@ -2008,7 +2012,8 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
     users: (await rows('select id, role, active from profiles')).map((u) => ({ id: u.id, role: u.role, active: u.active })),
     moduleAccess: (await rows('select user_id, module, level from module_access')).map((a) => ({ userId: a.user_id, module: a.module, level: a.level })),
   };
-  const allBoards = (await rows('select id, module, name, owner_id from boards')).map((b) => ({ id: b.id, module: b.module, name: b.name, owner: b.owner_id || '' }));
+  const allBoards = (await rows('select id, module, name, owner_id from boards'))
+    .map((b) => ({ id: b.id, module: b.module, name: b.name, owner: b.owner_id || '' }));
   const differ = [];
   const levelsSeen = new Set();
   for (const user of Object.values(people)) {
@@ -2372,7 +2377,8 @@ async function syncWriteCheck({ david, alice, boss, hello, early, board, page })
   const refused = (r) => Object.values(r).every((e) => typeof e === 'string');
   const pageRow = flatten({ boards: [{ id: page[alice], module: 'projects', name: '', owner: alice, groups: [] }] }).boards.get(page[alice]);
   const pageInDb = normalizeRow('boards', (await one('select row_to_json(b) as r from public.boards b where id = $1', [page[alice]])).r);
-  check("sync: boards, groups (board_id) and tasks (board_id) save for whoever may write them: staff their page and Marketing, admins staff's pages and new team boards, the SuperAdmin anyone's",
+  check('sync: boards, groups (board_id) and tasks (board_id) save for whoever may write them: staff their page and Marketing, '
+    + "admins staff's pages and new team boards, the SuperAdmin anyone's",
     ok(saved.staffOwnPage) && ok(saved.staffMarketing) && refused(saved.staffProjects) && ok(saved.adminStaffPage)
       && refused(saved.adminSuperPage) && refused(saved.adminAdminPage) && ok(saved.superAdminPage) && ok(saved.adminNewBoard)
       && refused(saved.staffNewBoard) && stable(pageRow) === stable(pageInDb),
