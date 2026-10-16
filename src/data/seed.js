@@ -9,6 +9,7 @@ import {
 import { TEAM_TIMEZONE, localYmd } from '../lib/format.js';
 import { withPeople } from './boards.js';
 import { TOOL_PRESETS } from '../lib/tools.js';
+import { BOARD_MODULES, EXISTING_BOARD, FIRST_GROUP, FIRST_GROUP_COLOR, STARTING_BOARDS } from '../lib/boards.js';
 
 let n = 0;
 const id = (p) => `${p}_${(++n).toString(36)}`;
@@ -34,50 +35,103 @@ const item = (name, values, extra = {}) => ({
   id: id('it'), name, values, updates: [], subtasks: [], done: values.status === 'Done', ...extra,
 });
 
+// Projects: everyone's own page, then the team boards; Marketing: its team boards (docs/PHASE2.md §11).
+const board = (module, name, groups, owner = '') => ({ id: id('b'), module, name: owner ? '' : name, owner, groups });
+const group = (name, color, items) => ({ id: id('g'), name, color, items });
+
 function boards() {
-  return {
-    projects: {
-      groups: [
-        { id: id('g'), name: 'Active', color: '#c9ffe6', items: [
-          item('Register NFP', { people: ['josh'], status: 'In progress', priority: 'High', due: '2026-10-30' },
-            { subtasks: [{ id: id('s'), text: 'Draft constitution', done: true }, { id: id('s'), text: 'Lodge with the regulator', done: false }] }),
-          item('Free Tender Portal', { people: ['david', 'hello'], status: 'Not started', priority: 'Medium', due: '2026-11-15' }),
-        ] },
-        { id: id('g'), name: 'Backlog', color: '#e6eaf2', items: [
-          item('AssetStack Academy', { people: ['hello'], status: 'Not started', priority: 'Low', due: '' }),
-        ] },
-        // The former Admin board.
-        { id: id('g'), name: 'Admin', color: '#ffe6b0', items: [
-          item('Merchandise', { people: ['hello'], status: 'In progress', priority: 'Low', due: '2026-10-18' }),
-          item('Trademark', { people: ['josh'], status: 'Stuck', priority: 'High', due: '2026-10-22' },
-            { updates: [{ id: id('u'), user: 'josh', text: 'Waiting on the examiner response.', ts: hoursAgo(30) }] }),
-          item('Insurance renewal', { people: ['josh', 'hello'], status: 'In progress', priority: 'High', due: '2026-10-31' }),
-          item('Set up office phones', { people: ['hello'], status: 'Not started', priority: 'Medium', due: '2026-11-08' }),
-          item('Outsource time logger', { people: ['david'], status: 'Done', priority: 'Low', due: '2026-10-09' }),
-        ] },
-      ],
-    },
-    marketing: {
-      groups: [
-        { id: id('g'), name: 'October', color: '#bfe9ff', items: [
-          item('LinkedIn weekly engagement', { people: ['hello'], status: 'In progress', type: 'Industry', channel: 'LinkedIn', approval: '', due: '2026-10-31' }),
-          item('Golf Day promotion', { people: [], status: 'In progress', type: 'Sponsorship', channel: 'LinkedIn', approval: '', due: '2026-10-12' }),
-          item('Team on site', { people: ['david'], status: 'In progress', type: 'Industry', channel: 'LinkedIn', approval: 'No', due: '2026-10-15' }),
-          item('Golf Day content', { people: ['hello'], status: 'In progress', type: 'Industry', channel: 'Content', approval: '', due: '2026-10-16' }),
-          item('Bridge project spotlight', { people: ['david'], status: 'Not started', type: 'Projects', channel: 'Website', approval: '', due: '2026-10-20' }),
-          item('Monthly award', { people: ['josh'], status: 'Stuck', type: 'Staff internal', channel: 'LinkedIn', approval: 'No', due: '2026-10-28' }),
-          item('Sponsorship announcement', { people: ['david', 'hello'], status: 'In progress', type: 'Sponsorship', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-24' }),
-        ] },
-        { id: id('g'), name: 'November', color: '#ead9ff', items: [
-          item('LinkedIn weekly engagement', { people: [], status: 'Not started', type: 'Projects', channel: 'LinkedIn', approval: '', due: '2026-11-30' }),
-          item('Westbay case study', { people: ['hello', 'david'], status: 'Not started', type: 'Projects', channel: 'Website', approval: 'Pending', due: '2026-11-14' },
-            { updates: [{ id: id('u'), user: 'david', text: '@Hello can you add the October usage numbers?', ts: hoursAgo(5) }] }),
-          item('G2 + Google reviews', { people: ['david'], status: 'Not started', type: 'Industry', channel: 'Reviews', approval: '', due: '2026-11-21' }),
-          item('Council landing page', { people: ['hello'], status: 'Not started', type: 'Projects', channel: 'Content', approval: '', due: '2026-11-25' }),
-        ] },
-      ],
-    },
-  };
+  return [
+    board('projects', '', [
+      group('Active', '#c9ffe6', [
+        item('Investor update', { people: ['david'], status: 'In progress', priority: 'High', due: '2026-10-28' }),
+        item('AssetStack Academy outline', { people: ['david'], status: 'Not started', priority: 'Low', due: '' }),
+      ]),
+    ], 'david'),
+    board('projects', '', [
+      group('Active', '#c9ffe6', [
+        item('Partner pricing sheet', { people: ['josh'], status: 'In progress', priority: 'Medium', due: '2026-10-24' }),
+      ]),
+    ], 'josh'),
+    board('projects', '', [
+      group('Active', '#c9ffe6', [
+        item('Order merchandise samples', { people: ['hello'], status: 'In progress', priority: 'Low', due: '2026-10-21' }),
+        item('Tidy the shared drive', { people: ['hello'], status: 'Not started', priority: 'Low', due: '' }),
+      ]),
+    ], 'hello'),
+    board('projects', 'Landing Page', [
+      group('Active', '#c9ffe6', [
+        item('Hero copy refresh', { people: ['hello', 'david'], status: 'In progress', priority: 'High', due: '2026-10-23' },
+          { updates: [{ id: id('u'), user: 'hello', text: 'First draft is in the doc. @David can you check the headline?', ts: hoursAgo(8) }] }),
+        item('Council case study section', { people: ['david'], status: 'Not started', priority: 'Medium', due: '2026-11-06' }),
+        item('Page speed audit', { people: ['josh'], status: 'Not started', priority: 'Low', due: '2026-11-13' }),
+      ]),
+      group('Backlog', '#e6eaf2', [
+        item('Pricing page', { people: [], status: 'Not started', priority: 'Low', due: '' }),
+      ]),
+    ]),
+    board('projects', 'Tender Portal', [
+      group('Active', '#c9ffe6', [
+        item('Free Tender Portal', { people: ['david', 'hello'], status: 'In progress', priority: 'High', due: '2026-11-15' },
+          { subtasks: [{ id: id('s'), text: 'Supplier sign-up flow', done: true }, { id: id('s'), text: 'Tender alert emails', done: false }] }),
+        item('Tender alert emails', { people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-11-20' }),
+      ]),
+    ]),
+    board('projects', 'General', [
+      group('Active', '#c9ffe6', [
+        item('Register NFP', { people: ['josh'], status: 'In progress', priority: 'High', due: '2026-10-30' },
+          { subtasks: [{ id: id('s'), text: 'Draft constitution', done: true }, { id: id('s'), text: 'Lodge with the regulator', done: false }] }),
+      ]),
+      group('Backlog', '#e6eaf2', [
+        item('AssetStack Academy', { people: ['hello'], status: 'Not started', priority: 'Low', due: '' }),
+      ]),
+      // The former Admin board.
+      group('Admin', '#ffe6b0', [
+        item('Merchandise', { people: ['hello'], status: 'In progress', priority: 'Low', due: '2026-10-18' }),
+        item('Trademark', { people: ['josh'], status: 'Stuck', priority: 'High', due: '2026-10-22' },
+          { updates: [{ id: id('u'), user: 'josh', text: 'Waiting on the examiner response.', ts: hoursAgo(30) }] }),
+        item('Insurance renewal', { people: ['josh', 'hello'], status: 'In progress', priority: 'High', due: '2026-10-31' }),
+        item('Set up office phones', { people: ['hello'], status: 'Not started', priority: 'Medium', due: '2026-11-08' }),
+        item('Outsource time logger', { people: ['david'], status: 'Done', priority: 'Low', due: '2026-10-09' }),
+      ]),
+    ]),
+    board('marketing', 'Daily Automation', [
+      group('Every day', '#bfe9ff', [
+        item('Morning LinkedIn post', { people: ['hello'], status: 'In progress', type: 'Industry', channel: 'LinkedIn', approval: 'Yes', due: '' }),
+        item('Engage with 10 council posts', { people: ['hello'], status: 'In progress', type: 'Industry', channel: 'LinkedIn', approval: '', due: '' }),
+        item('Answer new reviews', { people: ['david'], status: 'Not started', type: 'Industry', channel: 'Reviews', approval: '', due: '' }),
+      ]),
+    ]),
+    board('marketing', 'Posting schedule', [
+      group('October', '#bfe9ff', [
+        item('LinkedIn weekly engagement', { people: ['hello'], status: 'In progress', type: 'Industry', channel: 'LinkedIn', approval: '', due: '2026-10-31' }),
+        item('Golf Day promotion', { people: [], status: 'In progress', type: 'Sponsorship', channel: 'LinkedIn', approval: '', due: '2026-10-12' }),
+        item('Team on site', { people: ['david'], status: 'In progress', type: 'Industry', channel: 'LinkedIn', approval: 'No', due: '2026-10-15' }),
+        item('Golf Day content', { people: ['hello'], status: 'In progress', type: 'Industry', channel: 'Content', approval: '', due: '2026-10-16' }),
+        item('Bridge project spotlight', { people: ['david'], status: 'Not started', type: 'Projects', channel: 'Website', approval: '', due: '2026-10-20' }),
+        item('Monthly award', { people: ['josh'], status: 'Stuck', type: 'Staff internal', channel: 'LinkedIn', approval: 'No', due: '2026-10-28' }),
+        item('Sponsorship announcement', { people: ['david', 'hello'], status: 'In progress', type: 'Sponsorship', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-24' }),
+      ]),
+      group('November', '#ead9ff', [
+        item('LinkedIn weekly engagement', { people: [], status: 'Not started', type: 'Projects', channel: 'LinkedIn', approval: '', due: '2026-11-30' }),
+        item('Westbay case study', { people: ['hello', 'david'], status: 'Not started', type: 'Projects', channel: 'Website', approval: 'Pending', due: '2026-11-14' },
+          { updates: [{ id: id('u'), user: 'david', text: '@Hello can you add the October usage numbers?', ts: hoursAgo(5) }] }),
+        item('G2 + Google reviews', { people: ['david'], status: 'Not started', type: 'Industry', channel: 'Reviews', approval: '', due: '2026-11-21' }),
+        item('Council landing page', { people: ['hello'], status: 'Not started', type: 'Projects', channel: 'Content', approval: '', due: '2026-11-25' }),
+      ]),
+    ]),
+    board('marketing', 'Campaigns', [
+      group('This quarter', '#ead9ff', [
+        item('Council digital twin campaign', { people: ['david', 'hello'], status: 'In progress', type: 'Projects', channel: 'LinkedIn', approval: 'Pending', due: '2026-11-28' }),
+        item('Utilities email campaign', { people: ['josh'], status: 'Not started', type: 'Industry', channel: 'Content', approval: '', due: '2026-12-05' }),
+      ]),
+    ]),
+    board('marketing', 'Events', [
+      group('Upcoming', '#ffe6b0', [
+        item('Golf Day', { people: ['hello', 'josh'], status: 'In progress', type: 'Sponsorship', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-12' }),
+        item('Local government conference stand', { people: ['david'], status: 'Not started', type: 'Industry', channel: 'Website', approval: '', due: '2026-11-19' }),
+      ]),
+    ]),
+  ];
 }
 
 // `contact` is the deal owner's user id; `contactId` the outreach contact it came from.
@@ -371,21 +425,39 @@ export function migrate(data) {
     if (first) first.role = 'superadmin';
   }
 
-  // The Admin board merges into Projects (its groups move to the end; the seeded "To do" becomes "Admin"), and an
-  // item's single owner becomes its people, as the 0002 migration does in the database.
-  const boards = (data.boards ||= {});
-  boards.projects ||= { groups: [] };
-  boards.marketing ||= { groups: [] };
-  if (boards.admin) {
-    (boards.admin.groups || []).forEach((g) => boards.projects.groups.push({ ...g, name: g.name === 'To do' ? 'Admin' : g.name }));
-    delete boards.admin;
+  const firstGroup = (module) => ({ id: uid(), name: FIRST_GROUP[module], color: FIRST_GROUP_COLOR, items: [] });
+  if (!Array.isArray(data.boards)) {
+    // The Admin board merges into Projects (its groups move to the end; the seeded "To do" becomes "Admin"), as 0002
+    // does in the database.
+    const legacy = data.boards && typeof data.boards === 'object' ? data.boards : {};
+    legacy.projects ||= { groups: [] };
+    legacy.marketing ||= { groups: [] };
+    if (legacy.admin) {
+      (legacy.admin.groups || []).forEach((g) => legacy.projects.groups.push({ ...g, name: g.name === 'To do' ? 'Admin' : g.name }));
+      delete legacy.admin;
+    }
+    // Sub-boards (0006): the Projects groups go on General and the Marketing ones on Posting schedule, next to the
+    // other starting team boards; a board with no groups starts with one.
+    data.boards = BOARD_MODULES.flatMap((module) => STARTING_BOARDS[module].map((name) => {
+      const groups = name === EXISTING_BOARD[module] ? legacy[module].groups || [] : [];
+      return { id: uid(), module, name, owner: '', groups: groups.length ? groups : [firstGroup(module)] };
+    }));
   }
+  // Everyone has their own Projects page (0006 and its new-profile trigger).
+  const pages = data.users.filter((u) => !data.boards.some((b) => b.module === 'projects' && b.owner === u.id))
+    .map((u) => ({ id: uid(), module: 'projects', name: '', owner: u.id, groups: [firstGroup('projects')] }));
+  data.boards = [...pages, ...data.boards];
+  // An item's single owner becomes its people, as the 0002 migration does in the database.
   const userIds = new Set(data.users.map((u) => u.id));
-  Object.values(boards).forEach((b) => (b.groups || []).forEach((g) => (g.items || []).forEach((it) => {
-    const values = { ...it.values };
-    if (!userIds.has(values.owner)) delete values.owner; // a stale owner is dropped
-    it.values = withPeople(values);
-  })));
+  data.boards.forEach((b) => {
+    b.name ??= '';
+    b.owner ??= '';
+    (b.groups ||= []).forEach((g) => (g.items || []).forEach((it) => {
+      const values = { ...it.values };
+      if (!userIds.has(values.owner)) delete values.owner; // a stale owner is dropped
+      it.values = withPeople(values);
+    }));
+  });
 
   (data.contacts || []).forEach((c) => { c.owner ??= ''; });
   (data.deals || []).forEach((dl) => { dl.contactId ??= ''; });

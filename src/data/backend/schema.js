@@ -2,7 +2,7 @@
 // No Supabase or Vite imports: scripts/test-sync.mjs runs this file directly in Node.
 import { TEAM_TIMEZONE } from '../../lib/format.js';
 
-const BOARD_KEYS = ['projects', 'marketing']; // the board_groups.board_key check constraint (0002 merged admin into projects)
+const BOARD_KEYS = ['projects', 'marketing']; // the boards.module check constraint (0006; 0002 merged admin into projects)
 
 const DEFAULT_ORG = {
   businessName: '', abn: '', address: '', email: '', phone: '', bankAccountName: '', bsb: '', accountNumber: '',
@@ -51,8 +51,9 @@ const COLUMNS = {
     id: 'int', business_name: t, abn: t, address: t, email: t, phone: t, bank_account_name: t, bsb: t,
     account_number: t, invoice_prefix: t, payment_terms_days: 'int', contract_template: t, contract_folder: t,
   },
-  board_groups: { id: 'id', board_key: t, name: t, color: t, position: 'int' },
-  items: { id: 'id', board_key: t, group_id: 'id', position: 'int', name: t, values: 'json', done: 'bool' },
+  boards: { id: 'id', module: t, name: t, owner_id: 'fk', position: 'int' },
+  board_groups: { id: 'id', board_key: t, board_id: 'id', name: t, color: t, position: 'int' },
+  items: { id: 'id', board_key: t, board_id: 'id', group_id: 'id', position: 'int', name: t, values: 'json', done: 'bool' },
   item_updates: { id: 'id', item_id: 'id', user_id: 'fk', text: t, created_at: 'ts' },
   subtasks: { id: 'id', item_id: 'id', position: 'int', text: t, done: 'bool' },
   // key_contact / email are no longer synced: 0004 moved them into client_contacts.
@@ -127,7 +128,8 @@ export const TABLES = [
   { name: 'profiles', key: byId, update: true },
   { name: 'org_settings', key: byId, update: true },
   { name: 'module_access', key: (r) => `${r.user_id}:${r.module}`, onConflict: 'user_id,module' },
-  { name: 'board_groups', key: byId, inState: (r) => BOARD_KEYS.includes(r.board_key) },
+  { name: 'boards', key: byId, inState: (r) => BOARD_KEYS.includes(r.module) },
+  { name: 'board_groups', key: byId, parent: ['boards', 'board_id'] },
   { name: 'items', key: byId, parent: ['board_groups', 'group_id'] },
   { name: 'item_updates', key: byId, parent: ['items', 'item_id'] },
   { name: 'subtasks', key: byId, parent: ['items', 'item_id'] },
@@ -205,14 +207,27 @@ export function flatten(state) {
     contract_template: org.contractTemplate, contract_folder: org.contractFolder,
   });
 
-  BOARD_KEYS.forEach((board) => (state.boards?.[board]?.groups || []).forEach((g, gi) => {
-    put('board_groups', { id: g.id, board_key: board, name: g.name, color: g.color, position: gi });
-    (g.items || []).forEach((it, ii) => {
-      put('items', { id: it.id, board_key: board, group_id: g.id, position: ii, name: it.name, values: it.values, done: it.done });
-      (it.updates || []).forEach((u) => put('item_updates', { id: u.id, item_id: it.id, user_id: u.user, text: u.text, created_at: u.ts }));
-      (it.subtasks || []).forEach((s, si) => put('subtasks', { id: s.id, item_id: it.id, position: si, text: s.text, done: s.done }));
+  // Team boards are numbered within their module (everyone who sees the module sees them all, so staff and admins
+  // agree on positions); a personal board is always 0 (they are listed by their owner's name).
+  const teamAt = new Map();
+  (Array.isArray(state.boards) ? state.boards : []).filter((b) => BOARD_KEYS.includes(b.module)).forEach((b) => {
+    let position = 0;
+    if (!b.owner) {
+      position = teamAt.get(b.module) || 0;
+      teamAt.set(b.module, position + 1);
+    }
+    put('boards', { id: b.id, module: b.module, name: b.owner ? '' : b.name, owner_id: b.owner || null, position });
+    (b.groups || []).forEach((g, gi) => {
+      put('board_groups', { id: g.id, board_key: b.module, board_id: b.id, name: g.name, color: g.color, position: gi });
+      (g.items || []).forEach((it, ii) => {
+        put('items', {
+          id: it.id, board_key: b.module, board_id: b.id, group_id: g.id, position: ii, name: it.name, values: it.values, done: it.done,
+        });
+        (it.updates || []).forEach((u) => put('item_updates', { id: u.id, item_id: it.id, user_id: u.user, text: u.text, created_at: u.ts }));
+        (it.subtasks || []).forEach((s, si) => put('subtasks', { id: s.id, item_id: it.id, position: si, text: s.text, done: s.done }));
+      });
     });
-  }));
+  });
 
   // Clients, contacts and a client's invoices are added at the top, so their positions count from the end:
   // adding one then leaves every other row as it was, instead of rewriting them all over other people's edits.
@@ -354,9 +369,16 @@ export function assemble(rowsByTable, { me } = {}) {
   const updates = groupBy(all('item_updates'), 'item_id');
   const subtasks = groupBy(all('subtasks'), 'item_id');
   const items = groupBy(all('items'), 'group_id');
-  const groups = groupBy(all('board_groups'), 'board_key');
-  const boards = Object.fromEntries(BOARD_KEYS.map((board) => [board, {
-    groups: kids(groups, board, byPos).map((g) => ({
+  const groups = groupBy(all('board_groups'), 'board_id');
+  // Projects then Marketing; in each, personal boards (by their owner's name) before the team boards in order.
+  const names = new Map(all('profiles').map((u) => [u.id, u.name.toLowerCase()]));
+  const boardOrder = (a, b) => BOARD_KEYS.indexOf(a.module) - BOARD_KEYS.indexOf(b.module)
+    || (a.owner_id ? 0 : 1) - (b.owner_id ? 0 : 1)
+    || (a.owner_id ? cmp(names.get(a.owner_id) || '', names.get(b.owner_id) || '') : a.position - b.position)
+    || cmp(a.id, b.id);
+  const boards = all('boards').filter((b) => BOARD_KEYS.includes(b.module)).sort(boardOrder).map((b) => ({
+    id: b.id, module: b.module, name: b.name, owner: b.owner_id ?? '',
+    groups: kids(groups, b.id, byPos).map((g) => ({
       id: g.id, name: g.name, color: g.color,
       items: kids(items, g.id, byPos).map((it) => ({
         id: it.id, name: it.name, values: { ...it.values }, done: it.done,
@@ -364,7 +386,7 @@ export function assemble(rowsByTable, { me } = {}) {
         subtasks: kids(subtasks, it.id, byPos).map((s) => ({ id: s.id, text: s.text, done: s.done })),
       })),
     })),
-  }]));
+  }));
 
   const notes = groupBy(all('client_notes'), 'client_id');
   const tasks = groupBy(all('client_tasks'), 'client_id');

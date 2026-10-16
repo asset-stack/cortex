@@ -2,6 +2,8 @@ import { useMemo, useRef, useState } from 'react';
 import { ArrowRight, FileUp } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { BOARD_SCHEMAS } from '@/data/boards';
+import { useAccess } from '@/lib/access';
+import { boardHref, boardTitle, findBoard } from '@/lib/boards';
 import { Segmented } from '@/components/ui';
 import { readCsv } from '@/lib/csv';
 import { autoMap, fieldsFor, normalise, withFullName } from '@/lib/importers';
@@ -30,7 +32,11 @@ export default function Import() {
   const { state, actions } = useStore();
   const users = useUsers();
   const [kind, setKind] = useState('clients');
-  const [board, setBoard] = useState('projects');
+  const access = useAccess();
+  const targets = state.boards.filter((b) => access.canEditBoard(b)); // boards tasks can be imported into
+  const [picked, setPicked] = useState('');
+  const board = (targets.find((b) => b.id === picked) || targets[0])?.id || '';
+  const module = findBoard(state, board)?.module || 'projects'; // the board's columns are its module's
   const [group, setGroup] = useState('');
   const [groupName, setGroupName] = useState('');
   const [csv, setCsv] = useState(null); // { name, headers, rows }
@@ -40,21 +46,21 @@ export default function Import() {
   const fileRef = useRef(null);
   const reading = useRef(0); // ignore a slower read of a file that has since been replaced
 
-  const groups = state.boards[board]?.groups || [];
+  const groups = findBoard(state, board)?.groups || [];
   const groupId = group === NEW_GROUP || !groups.length ? NEW_GROUP : groups.some((g) => g.id === group) ? group : groups[0].id;
-  const fields = useMemo(() => fieldsFor(kind, board), [kind, board]);
+  const fields = useMemo(() => fieldsFor(kind, module), [kind, module]);
   const shown = fields.filter((f) => f.key !== 'created' && mapping[f.key] >= 0);
 
   const { records, blank } = useMemo(() => {
     if (!csv) return { records: [], blank: 0 };
-    const all = csv.rows.map((r) => normalise(kind, r, mapping, { users: state.users, me: state.me, board }));
+    const all = csv.rows.map((r) => normalise(kind, r, mapping, { users: state.users, me: state.me, board: module }));
     const named = all.filter(Boolean);
     return { records: named, blank: all.length - named.length };
-  }, [csv, kind, mapping, state.users, state.me, board]);
+  }, [csv, kind, mapping, state.users, state.me, module]);
 
-  const remap = (k, b) => { if (csv) setMapping(autoMap(csv.headers, k, b)); };
-  const chooseKind = (k) => { setKind(k); setResult(null); remap(k, board); };
-  const chooseBoard = (b) => { setBoard(b); setGroup(''); remap(kind, b); };
+  const remap = (k, m) => { if (csv) setMapping(autoMap(csv.headers, k, m)); };
+  const chooseKind = (k) => { setKind(k); setResult(null); remap(k, module); };
+  const chooseBoard = (id) => { setPicked(id); setGroup(''); remap(kind, findBoard(state, id)?.module || 'projects'); };
 
   const onFile = (e) => {
     const file = e.target.files?.[0];
@@ -68,7 +74,7 @@ export default function Import() {
       if (!headers.length || !rows.length) { setCsv(null); setError('No rows found.'); return; }
       setError(''); setResult(null);
       setCsv({ name: file.name, headers, rows });
-      setMapping(autoMap(headers, kind, board));
+      setMapping(autoMap(headers, kind, module));
     };
     reader.onerror = () => { if (token === reading.current) setError("Couldn't read that file."); };
     reader.readAsText(file);
@@ -95,7 +101,11 @@ export default function Import() {
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Board</span>
               <select className="field" value={board} onChange={(e) => chooseBoard(e.target.value)}>
-                {Object.entries(BOARD_SCHEMAS).map(([k, s]) => <option key={k} value={k}>{s.title}</option>)}
+                {Object.entries(BOARD_SCHEMAS).map(([k, s]) => targets.some((b) => b.module === k) && (
+                  <optgroup key={k} label={s.title}>
+                    {targets.filter((b) => b.module === k).map((b) => <option key={b.id} value={b.id}>{boardTitle(state, b)}</option>)}
+                  </optgroup>
+                ))}
               </select>
             </label>
             <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Group</span>
@@ -178,7 +188,7 @@ export default function Import() {
               {result.blank > 0 && `, ${result.blank} without a name`}
             </span>
             {result.added > 0 && (
-              <a href={`#/${result.kind === 'tasks' ? result.board : OPEN_ROUTE[result.kind]}`} className="ml-auto inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 text-[12.5px] font-semibold">
+              <a href={result.kind === 'tasks' ? boardHref(findBoard(state, result.board)) : `#/${OPEN_ROUTE[result.kind]}`} className="ml-auto inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 text-[12.5px] font-semibold">
                 Open<ArrowRight className="h-3.5 w-3.5" />
               </a>
             )}

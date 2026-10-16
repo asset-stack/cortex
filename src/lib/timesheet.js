@@ -134,9 +134,9 @@ export function dayActivity(state, userId, day) {
   const emailsSent = (state?.emails || []).filter((e) => e.kind === 'sent' && on(e.ts) && e.contactId && owners.get(e.contactId) === userId);
 
   const itemsTouched = [];
-  Object.keys(BOARD_CATEGORY).forEach((board) => (state?.boards?.[board]?.groups || []).forEach((g) => (g.items || []).forEach((it) => {
+  (Array.isArray(state?.boards) ? state.boards : []).filter((b) => BOARD_CATEGORY[b.module]).forEach((b) => (b.groups || []).forEach((g) => (g.items || []).forEach((it) => {
     const mine = (it.updates || []).filter((u) => u.user === userId && on(u.ts)).map((u) => u.ts).sort();
-    if (mine.length) itemsTouched.push({ board, id: it.id, name: it.name, ts: mine[0] });
+    if (mine.length) itemsTouched.push({ board: b.module, id: it.id, name: it.name, ts: mine[0] });
   })));
 
   const messagesSent = (state?.messages || []).filter((m) => m.user === userId && on(m.ts));

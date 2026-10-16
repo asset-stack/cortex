@@ -10,7 +10,8 @@ import { LIVE, supabase } from '@/data/backend/client';
 import { TABLES, assemble, diff, flatten, normalizeRow, stable } from '@/data/backend/schema';
 import { createSync } from '@/data/backend/sync';
 import { GateScreen, Spinner } from '@/components/auth/AuthGate';
-import { LEVELS, MODULES, ROLES, STAFF_DEFAULTS, canEdit, isAdmin, isSuperadmin } from '@/lib/access';
+import { LEVELS, MODULES, ROLES, STAFF_DEFAULTS, canEdit, canEditBoard, isAdmin, isSuperadmin } from '@/lib/access';
+import { BOARD_MODULES, FIRST_GROUP, FIRST_GROUP_COLOR, GROUP_COLORS, findBoard } from '@/lib/boards';
 import {
   PLAN_MONTHS, addDays, addMonths, clientCreatedLocal, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isPlanDate,
   isYmd, makeTodo, mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
@@ -121,12 +122,21 @@ function markSeen(d, chId, ts) {
 
 const StoreContext = createContext(null);
 
-function findItem(state, boardKey, itemId) {
-  for (const g of state.boards[boardKey]?.groups || []) {
+function findItem(state, boardId, itemId) {
+  for (const g of findBoard(state, boardId)?.groups || []) {
     const it = g.items.find((i) => i.id === itemId);
     if (it) return { group: g, item: it };
   }
   return {};
+}
+
+const firstGroup = (module) => ({ id: uid(), name: FIRST_GROUP[module] || 'To do', color: FIRST_GROUP_COLOR, items: [] });
+// One step up (-1) or down (1) in a list; false at either end.
+function step(list, i, dir) {
+  const j = i + (dir < 0 ? -1 : 1);
+  if (i < 0 || j < 0 || j >= list.length) return false;
+  [list[i], list[j]] = [list[j], list[i]];
+  return true;
 }
 
 const findClient = (d, clientId) => d.clients.find((c) => c.id === clientId);
@@ -209,7 +219,16 @@ function createActions(mutate, mode) {
   // fn runs only when the signed-in user may do it; otherwise false and nothing changes.
   const editing = (module, fn) => mutate((d) => (canEdit(d, module) ? fn(d) : false));
   const admin = (fn) => mutate((d) => (isAdmin(d) ? fn(d) : false));
-  const onBoard = (key, fn) => mutate((d) => (d.boards[key] && canEdit(d, key) ? fn(d, d.boards[key]) : false));
+  // fn runs only when the signed-in user can edit that board (src/lib/access.js boardLevel).
+  const onBoard = (boardId, fn) => mutate((d) => {
+    const b = findBoard(d, boardId);
+    return b && canEditBoard(d, b) ? fn(d, b) : false;
+  });
+  // Team boards (the sub-menus under Projects and Marketing) are the admins' to add, rename, order and delete.
+  const onTeamBoard = (boardId, fn) => admin((d) => {
+    const b = findBoard(d, boardId);
+    return b && !b.owner ? fn(d, b) : false;
+  });
   // Your own to-dos, or anyone's for admins.
   const mayTodo = (d, t) => Boolean(t) && (t.assignee === d.me || isAdmin(d));
   // The database keeps one to-do per routine, person and day, and one automation to-do per ref, person and day.
@@ -260,12 +279,13 @@ function createActions(mutate, mode) {
     // options.groupName. → { added, skipped }, or false without edit access to where they go.
     importRecords: (kind, records, options = {}) => mutate((d) => {
       const result = { added: 0, skipped: 0 };
-      const module = { clients: 'clients', contacts: 'outreach', deals: 'pipeline', tasks: options.board }[kind];
-      if (!module || (kind === 'tasks' && !d.boards[options.board])) {
+      const target = kind === 'tasks' ? findBoard(d, options.board) : null;
+      const module = { clients: 'clients', contacts: 'outreach', deals: 'pipeline', tasks: target?.module }[kind];
+      if (!module) {
         result.skipped = records?.length || 0;
         return result;
       }
-      if (!canEdit(d, module)) return false;
+      if (kind === 'tasks' ? !canEditBoard(d, target) : !canEdit(d, module)) return false;
       if (kind === 'clients') {
         const added = takeNew(d.clients, records, (r) => newClient(d, r), result);
         d.clients.unshift(...added);
@@ -291,7 +311,7 @@ function createActions(mutate, mode) {
         d.deals.push(...takeNew(d.deals, rest, newDeal, result));
         result.added += filled;
       } else {
-        const board = d.boards[options.board];
+        const board = target;
         const items = takeNew(board.groups.flatMap((g) => g.items), records, (r) => newItem(r), result);
         if (items.length) {
           let g = board.groups.find((x) => x.id === options.groupId);
@@ -305,19 +325,51 @@ function createActions(mutate, mode) {
       return result;
     }),
 
-    // ── Boards (projects, marketing): edit access to that board ──
+    // ── Boards (Projects, Marketing): team boards are the admins'; groups and tasks need edit access to the board ──
 
-    addItem: (board, groupId, name = 'New task') => onBoard(board, (d, b) => {
+    // A new team board at the end of its module, with one group. → id
+    addBoard: (module, name) => admin((d) => {
+      const title = textOf(name).trim();
+      if (!BOARD_MODULES.includes(module) || !title) return false;
+      const b = { id: uid(), module, name: title, owner: '', groups: [firstGroup(module)] };
+      const last = d.boards.reduce((at, x, i) => (x.module === module ? i : at), -1);
+      d.boards.splice(last + 1, 0, b);
+      return b.id;
+    }),
+    renameBoard: (boardId, name) => onTeamBoard(boardId, (d, b) => {
+      const title = textOf(name).trim();
+      if (!title) return false;
+      b.name = title;
+      return true;
+    }),
+    // Among its module's team boards.
+    moveBoard: (boardId, dir) => onTeamBoard(boardId, (d, b) => {
+      const at = d.boards.map((x, i) => (x.module === b.module && !x.owner ? i : -1)).filter((i) => i >= 0);
+      const k = at.indexOf(d.boards.indexOf(b));
+      const j = k + (dir < 0 ? -1 : 1);
+      if (k < 0 || j < 0 || j >= at.length) return false;
+      [d.boards[at[k]], d.boards[at[j]]] = [d.boards[at[j]], d.boards[at[k]]];
+      return true;
+    }),
+    // With its groups, tasks, subtasks and updates.
+    removeBoard: (boardId) => onTeamBoard(boardId, (d, b) => {
+      d.boards = d.boards.filter((x) => x !== b);
+      return true;
+    }),
+
+    // Into `groupId` (else the board's first group; a board with none gets one). → id
+    addItem: (boardId, groupId, name = 'New task') => onBoard(boardId, (d, b) => {
+      if (!b.groups.length) b.groups.push(firstGroup(b.module));
       const g = b.groups.find((x) => x.id === groupId) || b.groups[0];
-      if (!g) return false;
-      const item = newItem({ name, values: {} }, [d.me]);
+      const item = newItem({ name: textOf(name).trim() || 'New task', values: {} }, [d.me]);
       g.items.push(item);
       return item.id; // so the caller can open it
     }),
-    updateItem: (board, itemId, patch = {}) => onBoard(board, (d) => {
-      const { item } = findItem(d, board, itemId);
+    updateItem: (boardId, itemId, patch = {}) => onBoard(boardId, (d) => {
+      const { item } = findItem(d, boardId, itemId);
       if (!item) return false;
-      const { values, id: _id, ...rest } = patch;
+      const { values, id: _id, updates: _updates, subtasks: _subtasks, ...rest } = patch;
+      if ('name' in rest && !textOf(rest.name).trim()) delete rest.name; // a task always has a name
       Object.assign(item, rest);
       if (values) {
         const next = { ...values };
@@ -328,33 +380,91 @@ function createActions(mutate, mode) {
       }
       return true;
     }),
-    deleteItem: (board, itemId) => onBoard(board, (d, b) => {
+    deleteItem: (boardId, itemId) => onBoard(boardId, (d, b) => {
+      if (!findItem(d, boardId, itemId).item) return false;
       b.groups.forEach((g) => { g.items = g.items.filter((i) => i.id !== itemId); });
       return true;
     }),
-    addGroup: (board, name) => onBoard(board, (d, b) => {
-      const g = { id: uid(), name, color: '#d6e4ff', items: [] };
+    // To another group, on this board or another board of the same module you can edit (to the end of its group;
+    // the target board's first group when no group is named).
+    moveItem: (boardId, itemId, { board: toBoardId = boardId, group: toGroupId } = {}) => onBoard(boardId, (d, b) => {
+      const { group, item } = findItem(d, boardId, itemId);
+      const to = findBoard(d, toBoardId);
+      if (!item || !to || to.module !== b.module || !canEditBoard(d, to)) return false;
+      if (!to.groups.length) to.groups.push(firstGroup(to.module));
+      const g = to.groups.find((x) => x.id === toGroupId) || to.groups[0];
+      if (g === group) return false;
+      group.items = group.items.filter((i) => i !== item);
+      g.items.push(item);
+      return true;
+    }),
+
+    // Groups (Active, Backlog …) on a board. → id
+    addGroup: (boardId, name) => onBoard(boardId, (d, b) => {
+      const color = GROUP_COLORS[b.groups.length % GROUP_COLORS.length];
+      const g = { id: uid(), name: textOf(name).trim() || 'New group', color, items: [] };
       b.groups.push(g);
       return g.id;
     }),
+    renameGroup: (boardId, groupId, name) => onBoard(boardId, (d, b) => {
+      const g = b.groups.find((x) => x.id === groupId);
+      const title = textOf(name).trim();
+      if (!g || !title) return false;
+      g.name = title;
+      return true;
+    }),
+    moveGroup: (boardId, groupId, dir) => onBoard(boardId, (d, b) => step(b.groups, b.groups.findIndex((x) => x.id === groupId), dir)),
+    // With its tasks.
+    removeGroup: (boardId, groupId) => onBoard(boardId, (d, b) => {
+      if (!b.groups.some((x) => x.id === groupId)) return false;
+      b.groups = b.groups.filter((x) => x.id !== groupId);
+      return true;
+    }),
+
     // Everyone @mentioned in an update is added to the item's people.
-    addUpdate: (board, itemId, text) => onBoard(board, (d) => {
-      const { item } = findItem(d, board, itemId);
-      if (!item) return false;
-      item.updates.unshift({ id: uid(), user: d.me, text, ts: nowIso() });
+    addUpdate: (boardId, itemId, text) => onBoard(boardId, (d) => {
+      const { item } = findItem(d, boardId, itemId);
+      if (!item || !textOf(text).trim()) return false;
+      item.updates.unshift({ id: uid(), user: d.me, text: textOf(text).trim(), ts: nowIso() });
       item.values = withPeople({ ...item.values, people: [...(item.values.people || []), ...mentionedUserIds(text, d.users)] });
       return true;
     }),
-    addSubtask: (board, itemId, text) => onBoard(board, (d) => {
-      const { item } = findItem(d, board, itemId);
-      if (!item) return false;
-      item.subtasks.push({ id: uid(), text, done: false });
+    // Your own updates, or anyone's for admins (as the database allows).
+    editUpdate: (boardId, itemId, updateId, text) => onBoard(boardId, (d) => {
+      const u = findItem(d, boardId, itemId).item?.updates.find((x) => x.id === updateId);
+      if (!u || !(u.user === d.me || isAdmin(d)) || !textOf(text).trim()) return false;
+      u.text = textOf(text).trim();
       return true;
     }),
-    toggleSubtask: (board, itemId, subId) => onBoard(board, (d) => {
-      const s = findItem(d, board, itemId).item?.subtasks.find((x) => x.id === subId);
+    removeUpdate: (boardId, itemId, updateId) => onBoard(boardId, (d) => {
+      const { item } = findItem(d, boardId, itemId);
+      const u = item?.updates.find((x) => x.id === updateId);
+      if (!u || !(u.user === d.me || isAdmin(d))) return false;
+      item.updates = item.updates.filter((x) => x !== u);
+      return true;
+    }),
+    addSubtask: (boardId, itemId, text) => onBoard(boardId, (d) => {
+      const { item } = findItem(d, boardId, itemId);
+      if (!item || !textOf(text).trim()) return false;
+      item.subtasks.push({ id: uid(), text: textOf(text).trim(), done: false });
+      return true;
+    }),
+    toggleSubtask: (boardId, itemId, subId) => onBoard(boardId, (d) => {
+      const s = findItem(d, boardId, itemId).item?.subtasks.find((x) => x.id === subId);
       if (!s) return false;
       s.done = !s.done;
+      return true;
+    }),
+    renameSubtask: (boardId, itemId, subId, text) => onBoard(boardId, (d) => {
+      const s = findItem(d, boardId, itemId).item?.subtasks.find((x) => x.id === subId);
+      if (!s || !textOf(text).trim()) return false;
+      s.text = textOf(text).trim();
+      return true;
+    }),
+    removeSubtask: (boardId, itemId, subId) => onBoard(boardId, (d) => {
+      const { item } = findItem(d, boardId, itemId);
+      if (!item?.subtasks.some((x) => x.id === subId)) return false;
+      item.subtasks = item.subtasks.filter((x) => x.id !== subId);
       return true;
     }),
 
@@ -1101,10 +1211,17 @@ const MODULE_OF = {
   clients: 'clients', client_notes: 'clients', client_tasks: 'clients', invoices: 'clients', invoice_lines: 'clients',
   client_access: 'clients', billing_plans: 'clients', client_usage: 'clients', client_contacts: 'clients', client_contracts: 'clients',
 };
-function moduleOf(table, row, rows) {
-  if (table === 'board_groups' || table === 'items') return row.board_key;
-  if (table === 'item_updates' || table === 'subtasks') return rows.items?.get(String(row.item_id))?.board_key || '';
-  return MODULE_OF[table] || '';
+// Whether the signed-in user may write a row (the RLS rules in 0002, 0004 and 0006); null for tables outside the
+// modules and boards. Boards' groups, tasks, subtasks and updates follow their board (0006).
+function mayWrite(d, table, row, rows) {
+  if (table === 'boards') return isAdmin(d);
+  if (table === 'board_groups' || table === 'items') return canEditBoard(d, findBoard(d, String(row.board_id)));
+  if (table === 'item_updates' || table === 'subtasks') {
+    const it = rows.items?.get(String(row.item_id));
+    return it ? canEditBoard(d, findBoard(d, String(it.board_id))) : null;
+  }
+  if (table === 'client_contracts') return isAdmin(d);
+  return MODULE_OF[table] ? canEdit(d, MODULE_OF[table]) : null;
 }
 // Only `position` differs: flatten() renumbering an order the database holds with a gap or two rows on one position.
 const onlyPosition = (before, after) => Boolean(before) && 'position' in after
@@ -1332,13 +1449,11 @@ function createLiveEngine({ me, onState, onPhase, onSync }) {
     const out = fn(d);
     if (out === false) return false; // refused: nothing changes
     const next = flatten(d);
-    // Renumbering rows of a module this user only views would be refused and retried forever: keep the database's
-    // positions instead (the order on screen is the same). Contracts are written by admins only, whatever the module.
+    // Renumbering rows this user can't write (a module or board they only view, team boards for staff) would be
+    // refused and retried forever: keep the database's positions instead (the order on screen is the same).
     const ops = diff(rows, next).filter((o) => {
       const before = o.op === 'upsert' && rows[o.table].get(o.key);
-      const module = before && moduleOf(o.table, o.row, next);
-      const may = o.table === 'client_contracts' ? isAdmin(d) : canEdit(d, module);
-      if (!module || may || !onlyPosition(before, o.row)) return true;
+      if (!before || !onlyPosition(before, o.row) || mayWrite(d, o.table, o.row, next) !== false) return true;
       next[o.table].set(o.key, before);
       return false;
     });

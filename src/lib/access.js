@@ -46,6 +46,25 @@ export function moduleLevel(state, module, userId = state?.me) {
 export const canView = (state, module, userId) => moduleLevel(state, module, userId) !== 'none';
 export const canEdit = (state, module, userId) => moduleLevel(state, module, userId) === 'edit';
 
+// Whose personal Projects page `userId` may open (sees_person() in 0006): their own; staff's for admins; everyone's
+// for the SuperAdmin.
+export function seesPerson(state, ownerId, userId = state?.me) {
+  if (!isActive(userOf(state, userId)) || !ownerId) return false;
+  if (ownerId === userId || isSuperadmin(state, userId)) return true;
+  return isAdmin(state, userId) && roleOf(state, ownerId) === 'staff';
+}
+
+// 'none' | 'view' | 'edit' on a board (board_level() in 0006): a team board has its module's level; a personal board
+// (board.owner set) is 'edit' for whoever may open it while they can see Projects at all, else 'none'.
+export function boardLevel(state, board, userId = state?.me) {
+  if (!board || !MODULES.includes(board.module)) return 'none';
+  if (!board.owner) return moduleLevel(state, board.module, userId);
+  return canView(state, board.module, userId) && seesPerson(state, board.owner, userId) ? 'edit' : 'none';
+}
+
+export const canViewBoard = (state, board, userId) => boardLevel(state, board, userId) !== 'none';
+export const canEditBoard = (state, board, userId) => boardLevel(state, board, userId) === 'edit';
+
 // The signed-in user's access, for screens: hide modules at none, render read-only at view.
 export function useAccess() {
   const { state } = useStore();
@@ -56,5 +75,8 @@ export function useAccess() {
     level: (module) => moduleLevel(state, module),
     canView: (module) => canView(state, module),
     canEdit: (module) => canEdit(state, module),
+    seesPerson: (userId) => seesPerson(state, userId),
+    canViewBoard: (board) => canViewBoard(state, board),
+    canEditBoard: (board) => canEditBoard(state, board),
   }), [state]);
 }

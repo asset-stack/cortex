@@ -68,7 +68,7 @@ export const FIELDS = {
   ],
 };
 
-/** The fields for a kind; for tasks, only the columns the chosen board has. */
+/** The fields for a kind; for tasks, only the columns the chosen board has (`board`: its module, projects or marketing). */
 export function fieldsFor(kind, board) {
   const cols = BOARD_SCHEMAS[board]?.columns;
   return (FIELDS[kind] || []).filter((f) => !f.column || !cols || cols.some((c) => c.key === f.key));
@@ -339,7 +339,7 @@ const avatarFor = (name) => AVATARS[[...name].reduce((h, c) => (h * 31 + c.charC
  * One CSV row (array of cells) → a state-shaped record without ids, or null when it has no name.
  * `me` (the importer) writes the imported note and owns clients and deals whose owner doesn't match anyone.
  * Tasks get everyone their people cell names in `values.people` (none when nobody matches). `board` is the
- * target board for tasks (projects or marketing).
+ * target board's module for tasks (projects or marketing).
  */
 export function normalise(kind, row, mapping, { users = [], me = '', board, now = new Date() } = {}) {
   const get = (key) => {
