@@ -110,7 +110,6 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
     const id = actions.addGroup(boardId, 'New group');
     if (id) setRenaming(`g:${id}`); // type its name straight away
   };
-  const cols = schema.columns.length + (readOnly ? 2 : 3);
 
   return (
     <>
@@ -217,7 +216,7 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                           </tr>
                         );
                       })}
-                      {!readOnly && <AddRow colSpan={cols - 1} onAdd={(name) => onAdd(g.id, name)} />}
+                      {!readOnly && <AddRow colSpan={schema.columns.length + 3} onAdd={(name) => onAdd(g.id, name)} />}
                     </tbody>
                   </table>
                 </div>

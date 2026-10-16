@@ -1673,6 +1673,573 @@ async function phase5({ alice, boss, david, hello, carol, newcomer }) {
   return { alice, boss, david, hello, carol, newcomer };
 }
 
+// Phase 6: 0006_boards.sql (sub-boards under Projects and Marketing, each person's own Projects page) -------------------
+
+async function applyMigration6() {
+  await as(null);
+  try {
+    await db.exec(migration6);
+    return null;
+  } catch (e) {
+    await db.exec('rollback').catch(() => {});
+    return e.message;
+  }
+}
+
+// src/lib/access.js (boardLevel, compared with board_level() in 38.) reaches the store through Vite's '@/…' alias for
+// its React hook: Node gets a stub for '@/data/store' (the hook isn't run here), as in scripts/test-sync.mjs.
+async function importAccess() {
+  const src = new URL('../src/', import.meta.url).href;
+  const storeStub = `data:text/javascript,${encodeURIComponent('export const useStore = () => { throw new Error("no store in Node"); };')}`;
+  register(`data:text/javascript,${encodeURIComponent(`
+    export async function resolve(specifier, context, next) {
+      if (specifier === '@/data/store') return { url: ${JSON.stringify(storeStub)}, shortCircuit: true };
+      if (specifier.startsWith('@/')) return next(${JSON.stringify(src)} + specifier.slice(2) + (/\\.[a-z]+$/.test(specifier) ? '' : '.js'), context);
+      return next(specifier, context);
+    }
+  `)}`);
+  return import('../src/lib/access.js');
+}
+
+async function phase6({ alice, boss, david, hello, carol, newcomer }) {
+  // 33. 0006 on a database that already holds board rows -----------------------------------------------------------
+
+  await as(null);
+  const early = (await one("select id from profiles where email = 'you@assetstackai.com'")).id; // the second admin (3., 10.)
+  // Both modules as 0001-0005 left them (Projects: Active, Backlog, Admin, Later; Marketing: This month), with tasks,
+  // subtasks and updates on each; one more Marketing group, so both of its groups have to land on Posting schedule.
+  const nextMonth = (await one(`insert into board_groups (board_key, name, color, position)
+    values ('marketing', 'Next month', '#bfe9ff', 1) returning id`)).id;
+  const launch = (await one(`insert into items (board_key, group_id, name, "values")
+    values ('marketing', $1, 'Launch post', '{"people": []}') returning id`, [nextMonth])).id;
+  await db.query("insert into subtasks (item_id, text) values ($1, 'Write the copy')", [launch]);
+  await db.query("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Draft is up')", [launch, boss]);
+  const projectItem = (await one("select id from items where board_key = 'projects' order by name limit 1")).id;
+  await db.query("insert into item_updates (item_id, user_id, text) values ($1, $2, 'On it')", [projectItem, alice]);
+  const preGroups = await rows('select id, board_key from board_groups');
+  const projectsBefore = preGroups.filter((g) => g.board_key === 'projects').map((g) => g.id);
+  const marketingBefore = preGroups.filter((g) => g.board_key === 'marketing').map((g) => g.id);
+  // What a set of groups holds, per module.
+  const contents = (groupIds) => rows(`select g.board_key as module, count(distinct g.id)::int as groups,
+      count(distinct i.id)::int as items, count(distinct s.id)::int as subtasks, count(distinct u.id)::int as updates
+    from board_groups g left join items i on i.group_id = g.id left join subtasks s on s.item_id = i.id
+    left join item_updates u on u.item_id = i.id where g.id = any($1::uuid[]) group by g.board_key order by g.board_key`, [groupIds]);
+  const held = await contents(preGroups.map((g) => g.id));
+  const publishedBefore = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'")).n;
+
+  const first = await applyMigration6();
+  const body = migration6.replace(/--.*$/gm, '').trim();
+  check('33. 0006 runs on top of 0005 and the boards as they were, as one transaction',
+    first === null && /^begin;/i.test(body) && /commit;$/i.test(body), first);
+  if (first) return null;
+  const snapshot = () => one(`select
+    (select string_agg(module || ':' || name || ':' || position, ',' order by module, position, name) from boards where owner_id is null) as team,
+    (select count(*)::int from boards) as boards, (select count(*)::int from board_groups) as groups`);
+  const afterFirst = await snapshot();
+  // Every board but General and Posting schedule (which got the old groups), right after the first run.
+  const firstGroups = await rows(`select b.module, b.owner_id is not null as personal, count(g.id)::int as n,
+      string_agg(g.name || ' ' || g.color || ' ' || g.position, ',') as groups
+    from boards b left join board_groups g on g.board_id = b.id
+    where b.id not in (select board_id from board_groups where id = any($1::uuid[]))
+    group by b.id, b.module, b.owner_id`, [preGroups.map((g) => g.id)]);
+  const second = await applyMigration6();
+  const afterSecond = await snapshot();
+  check('33. 0006 re-runs cleanly (adding no boards or groups) and never mentions module_level',
+    second === null && stable(afterSecond) === stable(afterFirst) && !migration6.includes('module_level'),
+    { second, afterFirst, afterSecond });
+  if (second) return null;
+  const shape = await one(`select c.relrowsecurity as rls,
+      exists (select 1 from pg_trigger t where t.tgrelid = c.oid and t.tgname = 'touch') as touched,
+      exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'boards') as published,
+      (select count(*)::int from pg_publication_tables where pubname = 'supabase_realtime') as total,
+      (select string_agg(x.relname, ',' order by x.relname) from pg_trigger t join pg_class x on x.oid = t.tgrelid
+        where t.tgname = 'place_on_board') as placed,
+      exists (select 1 from pg_trigger t where t.tgrelid = 'public.profiles'::regclass and t.tgname = 'add_personal_board') as pages
+    from pg_class c where c.oid = 'public.boards'::regclass`);
+  check('33. boards: RLS on, touch, published to realtime (35 tables); place_on_board on groups and tasks, add_personal_board on profiles',
+    shape.rls && shape.touched && shape.published && shape.total === publishedBefore + 1 && shape.total === 35
+      && shape.placed === 'board_groups,items' && shape.pages,
+    { shape, publishedBefore });
+
+  // 34. Starting team boards and everyone's own page --------------------------------------------------------------
+
+  check('34. the starting team boards, once each: Projects Landing Page, Tender Portal, General (0-2); Marketing Daily Automation, Posting schedule, Campaigns, Events (0-3)',
+    afterFirst.team === 'marketing:Daily Automation:0,marketing:Posting schedule:1,marketing:Campaigns:2,marketing:Events:3,'
+      + 'projects:Landing Page:0,projects:Tender Portal:1,projects:General:2',
+    afterFirst.team);
+  const pageShapes = await rows(`select p.email, count(b.id)::int as n,
+      coalesce(bool_and(b.module = 'projects' and b.name = '' and b.position = 0), false) as shape
+    from profiles p left join boards b on b.owner_id = p.id group by p.email order by p.email`);
+  check('34. every profile (the inactive one too) has exactly one personal board: Projects, unnamed, position 0',
+    pageShapes.length === 7 && pageShapes.every((r) => r.n === 1 && r.shape), pageShapes);
+  const late = await signUp('late.example@assetstackai.com', 'Late Example');
+  const latePage = await rows(`select b.module, b.name, b.position, g.board_key, g.name as group_name, g.color, g.position as group_position
+    from boards b left join board_groups g on g.board_id = b.id where b.owner_id = $1`, [late]);
+  check('34. someone who signs up after 0006 gets their own page, with one group (Active)',
+    latePage.length === 1 && stable(latePage[0]) === stable({
+      module: 'projects', name: '', position: 0, board_key: 'projects', group_name: 'Active', color: '#c9ffe6', group_position: 0,
+    }), latePage);
+
+  const board = Object.fromEntries((await rows('select name, id from boards where owner_id is null')).map((r) => [r.name, r.id]));
+  const page = Object.fromEntries((await rows('select owner_id, id from boards where owner_id is not null')).map((r) => [r.owner_id, r.id]));
+  const groupOn = async (boardId) => (await one('select id from board_groups where board_id = $1 order by position, name limit 1', [boardId]))?.id;
+  const pageGroup = {};
+  for (const [owner, id] of Object.entries(page)) pageGroup[owner] = await groupOn(id);
+
+  // 35. Backfill ----------------------------------------------------------------------------------------------------
+
+  const placed = await one(`select
+    (select count(*)::int from board_groups where id = any($1::uuid[]) and board_id <> $3) as projects_elsewhere,
+    (select count(*)::int from board_groups where id = any($2::uuid[]) and board_id <> $4) as marketing_elsewhere,
+    (select count(*)::int from board_groups where board_id = $3) as on_general,
+    (select count(*)::int from board_groups where board_id = $4) as on_posting,
+    (select count(*)::int from items i join board_groups g on g.id = i.group_id where i.board_id <> g.board_id) as tasks_elsewhere,
+    (select string_agg(table_name || ':' || is_nullable, ',' order by table_name) from information_schema.columns
+      where table_schema = 'public' and column_name = 'board_id' and table_name in ('board_groups', 'items')) as nullable`,
+  [projectsBefore, marketingBefore, board.General, board['Posting schedule']]);
+  const kept = await contents(preGroups.map((g) => g.id));
+  check("35. backfill: every Projects group is on General, every Marketing group on Posting schedule, every task on its group's board; nothing lost",
+    held.length === 2 && held.every((m) => m.groups > 0 && m.items > 0 && m.subtasks > 0 && m.updates > 0) && marketingBefore.length === 2
+      && placed.projects_elsewhere === 0 && placed.marketing_elsewhere === 0 && placed.on_general === projectsBefore.length
+      && placed.on_posting === marketingBefore.length && placed.tasks_elsewhere === 0 && stable(kept) === stable(held),
+    { held, kept, placed });
+  check('35. board_id is NOT NULL on board_groups and items', placed.nullable === 'board_groups:NO,items:NO', placed.nullable);
+  check('35. every other board (team boards and personal pages) starts with exactly one group: Active on Projects, To do on Marketing',
+    firstGroups.length === 12 && firstGroups.filter((b) => b.personal).length === 7
+      && firstGroups.every((b) => b.n === 1 && b.groups === `${b.module === 'projects' ? 'Active' : 'To do'} #c9ffe6 0`),
+    firstGroups);
+
+  // 36. Constraints and cascades ------------------------------------------------------------------------------------
+
+  await as(null); // the SQL editor: constraints hold for everyone
+  const generalGroup = await groupOn(board.General); // Active, from 0001
+  const constraints = {
+    personalMarketing: await error("insert into boards (module, owner_id) values ('marketing', $1)", [late]),
+    secondPage: await error("insert into boards (module, owner_id) values ('projects', $1)", [alice]),
+    groupModule: await error("insert into board_groups (board_key, board_id, name) values ('marketing', $1, 'Nope')", [board.General]),
+    taskBoard: await error("insert into items (board_key, board_id, group_id, name) values ('projects', $1, $2, 'Nope')",
+      [board['Landing Page'], generalGroup]),
+    taskOnly: await error('update items set board_id = $2 where id = $1', [projectItem, board['Landing Page']]),
+  };
+  check("36. constraints: no personal Marketing board, one personal board each, a group on a board of its own module, a task on its group's board",
+    /boards_personal_projects/.test(constraints.personalMarketing ?? '') && /boards_owner_key/.test(constraints.secondPage ?? '')
+      && /board_groups_board_fkey/.test(constraints.groupModule ?? '') && /items_group_board_id_fkey/.test(constraints.taskBoard ?? '')
+      && /items_group_board_id_fkey/.test(constraints.taskOnly ?? ''),
+    constraints);
+
+  await as(boss);
+  const moving = (await one(`insert into board_groups (board_key, board_id, name, position) values ('projects', $1, 'Moving', 1)
+    returning id`, [board['Landing Page']])).id;
+  const movingTasks = [];
+  for (const name of ['First', 'Second']) {
+    movingTasks.push((await one(`insert into items (board_key, board_id, group_id, name) values ('projects', $1, $2, $3)
+      returning id`, [board['Landing Page'], moving, name])).id);
+  }
+  await db.query("insert into subtasks (item_id, text) values ($1, 'Step')", [movingTasks[0]]);
+  await db.query("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Moving soon')", [movingTasks[0], boss]);
+  const moveGroup = await affected('update board_groups set board_id = $2 where id = $1', [moving, board['Tender Portal']]);
+  await as(null);
+  const carried = await one(`select (select string_agg(distinct board_id::text, ',') from items where group_id = $1) as boards,
+    (select count(*)::int from items where group_id = $1) as tasks, (select count(*)::int from subtasks where item_id = $2) as subtasks,
+    (select count(*)::int from item_updates where item_id = $2) as updates`, [moving, movingTasks[0]]);
+  check('36. moving a group to another board (board_groups.board_id) carries its tasks, with their subtasks and updates',
+    moveGroup === 1 && carried.boards === board['Tender Portal'] && carried.tasks === 2 && carried.subtasks === 1 && carried.updates === 1,
+    { moveGroup, carried });
+
+  await as(boss);
+  const doomed = (await one("insert into boards (module, name, position) values ('marketing', 'Doomed', 4) returning id")).id;
+  const doomedGroup = (await one("insert into board_groups (board_key, board_id, name) values ('marketing', $1, 'Soon gone') returning id",
+    [doomed])).id;
+  const doomedTask = (await one(`insert into items (board_key, board_id, group_id, name) values ('marketing', $1, $2, 'Gone too')
+    returning id`, [doomed, doomedGroup])).id;
+  await db.query("insert into subtasks (item_id, text) values ($1, 'Gone')", [doomedTask]);
+  await db.query("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Gone')", [doomedTask, boss]);
+  const dropBoard = await affected('delete from boards where id = $1', [doomed]);
+  await as(null);
+  const remains = async (boardId, taskId) => (await one(`select (select count(*)::int from boards where id = $1)
+    + (select count(*)::int from board_groups where board_id = $1) + (select count(*)::int from items where board_id = $1)
+    + (select count(*)::int from subtasks where item_id = $2) + (select count(*)::int from item_updates where item_id = $2) as n`,
+  [boardId, taskId])).n;
+  const doomedLeft = await remains(doomed, doomedTask);
+
+  const temp = await signUp('temp.example@assetstackai.com', 'Temp Example');
+  const tempPage = (await one('select id from boards where owner_id = $1', [temp])).id;
+  const tempTask = (await one(`insert into items (board_key, board_id, group_id, name) values ('projects', $1, $2, 'Mine')
+    returning id`, [tempPage, await groupOn(tempPage)])).id;
+  await db.query("insert into subtasks (item_id, text) values ($1, 'Mine')", [tempTask]);
+  await db.query("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Mine')", [tempTask, temp]);
+  const tempHad = await remains(tempPage, tempTask);
+  const removePerson = await error('delete from auth.users where id = $1', [temp]);
+  const tempLeft = await remains(tempPage, tempTask);
+  check("36. deleting a board deletes its groups, tasks, subtasks and updates; deleting a person deletes their page and what's on it",
+    dropBoard === 1 && doomedLeft === 0 && tempHad === 5 && removePerson === null && tempLeft === 0,
+    { dropBoard, doomedLeft, tempHad, removePerson, tempLeft });
+
+  // 37. Old app tabs (writes that don't name a board) ---------------------------------------------------------------
+
+  await as(boss);
+  const landingGroup = await groupOn(board['Landing Page']);
+  const tenderGroup = await groupOn(board['Tender Portal']);
+  const oldGroups = {
+    projects: (await attempt("insert into board_groups (board_key, name, position) values ('projects', 'From an old tab', 9) returning board_id")),
+    marketing: (await attempt("insert into board_groups (board_key, name, position) values ('marketing', 'From an old tab', 9) returning board_id")),
+  };
+  const oldTask = await attempt("insert into items (board_key, group_id, name) values ('projects', $1, 'Old tab task') returning id, board_id",
+    [landingGroup]);
+  const regrouped = await attempt('update items set group_id = $2 where id = $1 returning board_id', [oldTask?.id, tenderGroup]);
+  await as(alice); // staff with Projects view, on their own page
+  const ownOld = await attempt("insert into items (board_key, group_id, name) values ('projects', $1, 'From an old tab') returning id, board_id",
+    [pageGroup[alice]]);
+  check("37. old tabs: a new group without board_id lands on General / Posting schedule; a task takes its group's board; changing only group_id moves it along",
+    oldGroups.projects?.board_id === board.General && oldGroups.marketing?.board_id === board['Posting schedule']
+      && oldTask?.board_id === board['Landing Page'] && regrouped?.board_id === board['Tender Portal'] && ownOld?.board_id === page[alice],
+    { oldGroups, oldTask, regrouped, ownOld });
+
+  // An old tab's full-row re-save (a PostgREST upsert without board_id) of a group and a task on someone's page.
+  const oldRows = (name) => ({
+    group: { id: pageGroup[alice], board_key: 'projects', name: 'Active', color: '#c9ffe6', position: 0 },
+    task: { id: ownOld?.id, board_key: 'projects', group_id: pageGroup[alice], position: 0, name, values: { people: [] }, done: false },
+  });
+  await as(boss);
+  const resavedByAdmin = {
+    group: await postgrestUpsert('board_groups', [oldRows().group]),
+    task: await postgrestUpsert('items', [oldRows('Re-saved by an admin').task]),
+  };
+  await as(alice);
+  const resavedByOwner = {
+    group: await postgrestUpsert('board_groups', [oldRows().group]),
+    task: await postgrestUpsert('items', [oldRows('Re-saved by its owner').task]),
+  };
+  await as(null);
+  const stayed = await one(`select (select board_id from board_groups where id = $1) as group_board,
+    (select board_id from items where id = $2) as task_board, (select name from items where id = $2) as name`, [pageGroup[alice], ownOld?.id]);
+  check("37. an old tab's full-row re-save (upsert without board_id) of a group or task on a personal page leaves it on that page",
+    resavedByAdmin.group === null && resavedByAdmin.task === null && resavedByOwner.group === null && resavedByOwner.task === null
+      && stayed.group_board === page[alice] && stayed.task_board === page[alice] && stayed.name === 'Re-saved by its owner',
+    { resavedByAdmin, resavedByOwner, stayed });
+
+  // 38. Who sees which board ----------------------------------------------------------------------------------------
+
+  // A task, a subtask and an update (by its owner) on everyone's page.
+  await as(null);
+  const people = { david, boss, early, alice, hello, carol, newcomer, late };
+  const label = Object.fromEntries(Object.entries(people).map(([k, v]) => [v, k]));
+  const task = {};
+  const note = {};
+  for (const [name, id] of Object.entries(people)) {
+    task[id] = (await one(`insert into items (board_key, board_id, group_id, name) values ('projects', $1, $2, $3) returning id`,
+      [page[id], pageGroup[id], `${name}'s task`])).id;
+    await db.query("insert into subtasks (item_id, text) values ($1, 'Step one')", [task[id]]);
+    note[id] = (await one("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Started') returning id", [task[id], id])).id;
+  }
+  const ownerOf = new Map((await rows('select id, owner_id from boards where owner_id is not null')).map((r) => [r.id, label[r.owner_id]]));
+  const boardOf = new Map((await rows('select id, board_id from items')).map((r) => [r.id, r.board_id]));
+  // Whose pages a user sees, table by table.
+  const pagesSeen = async (user) => {
+    await as(user);
+    const owners = (boardIds) => [...new Set(boardIds.map((b) => ownerOf.get(b)).filter(Boolean))].sort();
+    const out = {
+      boards: owners((await rows('select id from boards')).map((r) => r.id)),
+      groups: owners((await rows('select board_id from board_groups')).map((r) => r.board_id)),
+      tasks: owners((await rows('select board_id from items')).map((r) => r.board_id)),
+      subtasks: owners((await rows('select item_id from subtasks')).map((r) => boardOf.get(r.item_id))),
+      updates: owners((await rows('select item_id from item_updates')).map((r) => boardOf.get(r.item_id))),
+    };
+    await as(null);
+    return out;
+  };
+  const staffPages = ['alice', 'carol', 'hello', 'late', 'newcomer'];
+  const want = {
+    david: Object.keys(people).sort(),
+    boss: ['boss', ...staffPages].sort(),
+    early: ['early', ...staffPages].sort(),
+    alice: ['alice'],
+    newcomer: ['newcomer'],
+    hello: [], // Projects at none (13.)
+    carol: [], // inactive
+  };
+  const seen = {};
+  for (const who of Object.keys(want)) seen[who] = await pagesSeen(people[who]);
+  const matches = (who) => Object.values(seen[who]).every((got) => stable(got) === stable(want[who]));
+  check("38. the SuperAdmin sees everyone's personal page with its groups, tasks, subtasks and updates", matches('david'), seen.david);
+  check("38. an admin sees their own page and staff's, not the SuperAdmin's or another admin's", matches('boss') && matches('early'),
+    { boss: seen.boss, early: seen.early });
+  check('38. staff see only their own page; staff with Projects at none not even that; inactive accounts none',
+    matches('alice') && matches('newcomer') && matches('hello') && matches('carol'),
+    { alice: seen.alice, newcomer: seen.newcomer, hello: seen.hello, carol: seen.carol });
+
+  const teamSeen = async (user) => {
+    await as(user);
+    const list = (await rows("select module || ':' || name as b from boards where owner_id is null order by module, position, name")).map((r) => r.b);
+    const groups = await one(`select (select count(*)::int from board_groups g join boards b on b.id = g.board_id where b.owner_id is null and b.module = 'projects') as projects,
+      (select count(*)::int from board_groups g join boards b on b.id = g.board_id where b.owner_id is null and b.module = 'marketing') as marketing`);
+    await as(null);
+    return { list, groups };
+  };
+  const allTeam = await teamSeen(boss);
+  const marketingOnly = allTeam.list.filter((b) => b.startsWith('marketing:'));
+  const team = { alice: await teamSeen(alice), newcomer: await teamSeen(newcomer), hello: await teamSeen(hello), carol: await teamSeen(carol) };
+  check('38. team boards (and their groups) show to anyone who can view the module: staff see both modules, Projects at none hides Projects',
+    allTeam.list.length === 7 && allTeam.groups.projects > 0 && allTeam.groups.marketing > 0
+      && stable(team.alice) === stable(allTeam) && stable(team.newcomer) === stable(allTeam)
+      && stable(team.hello.list) === stable(marketingOnly) && team.hello.groups.projects === 0 && team.hello.groups.marketing === allTeam.groups.marketing
+      && team.carol.list.length === 0 && team.carol.groups.projects === 0 && team.carol.groups.marketing === 0,
+    { allTeam, team });
+
+  await db.exec('set role anon');
+  const anonReads = {
+    boards: await error('select * from public.boards'),
+    groups: await error('select * from public.board_groups'),
+    tasks: await error('select * from public.items'),
+  };
+  await as(null);
+  check('38. anon reads no boards, groups or tasks', Object.values(anonReads).every((e) => e !== null), anonReads);
+
+  // The same rules on both sides: board_level() for every user and board is what boardLevel() in src/lib/access.js gives.
+  const access = await importAccess();
+  const jsState = {
+    users: (await rows('select id, role, active from profiles')).map((u) => ({ id: u.id, role: u.role, active: u.active })),
+    moduleAccess: (await rows('select user_id, module, level from module_access')).map((a) => ({ userId: a.user_id, module: a.module, level: a.level })),
+  };
+  const allBoards = (await rows('select id, module, name, owner_id from boards')).map((b) => ({ id: b.id, module: b.module, name: b.name, owner: b.owner_id || '' }));
+  const differ = [];
+  const levelsSeen = new Set();
+  for (const user of Object.values(people)) {
+    await as(user);
+    const sql = Object.fromEntries((await rows('select id, public.board_level(id) as level from unnest($1::uuid[]) as id', [allBoards.map((b) => b.id)]))
+      .map((r) => [r.id, r.level]));
+    allBoards.forEach((b) => {
+      const js = access.boardLevel(jsState, b, user);
+      levelsSeen.add(js);
+      if (js !== sql[b.id]) differ.push({ user: label[user], board: b.name || `${label[b.owner]}'s page`, js, sql: sql[b.id] });
+    });
+  }
+  await as(null);
+  check('38. board_level() gives every user the level boardLevel() in src/lib/access.js gives, on every board',
+    differ.length === 0 && levelsSeen.size === 3, { differ, levelsSeen: [...levelsSeen] });
+
+  // 39. Who writes which board ----------------------------------------------------------------------------------------
+
+  const addTask = "insert into items (board_key, board_id, group_id, name) values ($1, $2, $3, $4) returning id";
+  // Staff on their own page (Projects is only view for them; their page is theirs to edit).
+  await as(alice);
+  const ownGroup = await attempt("insert into board_groups (board_key, board_id, name, position) values ('projects', $1, 'Errands', 1) returning id",
+    [page[alice]]);
+  const ownTask = await attempt(addTask, ['projects', page[alice], ownGroup?.id, 'Book flights']);
+  const ownSub = await attempt("insert into subtasks (item_id, text) values ($1, 'Compare fares') returning id", [ownTask?.id]);
+  const ownNote = await attempt("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Booked') returning id", [ownTask?.id, alice]);
+  const ownEdits = {
+    renameGroup: await affected("update board_groups set name = 'Errands (this week)' where id = $1", [ownGroup?.id]),
+    editTask: await affected("update items set name = 'Book flights and hotel', done = true where id = $1", [ownTask?.id]),
+    tickSubtask: await affected('update subtasks set done = true where id = $1', [ownSub?.id]),
+    editUpdate: await affected("update item_updates set text = 'Booked (window seat)' where id = $1", [ownNote?.id]),
+    dropSubtask: await affected('delete from subtasks where id = $1', [ownSub?.id]),
+    dropUpdate: await affected('delete from item_updates where id = $1', [ownNote?.id]),
+    dropTask: await affected('delete from items where id = $1', [ownTask?.id]),
+    dropGroup: await affected('delete from board_groups where id = $1', [ownGroup?.id]),
+  };
+  check('39. staff add, edit and delete groups, tasks, subtasks and updates on their own page',
+    Boolean(ownGroup?.id && ownTask?.id && ownSub?.id && ownNote?.id) && Object.values(ownEdits).every((n) => n === 1),
+    { ownGroup, ownTask, ownSub, ownNote, ownEdits });
+  // ...but can't carry a group or task from it onto a team Projects board they only view, nor write anyone else's page.
+  const offPage = {
+    moveGroup: await error('update board_groups set board_id = $2 where id = $1', [pageGroup[alice], board.General]),
+    moveTask: await error('update items set group_id = $2 where id = $1', [task[alice], generalGroup]),
+    otherPage: await error(addTask, ['projects', page[newcomer], pageGroup[newcomer], 'Nope']),
+    otherTask: await affected("update items set name = 'Nope' where id = $1", [task[newcomer]]),
+  };
+  await as(carol);
+  offPage.inactive = await error(addTask, ['projects', page[carol], pageGroup[carol], 'Nope']);
+  check("39. ...but can't move a group or task onto a team Projects board they only view, nor write anyone else's page; inactive accounts write nothing",
+    typeof offPage.moveGroup === 'string' && typeof offPage.moveTask === 'string' && typeof offPage.otherPage === 'string'
+      && offPage.otherTask === 0 && typeof offPage.inactive === 'string',
+    offPage);
+
+  // Team Projects boards: view-only for staff by default (newcomer), editable with an edit override.
+  const generalTask = (await one('select id from items where group_id = $1 limit 1', [generalGroup])).id;
+  await as(newcomer);
+  const viewOnly = {
+    group: await error("insert into board_groups (board_key, board_id, name) values ('projects', $1, 'Nope')", [board['Landing Page']]),
+    task: await error(addTask, ['projects', board.General, generalGroup, 'Nope']),
+    renameGroup: await affected("update board_groups set name = 'Nope' where id = $1", [generalGroup]),
+    editTask: await affected("update items set name = 'Nope' where id = $1", [generalTask]),
+    subtask: await error("insert into subtasks (item_id, text) values ($1, 'Nope')", [generalTask]),
+    update: await error("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Nope')", [generalTask, newcomer]),
+    dropTask: await affected('delete from items where id = $1', [generalTask]),
+  };
+  await as(david);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', 'edit')", [newcomer]);
+  await as(newcomer);
+  const withEdit = {
+    task: await attempt(addTask, ['projects', board['Landing Page'], landingGroup, 'Granted']),
+    editTask: await affected("update items set name = 'Granted (edited)' where id = $1", [generalTask]),
+  };
+  await as(david);
+  await db.query("delete from module_access where user_id = $1 and module = 'projects'", [newcomer]);
+  check("39. staff can't write a team Projects board at the default view level, and can with an edit override",
+    typeof viewOnly.group === 'string' && typeof viewOnly.task === 'string' && viewOnly.renameGroup === 0 && viewOnly.editTask === 0
+      && typeof viewOnly.subtask === 'string' && typeof viewOnly.update === 'string' && viewOnly.dropTask === 0
+      && Boolean(withEdit.task?.id) && withEdit.editTask === 1,
+    { viewOnly, withEdit });
+
+  // Team Marketing boards: staff edit them by default (newcomer); view-only staff (hello) can't.
+  await as(newcomer);
+  const mkGroup = await attempt("insert into board_groups (board_key, board_id, name, position) values ('marketing', $1, 'Spring', 1) returning id",
+    [board.Campaigns]);
+  const mkTask = await attempt(addTask, ['marketing', board.Campaigns, mkGroup?.id, 'Spring launch']);
+  const mkWrites = {
+    subtask: await error("insert into subtasks (item_id, text) values ($1, 'Pick a date')", [mkTask?.id]),
+    update: await attempt("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Booked the venue') returning id", [mkTask?.id, newcomer]),
+    renameGroup: await affected("update board_groups set name = 'Spring 2027' where id = $1", [mkGroup?.id]),
+    editTask: await affected("update items set done = true where id = $1", [mkTask?.id]),
+  };
+  await as(hello); // Marketing view
+  const helloWrites = {
+    group: await error("insert into board_groups (board_key, board_id, name) values ('marketing', $1, 'Nope')", [board.Campaigns]),
+    editTask: await affected("update items set name = 'Nope' where id = $1", [mkTask?.id]),
+  };
+  check('39. staff write team Marketing boards by default (groups, tasks, subtasks, updates); with Marketing view they cannot',
+    Boolean(mkGroup?.id && mkTask?.id && mkWrites.update?.id) && mkWrites.subtask === null && mkWrites.renameGroup === 1
+      && mkWrites.editTask === 1 && typeof helloWrites.group === 'string' && helloWrites.editTask === 0,
+    { mkGroup, mkTask, mkWrites, helloWrites });
+
+  // Admins write staff's pages (and their own), not the SuperAdmin's or another admin's; the SuperAdmin writes anyone's.
+  const pageWrites = async (user, owners) => {
+    await as(user);
+    const out = {};
+    for (const owner of owners) {
+      out[label[owner]] = {
+        add: await attempt(addTask, ['projects', page[owner], pageGroup[owner], `From ${label[user]}`]).then((r) => (r?.id ? 'ok' : r)),
+        edit: await affected("update items set done = true where id = $1", [task[owner]]),
+        subtask: await error("insert into subtasks (item_id, text) values ($1, 'Added')", [task[owner]]),
+      };
+    }
+    await as(null);
+    return out;
+  };
+  const allowed = (r) => r.add === 'ok' && r.edit === 1 && r.subtask === null;
+  const refused = (r) => typeof r.add === 'string' && r.add !== 'ok' && r.edit === 0 && typeof r.subtask === 'string';
+  const byBoss = await pageWrites(boss, [boss, alice, hello, carol, david, early]);
+  check("39. an admin writes their own page and staff's (Projects none or inactive too), not the SuperAdmin's or another admin's",
+    ['boss', 'alice', 'hello', 'carol'].every((w) => allowed(byBoss[w])) && refused(byBoss.david) && refused(byBoss.early), byBoss);
+  const byDavid = await pageWrites(david, [david, boss, early, alice, hello]);
+  check("39. the SuperAdmin writes anyone's page", Object.values(byDavid).every(allowed), byDavid);
+
+  // Team boards are the admins' to add, rename, order and delete; personal pages are nobody's to change.
+  await as(boss);
+  const teamBoard = {
+    add: await attempt("insert into boards (module, name, position) values ('projects', 'Partner Portal', 3) returning id, owner_id, updated_by"),
+  };
+  teamBoard.rename = await affected("update boards set name = 'Partner portal' where id = $1", [teamBoard.add?.id]);
+  teamBoard.reorder = await affected('update boards set position = 4 where id = $1', [teamBoard.add?.id]);
+  await as(alice); // staff, Marketing edit
+  const staffBoards = {
+    add: await error("insert into boards (module, name) values ('projects', 'Mine')"),
+    addMarketing: await error("insert into boards (module, name) values ('marketing', 'Mine')"),
+    addOwnPage: await error("insert into boards (module, owner_id) values ('projects', $1)", [alice]),
+    rename: await affected("update boards set name = 'Mine' where id = $1", [board.Campaigns]),
+    remove: await affected('delete from boards where id = $1', [board.Campaigns]),
+  };
+  await as(boss);
+  teamBoard.remove = await affected('delete from boards where id = $1', [teamBoard.add?.id]);
+  check("39. only admins add, rename, reorder and delete team boards; staff can't insert a board at all (not even their own page)",
+    Boolean(teamBoard.add?.id) && teamBoard.add.owner_id === null && teamBoard.add.updated_by === boss && teamBoard.rename === 1
+      && teamBoard.reorder === 1 && teamBoard.remove === 1
+      && typeof staffBoards.add === 'string' && typeof staffBoards.addMarketing === 'string' && typeof staffBoards.addOwnPage === 'string'
+      && staffBoards.rename === 0 && staffBoards.remove === 0,
+    { teamBoard, staffBoards });
+
+  const pageChanges = {};
+  for (const [who, user, owner] of [['david on alice', david, alice], ['david on own', david, david], ['boss on alice', boss, alice],
+    ['alice on own', alice, alice]]) {
+    await as(user);
+    pageChanges[who] = {
+      rename: await affected("update boards set name = 'Renamed' where id = $1", [page[owner]]),
+      toTeam: await affected('update boards set owner_id = null where id = $1', [page[owner]]),
+      remove: await affected('delete from boards where id = $1', [page[owner]]),
+    };
+  }
+  await as(boss);
+  const makePersonal = {
+    boss: await error('update boards set owner_id = $2 where id = $1', [board['Tender Portal'], late]),
+  };
+  await as(david);
+  makePersonal.david = await error('update boards set owner_id = $2 where id = $1', [board['Tender Portal'], late]);
+  makePersonal.insert = await error("insert into boards (module, owner_id) values ('projects', $1)", [late]);
+  await as(null);
+  const pagesIntact = await one(`select count(*)::int as n, bool_and(name = '' and owner_id is not null) as ok from boards
+    where id = any($1::uuid[])`, [Object.values(page)]);
+  const tender = await one('select owner_id from boards where id = $1', [board['Tender Portal']]);
+  check('39. nobody (not even the SuperAdmin) renames, deletes or un-owns a personal page, or turns a team board into one',
+    Object.values(pageChanges).every((c) => c.rename === 0 && c.toTeam === 0 && c.remove === 0)
+      && Object.values(makePersonal).every((e) => /row-level security/.test(e ?? '')) && pagesIntact.n === Object.keys(page).length
+      && pagesIntact.ok && tender.owner_id === null,
+    { pageChanges, makePersonal, pagesIntact, tender });
+
+  // Updates: their author edits and deletes them, an admin anyone's (on a board they can edit); staff never someone else's.
+  await as(boss);
+  const bossOnAlice = (await one("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Looks good') returning id",
+    [task[alice], boss])).id;
+  const bossOnCampaign = (await one("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Nice') returning id",
+    [mkTask?.id, boss])).id;
+  const updates = {
+    adminEditsStaffs: await affected("update item_updates set text = 'Started (edited by an admin)' where id = $1", [note[alice]]),
+    adminEditsSupers: await affected("update item_updates set text = 'Nope' where id = $1", [note[david]]),
+  };
+  await as(alice);
+  updates.ownerEditsAdmins = await affected("update item_updates set text = 'Nope' where id = $1", [bossOnAlice]);
+  updates.ownerDeletesAdmins = await affected('delete from item_updates where id = $1', [bossOnAlice]);
+  updates.forged = await error("insert into item_updates (item_id, user_id, text) values ($1, $2, 'As Boss')", [task[alice], boss]);
+  updates.handOver = await error('update item_updates set user_id = $2 where id = $1', [note[alice], boss]);
+  await as(newcomer);
+  updates.authorEdits = await affected("update item_updates set text = 'Booked the venue (deposit paid)' where id = $1", [mkWrites.update?.id]);
+  updates.staffEditsOthers = await affected("update item_updates set text = 'Nope' where id = $1", [bossOnCampaign]);
+  updates.staffDeletesOthers = await affected('delete from item_updates where id = $1', [bossOnCampaign]);
+  await as(boss);
+  updates.adminDeletesStaffs = await affected('delete from item_updates where id = $1', [mkWrites.update?.id]);
+  updates.adminDeletesOwn = await affected('delete from item_updates where id = $1', [bossOnAlice]);
+  await as(null);
+  check("39. updates: authors edit and delete their own, admins anyone's (on boards they edit); staff never someone else's, nor post as them",
+    updates.adminEditsStaffs === 1 && updates.adminEditsSupers === 0 && updates.ownerEditsAdmins === 0 && updates.ownerDeletesAdmins === 0
+      && typeof updates.forged === 'string' && typeof updates.handOver === 'string' && updates.authorEdits === 1
+      && updates.staffEditsOthers === 0 && updates.staffDeletesOthers === 0 && updates.adminDeletesStaffs === 1 && updates.adminDeletesOwn === 1,
+    updates);
+
+  // 40. Helper functions and a re-run on a used database ---------------------------------------------------------------
+
+  const HELPERS = ['sees_person', 'board_level', 'can_view_board', 'can_edit_board', 'item_board_id'];
+  const grants = await rows(`select f, has_function_privilege('anon', 'public.' || f || '(uuid)', 'execute') as anon,
+      has_function_privilege('authenticated', 'public.' || f || '(uuid)', 'execute') as authenticated,
+      (select prosecdef from pg_proc where proname = f and pronamespace = 'public'::regnamespace) as definer
+    from unnest($1::text[]) as f`, [HELPERS]);
+  await db.exec('set role anon');
+  const anonCalls = {};
+  for (const f of HELPERS) anonCalls[f] = await error(`select public.${f}($1)`, [page[alice]]);
+  await as(alice);
+  const own = await one(`select public.sees_person($1) as self, public.sees_person($2) as other, public.can_edit_board($3) as page,
+    public.can_view_board($4) as general, public.can_edit_board($4) as general_edit, public.item_board_id($5) as task_board`,
+  [alice, boss, page[alice], board.General, task[alice]]);
+  check('40. the board helpers are security definer, for signed-in users only (anon can\'t call them), and answer for the caller',
+    grants.every((g) => !g.anon && g.authenticated && g.definer) && Object.values(anonCalls).every((e) => e !== null)
+      && own.self === true && own.other === false && own.page === true && own.general === true && own.general_edit === false
+      && own.task_board === page[alice],
+    { grants, anonCalls, own });
+
+  // An admin renamed a starting board; re-running neither brings it back nor adds anything else to a used database.
+  await as(boss);
+  await db.query("update boards set name = 'Meetups' where id = $1", [board.Events]);
+  const used = await snapshot();
+  const third = await applyMigration6();
+  const rerun = await snapshot();
+  const strays = (await one(`select count(*)::int as n from items i join board_groups g on g.id = i.group_id where i.board_id <> g.board_id`)).n;
+  check('40. re-running 0006 on a used database adds no boards or groups (a renamed starting board stays renamed)',
+    third === null && stable(rerun) === stable(used) && !rerun.team.includes('Events') && rerun.team.includes('marketing:Meetups:3') && strays === 0,
+    { third, used, rerun, strays });
+  await db.query("update boards set name = 'Events' where id = $1", [board.Events]);
+
+  return { alice, boss, david, hello, carol, newcomer, early, late, board, page };
+}
+
 // 22. (After the newest migration, since flatten() writes every synced column and table.)
 async function syncWriteCheck({ david, alice, boss, hello }) {
   // The sync engine's writes: the superadmin (who may write every table) saves flatten() rows for every synced
@@ -1772,7 +2339,8 @@ try {
   const ctx3 = ctx2 && await phase3(ctx2);
   const ctx4 = ctx3 && await phase4(ctx3);
   const ctx5 = ctx4 && await phase5(ctx4);
-  if (ctx5) await syncWriteCheck(ctx5);
+  const ctx6 = ctx5 && await phase6(ctx5);
+  if (ctx6) await syncWriteCheck(ctx6);
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);
 }
