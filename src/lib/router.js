@@ -5,11 +5,14 @@ export const ROUTES = ['work', 'projects', 'marketing', 'outreach', 'pipeline', 
 // Old links that still work: the Admin board merged into Projects (docs/PHASE2.md §6), item ids unchanged.
 export const REDIRECTS = { admin: 'projects' };
 
+// A malformed %-escape (a hand-typed or truncated link) is kept as typed rather than crashing the app.
+const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+
 // #/projects/abc?item=x → { route: 'projects', sub: 'abc', query: '?item=x' }.
 const split = () => {
   const [path, ...query] = window.location.hash.replace(/^#\/?/, '').split('?');
   const [route = '', sub = ''] = path.split('/');
-  return { route, sub: decodeURIComponent(sub), query: query.length ? `?${query.join('?')}` : '' };
+  return { route, sub: decode(sub), query: query.length ? `?${query.join('?')}` : '' };
 };
 
 const read = () => {

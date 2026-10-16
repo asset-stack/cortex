@@ -1,6 +1,7 @@
 // Checks the live-mode mapping and sync engine without a network: node scripts/test-sync.mjs
 // (a) flatten/assemble round trip, (b) diff ops for common edits, (c) the sync queue against a fake Supabase,
-// (d) roles and module access, the demo automations, the seed and the demo-data migration (docs/PHASE2.md).
+// (d) roles and module access, the demo automations, the seed and the demo-data migration (docs/PHASE2.md), and the
+// boards under Projects and Marketing (0006: board access, src/lib/boards.js helpers, seed and migration).
 // Exits non-zero when any check fails.
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';

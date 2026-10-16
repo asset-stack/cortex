@@ -31,7 +31,7 @@ export function useNav() {
 
 /**
  * The boards listed under Projects and Marketing (Projects: your own page, then the team boards; Marketing: its team
- * boards), only those you can open, and the board on screen (`current`, null off the board pages).
+ * boards), only those you can open, and the id of the board on screen (`current`, '' off the board pages).
  */
 function useBoardNav(route, sub) {
   const { state } = useStore();
