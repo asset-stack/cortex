@@ -56,28 +56,39 @@ const fixture = () => ({
     paymentTermsDays: 14, invoicePrefix: 'EX-',
     contractTemplate: 'https://docs.google.com/document/d/template-id/edit', contractFolder: 'https://drive.google.com/drive/folders/folder-id',
   },
-  boards: {
-    projects: {
-      groups: [
-        { id: 'g-1', name: 'Active', color: '#c9ffe6', items: [
-          {
-            id: 'it-1', name: 'First', values: { people: [U1, U2], status: 'In progress', due: '2026-10-30' }, done: false,
-            updates: [
-              { id: 'up-2', user: U2, text: 'Newer', ts: '2026-10-02T03:00:00.000Z' },
-              { id: 'up-1', user: U1, text: 'Older', ts: '2026-10-01T03:00:00.000Z' },
-            ],
-            subtasks: [{ id: 'st-1', text: 'One', done: true }, { id: 'st-2', text: 'Two', done: false }],
-          },
-          { id: 'it-2', name: 'Second', values: { status: 'Done', people: [] }, done: true, updates: [], subtasks: [] },
-        ] },
-        { id: 'g-2', name: 'Backlog', color: '#e6eaf2', items: [] },
-        { id: 'g-3', name: 'Admin', color: '#ffe6b0', items: [
-          { id: 'it-3', name: 'Admin task', values: { people: [U2], status: 'Stuck' }, done: false, updates: [], subtasks: [] },
-        ] },
-      ],
-    },
-    marketing: { groups: [] },
-  },
+  // In assembled order (0006): Projects then Marketing; personal pages first (by owner name), then team boards.
+  boards: [
+    { id: 'b-ana', module: 'projects', name: '', owner: U1, groups: [
+      { id: 'g-ana', name: 'Active', color: '#c9ffe6', items: [
+        { id: 'it-ana', name: 'Own task', values: { people: [U1], status: 'Not started' }, done: false, updates: [], subtasks: [] },
+      ] },
+    ] },
+    { id: 'b-ben', module: 'projects', name: '', owner: U2, groups: [{ id: 'g-ben', name: 'Active', color: '#c9ffe6', items: [] }] },
+    { id: 'b-web', module: 'projects', name: 'Landing Page', owner: '', groups: [
+      { id: 'g-1', name: 'Active', color: '#c9ffe6', items: [
+        {
+          id: 'it-1', name: 'First', values: { people: [U1, U2], status: 'In progress', due: '2026-10-30' }, done: false,
+          updates: [
+            { id: 'up-2', user: U2, text: 'Newer', ts: '2026-10-02T03:00:00.000Z' },
+            { id: 'up-1', user: U1, text: 'Older', ts: '2026-10-01T03:00:00.000Z' },
+          ],
+          subtasks: [{ id: 'st-1', text: 'One', done: true }, { id: 'st-2', text: 'Two', done: false }],
+        },
+        { id: 'it-2', name: 'Second', values: { status: 'Done', people: [] }, done: true, updates: [], subtasks: [] },
+      ] },
+      { id: 'g-2', name: 'Backlog', color: '#e6eaf2', items: [] },
+      { id: 'g-3', name: 'Admin', color: '#ffe6b0', items: [
+        { id: 'it-3', name: 'Admin task', values: { people: [U2], status: 'Stuck' }, done: false, updates: [], subtasks: [] },
+      ] },
+    ] },
+    { id: 'b-gen', module: 'projects', name: 'General', owner: '', groups: [{ id: 'g-gen', name: 'Active', color: '#c9ffe6', items: [] }] },
+    { id: 'b-post', module: 'marketing', name: 'Posting schedule', owner: '', groups: [
+      { id: 'g-oct', name: 'October', color: '#bfe9ff', items: [
+        { id: 'it-m1', name: 'Golf Day post', values: { people: [U2], status: 'In progress', channel: 'LinkedIn' }, done: false, updates: [], subtasks: [] },
+      ] },
+    ] },
+    { id: 'b-events', module: 'marketing', name: 'Events', owner: '', groups: [] },
+  ],
   deals: [
     { id: 'd-1', name: 'Deal one', sector: 'Government', value: 70000, priority: 'P2', stage: 'Opportunities', contact: U1, next: 'Call', contactId: 'p-1' },
     { id: 'd-2', name: 'Client one', sector: 'Utilities', value: '1,500', priority: 'P1', stage: 'Won', contact: '', next: '', contactId: '', clientId: 'c-1' },
@@ -262,11 +273,12 @@ await check('assemble: order and state fields', () => {
   assert.deepEqual(Object.keys(back).sort(), ['approvals', 'boards', 'channels', 'clients', 'contacts', 'deals', 'emails', 'lastRead',
     'messages', 'org', 'sequences', 'users', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements',
     'expenses', 'subscriptions', 'tools'].sort());
-  assert.deepEqual(Object.keys(back.boards), ['projects', 'marketing']);
-  assert.deepEqual(back.boards.projects.groups.map((g) => g.id), ['g-1', 'g-2', 'g-3']);
-  assert.deepEqual(back.boards.projects.groups[0].items.map((i) => i.id), ['it-1', 'it-2']);
-  assert.deepEqual(back.boards.projects.groups[0].items[0].updates.map((u) => u.id), ['up-2', 'up-1']); // newest first
-  assert.deepEqual(back.boards.marketing, { groups: [] });
+  assert.deepEqual(back.boards.map((b) => b.id), ['b-ana', 'b-ben', 'b-web', 'b-gen', 'b-post', 'b-events']);
+  const web = back.boards.find((b) => b.id === 'b-web');
+  assert.deepEqual(web.groups.map((g) => g.id), ['g-1', 'g-2', 'g-3']);
+  assert.deepEqual(web.groups[0].items.map((i) => i.id), ['it-1', 'it-2']);
+  assert.deepEqual(web.groups[0].items[0].updates.map((u) => u.id), ['up-2', 'up-1']); // newest first
+  assert.deepEqual(back.boards.at(-1), { id: 'b-events', module: 'marketing', name: 'Events', owner: '', groups: [] });
   assert.deepEqual(back.clients[0].invoices.map((i) => i.id), ['i-2', 'i-1']);
   assert.deepEqual(back.clients[0].invoices[1].lines[0], { id: 'l-1', desc: 'Capture', qty: '2', rate: '1,000' });
   assert.deepEqual(back.clients[0].notes.map((n) => n.id), ['n-2', 'n-1']);
@@ -304,13 +316,76 @@ await check('profiles: time zones round trip; a blank or missing one is Sydney (
 
 await check('assemble: empty rows give a usable state', () => {
   const back = assemble({}, { me: U1 });
-  assert.deepEqual(back.boards, { projects: { groups: [] }, marketing: { groups: [] } });
+  assert.deepEqual(back.boards, []);
   ['moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'tools']
     .forEach((k) => assert.deepEqual(back[k], [], k));
   assert.equal(back.org.paymentTermsDays, 30);
   assert.equal(back.org.invoicePrefix, 'INV-');
   assert.deepEqual(back.lastRead, { [U1]: {} });
   assert.deepEqual(back.clients, []);
+});
+
+await check('flatten: boards, and the board on every group and task (0006)', () => {
+  const s = fixture();
+  const rows = flatten(s);
+  assert.deepEqual(rows.boards.get('b-ana'), { id: 'b-ana', module: 'projects', name: '', owner_id: U1, position: 0 });
+  assert.deepEqual(rows.boards.get('b-gen'), { id: 'b-gen', module: 'projects', name: 'General', owner_id: null, position: 1 });
+  // Team boards are numbered within their module, in array order; a personal board is always 0.
+  assert.deepEqual(s.boards.map((b) => [b.id, rows.boards.get(b.id).position]),
+    [['b-ana', 0], ['b-ben', 0], ['b-web', 0], ['b-gen', 1], ['b-post', 0], ['b-events', 1]]);
+  assert.deepEqual(rows.board_groups.get('g-2'), { id: 'g-2', board_key: 'projects', board_id: 'b-web', name: 'Backlog', color: '#e6eaf2', position: 1 });
+  assert.deepEqual(['g-ana', 'g-oct'].map((k) => [rows.board_groups.get(k).board_key, rows.board_groups.get(k).board_id]),
+    [['projects', 'b-ana'], ['marketing', 'b-post']]);
+  assert.deepEqual(rows.items.get('it-3'), {
+    id: 'it-3', board_key: 'projects', board_id: 'b-web', group_id: 'g-3', position: 0, name: 'Admin task', values: { people: [U2], status: 'Stuck' },
+    done: false,
+  });
+  assert.deepEqual(['it-ana', 'it-m1'].map((k) => [rows.items.get(k).board_key, rows.items.get(k).board_id]), [['projects', 'b-ana'], ['marketing', 'b-post']]);
+  // A personal board's name is never sent (its title comes from its owner), personal boards in between don't count
+  // in the team positions, and a board of another module is not sent at all (nor its groups).
+  const odd = fixture();
+  odd.boards = [odd.boards[2], { ...odd.boards[0], name: 'Mine' }, odd.boards[3],
+    { id: 'b-admin', module: 'admin', name: 'Admin', owner: '', groups: [{ id: 'g-admin', name: 'To do', color: '', items: [] }] }];
+  const r = flatten(odd);
+  assert.deepEqual([...r.boards.values()].map((b) => [b.id, b.name, b.position]), [['b-web', 'Landing Page', 0], ['b-ana', '', 0], ['b-gen', 'General', 1]]);
+  assert.ok(!r.board_groups.has('g-admin'));
+  // No boards, or the pre-0006 object shape (migrate() converts it first): no board rows.
+  [undefined, { projects: { groups: [] }, marketing: { groups: [] } }].forEach((boards) => {
+    const x = flatten({ ...fixture(), boards });
+    ['boards', 'board_groups', 'items', 'item_updates', 'subtasks'].forEach((t) => assert.equal(x[t].size, 0, t));
+  });
+});
+
+await check('assemble: boards are Projects then Marketing, personal pages by owner name, team boards by position (0006)', () => {
+  const rows = flatten(fixture());
+  // Rows arrive in any order (pages, realtime).
+  const mixed = Object.fromEntries(Object.entries(rows).map(([t, m]) => [t, new Map([...m].reverse())]));
+  mixed.boards = new Map(['b-events', 'b-gen', 'b-post', 'b-ben', 'b-web', 'b-ana'].map((k) => [k, rows.boards.get(k)]));
+  const back = assemble(mixed, { me: U1 });
+  assert.deepEqual(back.boards.map((b) => b.id), ['b-ana', 'b-ben', 'b-web', 'b-gen', 'b-post', 'b-events']);
+  assert.deepEqual(back.boards, fixture().boards);
+  // By the owner's name (any case), not their id; team boards by position, then id; Projects first whatever the
+  // positions say.
+  const moved = structuredClone(mixed);
+  moved.profiles.get(U2).name = 'aaron';
+  [['b-web', 5], ['b-gen', 2], ['b-post', 1], ['b-events', 1]].forEach(([k, p]) => { moved.boards.get(k).position = p; });
+  const order = assemble(moved, { me: U1 }).boards;
+  assert.deepEqual(order.map((b) => b.id), ['b-ben', 'b-ana', 'b-gen', 'b-web', 'b-events', 'b-post']);
+  // The round trip is stable: same boards back, and their rows don't change again.
+  const again = flatten({ ...assemble(moved, { me: U1 }), me: U1 });
+  assert.deepEqual(assemble(again, { me: U1 }).boards, order);
+  assert.deepEqual(plain(flatten({ ...assemble(again, { me: U1 }), me: U1 })), plain(again));
+  assert.deepEqual([again.boards.get('b-gen').position, again.boards.get('b-web').position, again.boards.get('b-events').position], [0, 1, 0]);
+  // A group (and its tasks) whose board row is missing (not loaded yet, or not visible) is left out, as is a board
+  // of another module.
+  const partial = structuredClone(mixed);
+  partial.boards.delete('b-web');
+  partial.boards.set('b-admin', { id: 'b-admin', module: 'admin', name: 'Admin', owner_id: null, position: 0 });
+  partial.board_groups.set('g-admin', { id: 'g-admin', board_key: 'admin', board_id: 'b-admin', name: 'To do', color: '', position: 0 });
+  const p = assemble(partial, { me: U1 });
+  assert.deepEqual(p.boards.map((b) => b.id), ['b-ana', 'b-ben', 'b-gen', 'b-post', 'b-events']);
+  const json = JSON.stringify(p.boards);
+  ['g-1', 'g-2', 'g-3', 'it-1', 'it-3', 'up-1', 'st-1', 'g-admin'].forEach((id) => assert.ok(!json.includes(`"${id}"`), id));
 });
 
 await check('flatten: phase 2 tables and columns', () => {
@@ -407,7 +482,8 @@ const opsAfter = (edit) => {
   return diff(rows0, flatten(s));
 };
 const labels = (ops) => ops.map((o) => `${o.op} ${o.table} ${o.key}`).sort();
-const item1 = (s) => s.boards.projects.groups[0].items[0];
+const boardOf = (s, id) => s.boards.find((b) => b.id === id);
+const item1 = (s) => boardOf(s, 'b-web').groups[0].items[0];
 
 await check('diff: no change → no ops', () => {
   assert.deepEqual(diff(rows0, flatten(structuredClone(base))), []);
@@ -433,7 +509,7 @@ await check('diff: add a subtask', () => {
 });
 
 await check('diff: delete an item and its children rows', () => {
-  const ops = opsAfter((s) => { s.boards.projects.groups[0].items.shift(); });
+  const ops = opsAfter((s) => { boardOf(s, 'b-web').groups[0].items.shift(); });
   assert.deepEqual(labels(ops), [
     'delete item_updates up-1', 'delete item_updates up-2', 'delete items it-1', 'delete subtasks st-1', 'delete subtasks st-2',
     'upsert items it-2', // moved up: position 1 → 0
@@ -569,9 +645,72 @@ await check('diff: deleting a plan unlinks its invoices before the plan goes', (
 
 await check('diff: groups still on the old admin board (before 0002 moves them) are never deleted', () => {
   const prev = flatten(base);
-  prev.board_groups.set('g-old', { id: 'g-old', board_key: 'admin', name: 'To do', color: '', position: 0 });
+  prev.board_groups.set('g-old', { id: 'g-old', board_key: 'admin', name: 'To do', color: '', position: 0 }); // no board_id before 0006
   prev.items.set('it-old', { ...prev.items.get('it-3'), id: 'it-old', board_key: 'admin', group_id: 'g-old' });
   assert.deepEqual(diff(prev, flatten(base)), []);
+  // Nor a board of another module and what is on it, or a group on a board whose row this user doesn't have (0006).
+  prev.boards.set('b-old', { id: 'b-old', module: 'admin', name: 'Admin', owner_id: null, position: 0 });
+  prev.board_groups.set('g-old2', { id: 'g-old2', board_key: 'admin', board_id: 'b-old', name: 'To do', color: '', position: 0 });
+  prev.items.set('it-old2', { ...prev.items.get('it-3'), id: 'it-old2', board_key: 'admin', board_id: 'b-old', group_id: 'g-old2' });
+  prev.board_groups.set('g-hidden', { ...prev.board_groups.get('g-ben'), id: 'g-hidden', board_id: 'b-hidden' });
+  assert.deepEqual(diff(prev, flatten(base)), []);
+});
+
+await check('diff: renaming, reordering or adding a team board writes only those boards; a personal page is never renamed (0006)', () => {
+  const renamed = opsAfter((s) => { boardOf(s, 'b-gen').name = 'General ops'; });
+  assert.deepEqual(labels(renamed), ['upsert boards b-gen']);
+  assert.deepEqual(renamed[0].row, { id: 'b-gen', module: 'projects', name: 'General ops', owner_id: null, position: 1 });
+  assert.deepEqual(opsAfter((s) => { boardOf(s, 'b-ana').name = 'Mine'; }), [], "a personal page's name is never sent");
+  const swapped = opsAfter((s) => {
+    const i = s.boards.findIndex((b) => b.id === 'b-gen');
+    s.boards.splice(i - 1, 2, s.boards[i], s.boards[i - 1]);
+  });
+  assert.deepEqual(swapped.map((o) => [o.op, o.key, o.row.position]).sort(), [['upsert', 'b-gen', 0], ['upsert', 'b-web', 1]]);
+  assert.ok(swapped.every((o) => o.table === 'boards'));
+  const added = opsAfter((s) => {
+    s.boards.push({ id: 'b-new', module: 'marketing', name: 'Webinars', owner: '', groups: [{ id: 'g-new', name: 'To do', color: '#c9ffe6', items: [] }] });
+  });
+  assert.deepEqual(labels(added), ['upsert board_groups g-new', 'upsert boards b-new'], 'at the end: nothing else moves');
+  assert.deepEqual(added.find((o) => o.key === 'b-new').row, { id: 'b-new', module: 'marketing', name: 'Webinars', owner_id: null, position: 2 });
+  assert.deepEqual(added.find((o) => o.key === 'g-new').row.board_id, 'b-new');
+});
+
+await check('diff: deleting a board deletes its groups, tasks, updates and subtasks; only the team boards after it move up (0006)', () => {
+  const ops = opsAfter((s) => { s.boards = s.boards.filter((b) => b.id !== 'b-web'); });
+  assert.deepEqual(labels(ops), [
+    'delete board_groups g-1', 'delete board_groups g-2', 'delete board_groups g-3', 'delete boards b-web',
+    'delete item_updates up-1', 'delete item_updates up-2', 'delete items it-1', 'delete items it-2', 'delete items it-3',
+    'delete subtasks st-1', 'delete subtasks st-2',
+    'upsert boards b-gen', // position 1 → 0
+  ]);
+  assert.equal(ops.find((o) => o.key === 'b-gen').row.position, 0);
+  const mk = opsAfter((s) => { s.boards = s.boards.filter((b) => b.id !== 'b-post'); });
+  assert.deepEqual(labels(mk), ['delete board_groups g-oct', 'delete boards b-post', 'delete items it-m1', 'upsert boards b-events'],
+    'the other module is left alone');
+  assert.deepEqual(labels(opsAfter((s) => { s.boards = s.boards.filter((b) => b.id !== 'b-events'); })), ['delete boards b-events'], 'the last one');
+});
+
+await check('diff: moving a task to another board writes that task with its new board and group (0006)', () => {
+  const moveTo = (s, itemId, boardId, groupId) => {
+    const from = s.boards.flatMap((b) => b.groups).find((g) => g.items.some((i) => i.id === itemId));
+    const [it] = from.items.splice(from.items.findIndex((i) => i.id === itemId), 1);
+    boardOf(s, boardId).groups.find((g) => g.id === groupId).items.push(it);
+  };
+  const last = opsAfter((s) => moveTo(s, 'it-2', 'b-gen', 'g-gen'));
+  assert.deepEqual(labels(last), ['upsert items it-2']);
+  assert.deepEqual(last[0].row, {
+    id: 'it-2', board_key: 'projects', board_id: 'b-gen', group_id: 'g-gen', position: 0, name: 'Second', values: { status: 'Done', people: [] },
+    done: true,
+  });
+  // The first task of its group: the one after it moves up; its updates and subtasks go with it, unwritten.
+  const first = opsAfter((s) => moveTo(s, 'it-1', 'b-ana', 'g-ana'));
+  assert.deepEqual(labels(first), ['upsert items it-1', 'upsert items it-2']);
+  assert.deepEqual(['board_id', 'group_id', 'position'].map((k) => first.find((o) => o.key === 'it-1').row[k]), ['b-ana', 'g-ana', 1]);
+  assert.equal(first.find((o) => o.key === 'it-2').row.position, 0);
+  // Another group on the same board.
+  const within = opsAfter((s) => moveTo(s, 'it-3', 'b-web', 'g-2'));
+  assert.deepEqual(labels(within), ['upsert items it-3']);
+  assert.deepEqual(['board_id', 'group_id', 'position'].map((k) => within[0].row[k]), ['b-web', 'g-2', 0]);
 });
 
 // ── (c) Sync queue against a fake Supabase ────────────────────────────────────
@@ -912,6 +1051,26 @@ await check('sync: a missing parent is told from another foreign key by the key 
   sync.dispose();
 });
 
+await check('sync: a group or task whose board was deleted elsewhere is dropped (0006 foreign keys)', async () => {
+  const { sb, sync, statuses } = setup();
+  sb.failures.push(
+    fkError('board_groups', 'board_id, board_key', 'b-gone, projects', 'boards'),
+    fkError('items', 'group_id, board_id', 'g-gone, b-1', 'board_groups'),
+  );
+  sync.queue([
+    up('board_groups', 'g-1', { id: 'g-1', board_key: 'projects', board_id: 'b-gone', name: 'Active', color: '', position: 0 }),
+    up('items', 'it-1', { id: 'it-1', board_key: 'projects', board_id: 'b-1', group_id: 'g-gone', position: 0, name: 'x', values: {}, done: false }),
+    del('subtasks', 'st-old'),
+  ]);
+  await tick(400);
+  assert.deepEqual(seq(sb), ['upsert board_groups', 'upsert items', 'delete subtasks'], 'deletes not held back');
+  assert.equal(sync.hasPending(), false);
+  assert.equal(statuses.at(-1).state, 'saved');
+  await tick(60000);
+  assert.equal(sb.calls.length, 3, 'never retried');
+  sync.dispose();
+});
+
 await check('sync: dispose stops the retries of a write still in flight', async () => {
   const { sb, sync } = setup();
   sb.failures.push({ table: 'items', method: 'upsert', message: 'permission denied', code: '42501', sticky: true });
@@ -1073,7 +1232,7 @@ await check('sync: flush() during a write also sends what was queued meanwhile',
 await check('sync: store flow (diff → queue → flush) for deleting an item', async () => {
   const { sb, sync } = setup();
   const s = structuredClone(base);
-  s.boards.projects.groups[0].items.shift();
+  boardOf(s, 'b-web').groups[0].items.shift();
   sync.queue(diff(rows0, flatten(s)));
   assert.equal(sync.isPending('subtasks', 'st-1'), true);
   await tick(400);
@@ -1088,7 +1247,12 @@ await check('sync: loadAll pages every table and normalises rows', async () => {
     updated_at: '2026-10-11T01:02:03+00:00', updated_by: 'u1',
   }));
   const { sb, sync } = setup({
-    items: [{ id: 'it1', board_key: 'projects', group_id: 'g1', position: 0, name: 'X', values: { b: 1, a: 2 }, done: false, updated_at: 'x', updated_by: 'u1' }],
+    boards: [{ id: 'b1', module: 'projects', name: 'Landing Page', owner_id: null, position: 0, updated_at: 'x', updated_by: 'u1' }],
+    board_groups: [{ id: 'g1', board_key: 'projects', board_id: 'b1', name: 'Active', color: '#c9ffe6', position: 0, updated_at: 'x', updated_by: 'u1' }],
+    items: [{
+      id: 'it1', board_key: 'projects', board_id: 'b1', group_id: 'g1', position: 0, name: 'X', values: { b: 1, a: 2 }, done: false,
+      updated_at: 'x', updated_by: 'u1',
+    }],
     channel_members: [{ channel_id: 'c1', user_id: 'u1', updated_at: 'x', updated_by: 'u1' }],
     channels: [{ id: 'c1', name: 'general', created_by: 'u1', updated_at: 'x', updated_by: 'u1' }],
     deals: [{ id: 'd1', name: 'D', sector: 'S', priority: 'P1', stage: 'Won', next_step: '', value: '1200.50', owner_id: null, client_id: null, position: 0 }],
@@ -1096,7 +1260,10 @@ await check('sync: loadAll pages every table and normalises rows', async () => {
   });
   const rows = await sync.loadAll();
   assert.deepEqual(Object.keys(rows), TABLES.map((x) => x.name));
-  assert.deepEqual(rows.items.get('it1'), { id: 'it1', board_key: 'projects', group_id: 'g1', position: 0, name: 'X', values: { b: 1, a: 2 }, done: false });
+  assert.deepEqual(rows.boards.get('b1'), { id: 'b1', module: 'projects', name: 'Landing Page', owner_id: null, position: 0 });
+  assert.deepEqual(rows.items.get('it1'), {
+    id: 'it1', board_key: 'projects', board_id: 'b1', group_id: 'g1', position: 0, name: 'X', values: { b: 1, a: 2 }, done: false,
+  });
   assert.deepEqual(rows.channel_members.get('c1:u1'), { channel_id: 'c1', user_id: 'u1' });
   assert.deepEqual(rows.channels.get('c1'), { id: 'c1', name: 'general' });
   assert.equal(rows.deals.get('d1').value, 1200.5);
@@ -1107,6 +1274,7 @@ await check('sync: loadAll pages every table and normalises rows', async () => {
   assert.ok(sb.calls.every((c) => c.method === 'select' && c.columns === '*'));
   // Loaded rows assemble into state.
   assert.equal(assemble(rows, { me: 'u1' }).channels[0].members[0], 'u1');
+  assert.deepEqual(assemble(rows, { me: 'u1' }).boards.map((b) => [b.id, b.name, b.owner, b.groups[0].items[0].id]), [['b1', 'Landing Page', '', 'it1']]);
   sync.dispose();
 });
 
@@ -1173,7 +1341,8 @@ await check('sync: phase 2 tables are written parents first', async () => {
   const order = TABLES.map((t) => t.name);
   [['deals', 'contacts'], ['invoices', 'billing_plans'], ['billing_plans', 'clients'], ['client_usage', 'clients'], ['payments', 'invoices'],
     ['payments', 'bank_statements'], ['expenses', 'clients'], ['todos', 'routines'], ['todos', 'profiles'], ['routines', 'profiles'],
-    ['time_entries', 'profiles'], ['module_access', 'profiles'], ['contacts', 'profiles']]
+    ['time_entries', 'profiles'], ['module_access', 'profiles'], ['contacts', 'profiles'], ['boards', 'profiles'], ['board_groups', 'boards'],
+    ['items', 'board_groups']]
     .forEach(([child, parent]) => assert.ok(order.indexOf(parent) < order.indexOf(child), `${parent} before ${child}`));
   const { sb, sync } = setup();
   const names = ['todos', 'routines', 'payments', 'bank_statements', 'invoices', 'billing_plans', 'deals', 'contacts', 'client_usage', 'clients'];
@@ -1191,6 +1360,7 @@ globalThis.clearTimeout = realTimers.clearTimeout;
 
 const access = await import('../src/lib/access.js');
 const auto = await import('../src/lib/automations.js');
+const boardsLib = await import('../src/lib/boards.js');
 
 const person = (id, role, active = true) => ({ id, name: id, initials: id.slice(0, 2).toUpperCase(), color: '#579bfc', email: `${id}@example.com`, role, active });
 const team = () => ({
@@ -1245,6 +1415,147 @@ if (levelsSql) {
     assert.ok(Object.keys(pairs).length, 'module_level defaults not found');
     const expected = Object.fromEntries(Object.entries(access.STAFF_DEFAULTS).filter(([, level]) => level !== 'none'));
     assert.deepEqual(pairs, expected); // anything else falls through to 'none'
+  });
+}
+
+// ── Boards (0006): pure helpers, board access, seed and migration ─────────────
+
+// Users for the board access rules: the SuperAdmin, two admins, two staff and an inactive staff member.
+const crew = (moduleAccess = []) => ({
+  me: 'sue',
+  users: [person('sue', 'superadmin'), person('al', 'admin'), person('ann', 'admin'), person('stu', 'staff'), person('sam', 'staff'),
+    person('off', 'staff', false)],
+  moduleAccess,
+});
+const teamBoard = (module) => ({ id: `t-${module}`, module, name: 'Team', owner: '', groups: [] });
+const ownPage = (owner) => ({ id: `p-${owner}`, module: 'projects', name: '', owner, groups: [] });
+
+await check('access: whose own Projects page each person may open (seesPerson ⇄ sees_person in 0006)', () => {
+  const st = crew();
+  const ids = st.users.map((u) => u.id);
+  const sees = (viewer) => ids.filter((owner) => access.seesPerson(st, owner, viewer));
+  assert.deepEqual(sees('sue'), ids, "the SuperAdmin sees everyone's");
+  assert.deepEqual(sees('al'), ['al', 'stu', 'sam', 'off'], "an admin: their own and staff's, not another admin's or the SuperAdmin's");
+  assert.deepEqual(sees('ann'), ['ann', 'stu', 'sam', 'off']);
+  assert.deepEqual(sees('stu'), ['stu'], 'staff: only their own');
+  assert.deepEqual(sees('off'), [], 'an inactive user: nothing, not even their own');
+  assert.deepEqual(sees('nobody'), []);
+  assert.equal(access.seesPerson(st, 'stu'), true, 'defaults to me');
+  assert.equal(access.seesPerson({ ...st, me: 'stu' }, 'sam'), false);
+  assert.deepEqual(['', undefined, null].map((owner) => access.seesPerson(st, owner, 'sue')), [false, false, false], 'no owner');
+});
+
+await check('access: board levels — team boards follow the module, own pages are edit for whoever may open them (boardLevel ⇄ board_level)', () => {
+  const st = crew();
+  const level = (board, u, s = st) => access.boardLevel(s, board, u);
+  // Team boards: the module's level (staff default: Projects view, Marketing edit); admins edit; inactive none.
+  assert.deepEqual(['sue', 'al', 'stu', 'off', 'nobody'].map((u) => [level(teamBoard('projects'), u), level(teamBoard('marketing'), u)]),
+    [['edit', 'edit'], ['edit', 'edit'], ['view', 'edit'], ['none', 'none'], ['none', 'none']]);
+  // Overrides are honoured for staff, never for admins.
+  const over = crew([
+    { userId: 'stu', module: 'projects', level: 'edit' }, { userId: 'stu', module: 'marketing', level: 'none' },
+    { userId: 'sam', module: 'marketing', level: 'view' }, { userId: 'al', module: 'marketing', level: 'none' },
+  ]);
+  assert.deepEqual([['stu', 'projects'], ['stu', 'marketing'], ['sam', 'marketing'], ['al', 'marketing']].map(([u, m]) => level(teamBoard(m), u, over)),
+    ['edit', 'none', 'view', 'edit']);
+  // Own pages: edit for whoever may open them (staff too, though their Projects is view), else none.
+  assert.deepEqual(['sue', 'al', 'ann', 'stu', 'sam', 'off'].map((u) => level(ownPage('stu'), u)), ['edit', 'edit', 'edit', 'edit', 'none', 'none']);
+  assert.deepEqual(['sue', 'al', 'ann', 'stu'].map((u) => level(ownPage('al'), u)), ['edit', 'edit', 'none', 'none']);
+  assert.deepEqual(['sue', 'al', 'stu'].map((u) => level(ownPage('sue'), u)), ['edit', 'none', 'none']);
+  assert.equal(level(ownPage('off'), 'off'), 'none');
+  // … but none for someone whose Projects is none, even their own; their admins still edit it.
+  const hidden = crew([{ userId: 'stu', module: 'projects', level: 'none' }]);
+  assert.deepEqual(['stu', 'al', 'sue'].map((u) => level(ownPage('stu'), u, hidden)), ['none', 'edit', 'edit']);
+  // Unknown modules and missing boards are none.
+  assert.deepEqual([null, undefined, { ...teamBoard('projects'), module: 'admin' }, { ...ownPage('sue'), module: 'settings' }].map((b) => level(b, 'sue')),
+    ['none', 'none', 'none', 'none']);
+  // canViewBoard / canEditBoard, for me by default.
+  const asStu = { ...st, me: 'stu' };
+  assert.deepEqual([teamBoard('projects'), teamBoard('marketing'), ownPage('stu'), ownPage('sam')]
+    .map((b) => [access.canViewBoard(asStu, b), access.canEditBoard(asStu, b)]), [[true, false], [true, true], [true, true], [false, false]]);
+  assert.deepEqual([access.canViewBoard(st, ownPage('stu'), 'sam'), access.canEditBoard(st, teamBoard('projects'), 'al')], [false, true]);
+});
+
+await check('boards: first names, titles ("Shem’s Projects") and links', () => {
+  const { boardTitle, firstName, boardHref } = boardsLib;
+  assert.deepEqual(['Shem Example', '  David  ', 'Hello', 'Mary-Jane O’Neil', '', '   ', null, undefined].map(firstName),
+    ['Shem', 'David', 'Hello', 'Mary-Jane', 'Someone', 'Someone', 'Someone', 'Someone']);
+  const st = { users: [{ id: 'shem', name: 'Shem Example' }, { id: 'dv', name: ' David ' }] };
+  const shem = boardTitle(st, ownPage('shem'));
+  assert.equal(shem, 'Shem’s Projects', 'first name only, curly apostrophe');
+  assert.ok(!shem.includes("'"));
+  assert.equal(boardTitle(st, { ...ownPage('dv'), name: 'Ignored' }), 'David’s Projects', "a personal page's stored name is not its title");
+  assert.equal(boardTitle(st, ownPage('gone')), 'Someone’s Projects');
+  assert.equal(boardTitle(st, { ...teamBoard('projects'), name: '  Landing Page ' }), 'Landing Page');
+  assert.equal(boardTitle(st, { ...teamBoard('projects'), name: ' ' }), 'Untitled board');
+  assert.equal(boardTitle(st, null), '');
+  assert.equal(boardHref({ id: 'b1', module: 'projects' }), '#/projects/b1');
+  assert.equal(boardHref({ id: 'b2', module: 'marketing' }, 'it 1&x'), '#/marketing/b2?item=it%201%26x');
+  assert.equal(boardHref(null), '#/work');
+  assert.equal(boardHref(undefined, 'it1'), '#/work');
+});
+
+// Projects: my page, Stu's page, two team boards; Marketing: two team boards.
+const boardSet = () => {
+  const b = (id, module, owner = '', items = []) => ({
+    id, module, name: owner ? '' : id, owner, groups: [{ id: `g-${id}`, name: 'Active', color: '', items: items.map((x) => ({ id: x })) }],
+  });
+  return [b('own', 'projects', 'me', ['it-own']), b('stus', 'projects', 'stu', ['it-stu']), b('web', 'projects', '', ['it-web']), b('gen', 'projects'),
+    b('daily', 'marketing', '', ['it-m']), b('post', 'marketing')];
+};
+
+await check('boards: lookups (findBoard, personalBoard, teamBoards, boardOfItem, boardItems)', () => {
+  const { findBoard, personalBoard, teamBoards, boardOfItem, boardItems } = boardsLib;
+  const st = { me: 'me', boards: boardSet() };
+  assert.equal(findBoard(st, 'gen')?.id, 'gen');
+  assert.deepEqual([findBoard(st, 'nope'), findBoard({}, 'gen'), findBoard(null, 'gen')], [undefined, undefined, undefined]);
+  assert.equal(personalBoard(st, 'stu')?.id, 'stus');
+  assert.equal(personalBoard(st, 'nobody'), undefined);
+  assert.deepEqual(teamBoards(st, 'projects').map((x) => x.id), ['web', 'gen']);
+  assert.deepEqual(teamBoards(st, 'marketing').map((x) => x.id), ['daily', 'post']);
+  assert.equal(boardOfItem(st, 'it-m')?.id, 'daily');
+  assert.equal(boardOfItem(st, 'nope'), undefined);
+  assert.deepEqual(boardItems(st.boards[0]).map((x) => x.id), ['it-own']);
+  assert.deepEqual([boardItems(undefined), boardItems({})], [[], []]);
+});
+
+await check('boards: resolveBoard — the addressed board, else the one holding the task, else the module default', () => {
+  const { resolveBoard } = boardsLib;
+  const all = boardSet();
+  const st = { me: 'me', boards: all };
+  const at = (visible, module, sub = '', itemId = '') => resolveBoard(st, visible, module, sub, itemId)?.id ?? null;
+  assert.equal(at(all, 'projects', 'gen'), 'gen', 'by sub');
+  assert.equal(at(all, 'projects', '', 'it-web'), 'web', 'by task id (old #/projects?item= links)');
+  assert.equal(at(all, 'projects', 'gen', 'it-web'), 'gen', 'the sub wins');
+  assert.equal(at(all, 'projects'), 'own', 'Projects: your own page');
+  assert.equal(at(all, 'marketing'), 'daily', 'Marketing: its first team board');
+  assert.equal(at(all, 'marketing', 'gen', 'it-web'), 'daily', 'a board or task of another module is not shown here');
+  const visible = all.filter((x) => x.id !== 'stus');
+  assert.equal(at(visible, 'projects', 'stus'), 'own', 'a sub you cannot see falls back');
+  assert.equal(at(visible, 'projects', '', 'it-stu'), 'own', 'so does a task on a board you cannot see');
+  assert.equal(at(all.filter((x) => x.id !== 'own'), 'projects'), 'web', 'no own page: the first team board');
+  assert.equal(at([all[1]], 'projects'), 'stus', "only someone else's page: that one");
+  assert.equal(at([], 'projects'), null);
+  assert.equal(at(all.filter((x) => x.module === 'projects'), 'marketing'), null, 'nothing visible in the module');
+});
+
+// The starting boards and first group the app uses are the ones 0006 makes in the database.
+const boardsSql = existsSync(migrationsDir) && readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()
+  .map((f) => [f, readFileSync(new URL(f, migrationsDir), 'utf8')]).filter(([, sql]) => sql.includes('insert into public.boards (module, name, position)')).at(-1);
+if (boardsSql) {
+  await check(`boards: STARTING_BOARDS, EXISTING_BOARD and FIRST_GROUP match ${boardsSql[0]}`, () => {
+    const sql = boardsSql[1];
+    const starting = {};
+    [...sql.matchAll(/\('(projects|marketing)', '([^']+)', (\d+)\)/g)].forEach(([, module, name, pos]) => { (starting[module] ||= [])[+pos] = name; });
+    assert.deepEqual(starting, boardsLib.STARTING_BOARDS);
+    const existing = /case g\.board_key when 'projects' then '([^']+)' else '([^']+)' end/.exec(sql);
+    assert.ok(existing, 'where the existing groups go: not found');
+    assert.deepEqual({ projects: existing[1], marketing: existing[2] }, boardsLib.EXISTING_BOARD);
+    const first = /case b\.module when 'projects' then '([^']+)' else '([^']+)' end, '(#[0-9a-f]{6})'/.exec(sql);
+    assert.ok(first, 'first group: not found');
+    assert.deepEqual([{ projects: first[1], marketing: first[2] }, first[3]], [boardsLib.FIRST_GROUP, boardsLib.FIRST_GROUP_COLOR]);
+    assert.deepEqual(boardsLib.BOARD_MODULES, ['projects', 'marketing']);
+    assert.ok(boardsLib.GROUP_COLORS.includes(boardsLib.FIRST_GROUP_COLOR));
   });
 }
 
@@ -1527,9 +1838,10 @@ if (createSeed) {
       ['josh', 'Josh', 'admin', 'Asia/Tbilisi'], ['hello', 'Hello', 'staff', 'Asia/Manila']]);
     const emails = JSON.stringify(s).match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g) || [];
     assert.ok(emails.length && emails.every((e) => e.endsWith('@example.com')), emails.filter((e) => !e.endsWith('@example.com')).join(', '));
-    assert.deepEqual(Object.keys(s.boards), ['projects', 'marketing']);
-    assert.ok(s.boards.projects.groups.some((g) => g.name === 'Admin'));
-    const items = Object.values(s.boards).flatMap((b) => b.groups.flatMap((g) => g.items));
+    assert.ok(Array.isArray(s.boards));
+    assert.ok(s.boards.find((b) => b.module === 'projects' && b.name === 'General').groups.some((g) => g.name === 'Admin'),
+      'the former Admin board is a group on General');
+    const items = s.boards.flatMap((b) => b.groups.flatMap((g) => g.items));
     assert.ok(items.every((it) => Array.isArray(it.values.people) && !('owner' in it.values)));
     assert.deepEqual(s.moduleAccess, [], 'staff start on the defaults (docs/PHASE2.md §1): no outreach for Hello');
     // Hello's day: an automation follow-up, a carried-over routine, and work the admins assigned.
@@ -1599,9 +1911,14 @@ if (migrate) {
       ['david', 'superadmin', 'david@example.com', true, 'Australia/Sydney'], ['dale', 'staff', 'dale@example.com', true, 'Australia/Sydney'],
       ['sam', 'staff', 'sam@example.com', true, 'Australia/Sydney'],
     ]);
-    assert.deepEqual(Object.keys(m.boards), ['projects', 'marketing']);
-    assert.deepEqual(m.boards.projects.groups.map((g) => [g.id, g.name]), [['g1', 'Active'], ['g2', 'Admin'], ['g3', 'This quarter']]);
-    const values = Object.fromEntries(Object.values(m.boards).flatMap((b) => b.groups.flatMap((g) => g.items)).map((it) => [it.id, it.values]));
+    assert.ok(Array.isArray(m.boards));
+    const named = (module, name) => m.boards.find((b) => b.module === module && b.name === name && !b.owner);
+    // The Projects groups (with the Admin board's at the end) go on General, Marketing's on Posting schedule (0006).
+    assert.deepEqual(named('projects', 'General').groups.map((g) => [g.id, g.name]), [['g1', 'Active'], ['g2', 'Admin'], ['g3', 'This quarter']]);
+    assert.deepEqual(named('marketing', 'Posting schedule').groups.map((g) => [g.id, g.name]), [['g4', 'October']]);
+    assert.deepEqual(m.boards.filter((b) => b.owner).map((b) => [b.module, b.name, b.owner]),
+      [['projects', '', 'david'], ['projects', '', 'dale'], ['projects', '', 'sam']], 'everyone has their own page');
+    const values = Object.fromEntries(m.boards.flatMap((b) => b.groups.flatMap((g) => g.items)).map((it) => [it.id, it.values]));
     assert.deepEqual(values, {
       i1: { status: 'Done', people: ['dale'] }, i2: { status: 'Stuck', people: [] }, i3: { people: [] }, i4: { people: ['sam', 'dale'] },
     });

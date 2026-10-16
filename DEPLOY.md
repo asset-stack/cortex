@@ -89,9 +89,9 @@ transaction each and safe to re-run. Each client's key contact and email become 
 (invoices go to billing contacts). Running it again after the deploy picks up a key contact typed into an old open
 tab in between, without duplicating. Then set up section 11.
 
-**0006 on a database that already has 0005**: run `0004`, `0005` and then `0006` in order (skip any that has already
-run), each in a new snippet. Paste `supabase/migrations/0006_boards.sql` and **Run** *before* the app version that uses
-it goes live (it loads the `boards` table, which doesn't exist until then). It is one transaction and safe to re-run.
+**0006 on an existing database**: `0004` and `0005` must have run first (run them in order if not, as above). Then
+paste `supabase/migrations/0006_boards.sql` into a new snippet and **Run** it *before* the app version that uses it goes
+live (it loads the `boards` table, which doesn't exist until then). It is one transaction and safe to re-run.
 The editor warns about destructive operations because the file drops and recreates its own policies on the board
 tables: choose **Run this query**. Afterwards:
 - Projects has the team boards **Landing Page**, **Tender Portal** and **General** (the existing Projects groups and
@@ -100,8 +100,8 @@ tables: choose **Run this query**. Afterwards:
 - Everyone has their own Projects page (*Name’s Projects*), and each new person gets one on first sign-in. The
   SuperAdmin sees everyone's, an admin their own and staff's, staff their own. Personal pages can't be renamed or
   deleted.
-- Staff keep their module levels: team Projects boards are View for them (Edit on their own page), Marketing boards
-  Edit. Give one person Edit on Projects in **Settings** → **Team**.
+- Team boards follow the module levels in **Settings** → **Team**: by default staff view the team Projects boards
+  (and edit their own page) and edit the Marketing boards. Give one person Edit on Projects there.
 - Deploy the new app straight after and ask everyone to reload. Until they do, an old open tab still saves, and a
   group it adds goes on **General** / **Posting schedule**.
 

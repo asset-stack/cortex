@@ -8,7 +8,7 @@ import { cn } from '@/lib/cn';
 
 const ICON = 'grid h-8 w-8 shrink-0 place-items-center rounded-full dimmer hover:bg-white/10 hover:text-white';
 // Row actions: on touch widths always shown; from md up on row hover or keyboard focus.
-const ROW_ACTION = 'md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-visible:opacity-100';
+const ROW_ACTION = 'md:opacity-0 md:group-hover/row:opacity-100 md:group-focus-within/row:opacity-100 focus-visible:opacity-100';
 const MENU_ITEM = 'flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent';
 const taskName = (it) => it.name.trim() || 'Untitled task';
 const tasksGo = (n) => (n ? `Its ${n} ${n === 1 ? 'task is' : 'tasks are'} deleted too.` : null);
@@ -41,7 +41,7 @@ function AddRow({ onAdd, colSpan }) {
 }
 
 /** Group name (collapse toggle) and, for editors, its options: rename, move up/down, delete. */
-function GroupHead({ group, count, first, last, collapsed, renaming, readOnly, toggleRef, onToggle, onRename, onRenamed, onMove, onDelete }) {
+function GroupHead({ group, count, first, last, collapsed, renaming, readOnly, toggleRef, onToggle, onStartRename, onRename, onRenamed, onMove, onDelete }) {
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
   if (renaming) {
@@ -68,18 +68,18 @@ function GroupHead({ group, count, first, last, collapsed, renaming, readOnly, t
           </button>
           <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={180} align="left">
             <div className="flex flex-col">
-              <button type="button" className={MENU_ITEM} onClick={() => { setOpen(false); onRename(null); }}>
-                <Pencil className="h-4 w-4" aria-hidden="true" />Rename
+              <button type="button" className={MENU_ITEM} onClick={() => { setOpen(false); onStartRename(); }}>
+                <Pencil className="h-4 w-4 dim" aria-hidden="true" />Rename
               </button>
               <button type="button" className={MENU_ITEM} disabled={first} onClick={() => { setOpen(false); onMove(-1); }}>
-                <ArrowUp className="h-4 w-4" aria-hidden="true" />Move up
+                <ArrowUp className="h-4 w-4 dim" aria-hidden="true" />Move up
               </button>
               <button type="button" className={MENU_ITEM} disabled={last} onClick={() => { setOpen(false); onMove(1); }}>
-                <ArrowDown className="h-4 w-4" aria-hidden="true" />Move down
+                <ArrowDown className="h-4 w-4 dim" aria-hidden="true" />Move down
               </button>
               {/* Focus the options button first, so the confirm dialog hands focus back to it on Cancel. */}
-              <button type="button" className={cn(MENU_ITEM, 'text-rose-200')} onClick={() => { anchor?.focus(); setOpen(false); onDelete(); }}>
-                <Trash2 className="h-4 w-4" aria-hidden="true" />Delete group
+              <button type="button" className={MENU_ITEM} onClick={() => { anchor?.focus(); setOpen(false); onDelete(); }}>
+                <Trash2 className="h-4 w-4 dim" aria-hidden="true" />Delete group
               </button>
             </div>
           </Popover>
@@ -123,7 +123,7 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
             <GroupHead group={g} count={g.items.length} first={at <= 0} last={at < 0 || at === all.length - 1}
               collapsed={collapsed[g.id]} renaming={renaming === gKey} readOnly={readOnly} toggleRef={keep(gKey)}
               onToggle={() => setCollapsed((c) => ({ ...c, [g.id]: !c[g.id] }))}
-              onRename={(name) => (name == null ? setRenaming(gKey) : actions.renameGroup(boardId, g.id, name))}
+              onStartRename={() => setRenaming(gKey)} onRename={(name) => actions.renameGroup(boardId, g.id, name)}
               onRenamed={renamed(gKey)}
               onMove={(dir) => actions.moveGroup(boardId, g.id, dir)}
               onDelete={() => setConfirm({ title: `Delete ${g.name}?`, body: tasksGo(total), run: () => actions.removeGroup(boardId, g.id) })} />
@@ -145,7 +145,7 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                         const tKey = `t:${it.id}`;
                         const name = taskName(it);
                         return (
-                          <tr key={it.id} className="group border-t rowline hover:bg-white/5">
+                          <tr key={it.id} className="group/row border-t rowline hover:bg-white/5">
                             <td className="p-3 text-center">
                               <input type="checkbox" checked={it.done} aria-label={`Mark ${it.name} done`} disabled={readOnly}
                                 onChange={() => actions.updateItem(boardId, it.id, { done: !it.done, values: { status: it.done ? 'Not started' : 'Done' } })}

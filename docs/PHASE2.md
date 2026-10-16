@@ -364,8 +364,8 @@ version that uses it.
   - **Team boards**: only admins add, rename, reorder (within the module) and delete them (`boards` insert / update /
     delete need `owner_id is null and is_admin()`). `boards` select: `can_view(module)`, and for a personal board also
     `sees_person(owner_id)`.
-  - **Personal pages** are never written by the app: they can't be renamed or deleted, and come and go with their
-    person's profile.
+  - **Personal pages**: their `boards` row is never written by the app (no policy allows it), so they can't be
+    renamed or deleted; they come and go with their person's profile (`add_personal_board`, on delete cascade).
   - **Groups and tasks** (`board_groups`, `items`): read with `can_view_board(board_id)`, written with
     `can_edit_board(board_id)`: add, rename, reorder and delete groups (with their tasks); add, edit and delete tasks.
     **Subtasks** (add, rename, tick, delete) and **updates** follow their task's board through `item_board_id(item_id)`
@@ -373,8 +373,8 @@ version that uses it.
   - **Updates**: posted as yourself; edited and deleted by their author or an admin, on a board they can edit.
   - **Moving a task** to another group, on the same board or another board of the same module, needs edit on both;
     it goes to the end of the group (the target board's first group when none is picked), with its subtasks and
-    updates. In the database the task's `group_id` changes and its `board_id` follows (the composite foreign key and
-    `place_on_board`); the update policy checks the old and the new board.
+    updates. In the database the task's `group_id` and `board_id` change together (the composite foreign key keeps
+    them consistent); the update policy checks the old and the new board.
 - **Old app tabs**: trigger `place_on_board` (before insert or update on `board_groups` and `items`) fills a missing
   `board_id`, as an app version from before 0006 writes rows without it: a new group lands on **General** / **Posting
   schedule** (else the module's first team board), a task on its group's board. Reloading the tab ends it.

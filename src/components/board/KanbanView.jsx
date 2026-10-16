@@ -5,7 +5,7 @@ import { AvatarStack } from '@/components/ui';
 import { shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
-export default function KanbanView({ boardKey, groups, sortDue, onOpen, readOnly = false }) {
+export default function KanbanView({ boardId, groups, sortDue, onOpen, readOnly = false }) {
   const { actions } = useStore();
   const [over, setOver] = useState(null);
   // Board sorts within each group; columns mix groups, so sort the combined list too.
@@ -18,7 +18,7 @@ export default function KanbanView({ boardKey, groups, sortDue, onOpen, readOnly
     onDrop: (e) => {
       e.preventDefault(); setOver(null);
       const itemId = e.dataTransfer.getData('text/plain');
-      if (itemId) actions.updateItem(boardKey, itemId, { values: { status: s }, done: s === 'Done' });
+      if (itemId) actions.updateItem(boardId, itemId, { values: { status: s }, done: s === 'Done' });
     },
   });
 

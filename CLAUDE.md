@@ -3,7 +3,7 @@
 Cortex is AssetStack's internal ops platform (Vite + React 18 + Tailwind 3 + lucide-react, Supabase in live mode).
 It is separate from the marketing site (`AssetLanding`) and from the signed-in product
 (bunburycouncil.assetstack.site). The backend contract is `docs/BACKEND.md` (phase 1) plus `docs/PHASE2.md`
-(team workflow: roles, module access, My Work, finance, timesheets); setup steps are in `DEPLOY.md`.
+(team workflow: roles, module access, My Work, finance, timesheets, boards); setup steps are in `DEPLOY.md`.
 
 ## Rules
 - All data access goes through `src/data/store.jsx` (`useStore()` → `{ state, actions }`), in both modes. Screens
@@ -14,11 +14,11 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
 - Keep demo mode working. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` the app runs on localStorage
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
-  migration that has been applied** (`0001`–`0003` are live in production; treat `0004` and `0005` the same
-  once they have run): fix forward in the next file. A migration must never mention `module_level` unless it
+  migration that has been applied** (`0001`–`0005` are live in production; treat `0006` the same once it has
+  run): fix forward in the next file. A migration must never mention `module_level` unless it
   redefines it (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table
   keeps row-level security on with policies that require `is_staff()` (directly or through `is_admin()` /
-  `can_view()` / `can_edit()`), and is added to the `supabase_realtime` publication if it is synced. Extend
+  `can_view()` / `can_edit()` / the board helpers), and is added to the `supabase_realtime` publication if it is synced. Extend
   `scripts/test-db.mjs` to cover it.
 - Roles are `superadmin | admin | staff`. Admins (superadmin or admin) always have edit; only the SuperAdmin
   changes roles, active flags and module access. Money in, expenses and software costs are admins only, and
@@ -26,7 +26,12 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
 - **Access levels are enforced twice, with the same rules**: in RLS through `public.can_view(module)` /
   `public.can_edit(module)` (the real enforcement), and in the UI through `useAccess()` from `src/lib/access.js`
   (nav hides modules at `none`, screens are read-only at `view`, and store actions refuse what the user can't
-  do). A change to one side needs the same change to the other.
+  do). A change to one side needs the same change to the other. Boards (0006) have their own pair:
+  `board_level()` / `can_view_board()` / `can_edit_board()` ⇄ `boardLevel` / `canViewBoard` / `canEditBoard`, and
+  `sees_person()` ⇄ `seesPerson` (whose personal Projects page you may open).
+- **Boards are records**, not code: `state.boards` is an array of team boards and personal Projects pages
+  (`docs/PHASE2.md` §11), and board store actions take a board id. Admins add new team boards in the app; personal
+  pages come and go with their person.
 - **A new module gets a module key**: add it to `MODULES` and `STAFF_DEFAULTS` in `src/lib/access.js`, to the
   `module_access.module` check and the defaults in `public.module_level()` (in a new migration), give its tables
   `can_view` / `can_edit` policies on that key, and set `module` on its `NAV` entry in `Sidebar.jsx`.
