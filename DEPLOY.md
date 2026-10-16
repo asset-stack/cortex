@@ -70,9 +70,10 @@ change or delete its files; Cortex opens a file through a link that expires afte
 to **Public**, and don't add policies to it in the dashboard.
 
 Then run `supabase/migrations/0004_clients_google.sql` the same way (client contacts and contracts, credits,
-and each admin's Google connection; see section 11), then `0005_work_tools.sql` (each person's Tools in My Work).
+and each admin's Google connection; see section 11), then `0005_work_tools.sql` (each person's Tools in My Work),
+then `0006_boards.sql` (the boards under Projects and Marketing, and each person's own Projects page).
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0006_…`). Run each new file
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0007_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one.
 
 **0003 on a database that already has 0002**: **SQL Editor** → **+** → **Create a new snippet**, paste
@@ -87,6 +88,22 @@ Then run `supabase/migrations/0005_work_tools.sql` the same way (each person's T
 transaction each and safe to re-run. Each client's key contact and email become its first contact, marked **Billing**
 (invoices go to billing contacts). Running it again after the deploy picks up a key contact typed into an old open
 tab in between, without duplicating. Then set up section 11.
+
+**0006 on a database that already has 0005**: run `0004`, `0005` and then `0006` in order (skip any that has already
+run), each in a new snippet. Paste `supabase/migrations/0006_boards.sql` and **Run** *before* the app version that uses
+it goes live (it loads the `boards` table, which doesn't exist until then). It is one transaction and safe to re-run.
+The editor warns about destructive operations because the file drops and recreates its own policies on the board
+tables: choose **Run this query**. Afterwards:
+- Projects has the team boards **Landing Page**, **Tender Portal** and **General** (the existing Projects groups and
+  tasks), Marketing has **Daily Automation**, **Posting schedule** (the existing Marketing groups and tasks),
+  **Campaigns** and **Events**. Admins add, rename, order and delete team boards in the app; they are data, not code.
+- Everyone has their own Projects page (*Name’s Projects*), and each new person gets one on first sign-in. The
+  SuperAdmin sees everyone's, an admin their own and staff's, staff their own. Personal pages can't be renamed or
+  deleted.
+- Staff keep their module levels: team Projects boards are View for them (Edit on their own page), Marketing boards
+  Edit. Give one person Edit on Projects in **Settings** → **Team**.
+- Deploy the new app straight after and ask everyone to reload. Until they do, an old open tab still saves, and a
+  group it adds goes on **General** / **Posting schedule**.
 
 ### Upgrading an existing project
 
@@ -247,8 +264,9 @@ There are no invitations to send.
    `setup-admins.sql` come in with the role listed there (**SuperAdmin** or **Admin**).
 3. The SuperAdmin manages people in **Settings** → **Team**: the **Role** menu (SuperAdmin / Admin / Staff),
    the **Active** switch, and each staff member's access to **Projects**, **Marketing**, **Outreach**,
-   **Pipeline** and **Clients** (None / View / Edit). Staff start with Projects and Marketing on Edit, Pipeline
+   **Pipeline** and **Clients** (None / View / Edit). Staff start with Marketing on Edit, Projects, Pipeline
    and Clients on View, and Outreach on None; admins always have Edit. Admins see the page read-only.
+   Each person also gets their own Projects page, which they can always edit (unless Projects is None for them).
    Switching Active off removes all of that person's access at once, because every database policy checks it.
    Your own row is locked, and the last active SuperAdmin can't be demoted or deactivated.
 4. Admins set each person's daily routines in **Settings** → **Routines**; they appear on that person's
@@ -374,6 +392,11 @@ revoke it at Google too: <https://myaccount.google.com/connections>. When someon
 | Console: "Refused to load … Content Security Policy" | The origin isn't allowed in `public/_headers`. |
 | "Couldn't load your workspace … client_contacts" after an update | `0004_clients_google.sql` hasn't run yet (section 2). |
 | "Couldn't load your workspace … work_tools" after an update | `0005_work_tools.sql` hasn't run yet (section 2). |
+| "Couldn't load your workspace … boards", Projects shows nothing, or "Not saved" mentions `board_id` | `0006_boards.sql` hasn't run yet (section 2). |
+| A staff member can edit their own Projects page but not **Landing Page** or another team board | By design: staff view team Projects boards. To let one person edit them, the SuperAdmin sets Projects to **Edit** for that person in **Settings** → **Team**. |
+| An admin can't see another admin's Projects page | By design: admins see their own and staff's pages; only the SuperAdmin sees everyone's. |
+| No rename or delete on someone's Projects page | Personal pages come and go with their person. Only team boards are renamed or deleted (by admins). |
+| A new group turned up on **General** or **Posting schedule** after the 0006 update | An old open tab (the app from before 0006) added it. Move its tasks where they belong, delete it, and reload that tab. |
 | Connect Google: "Error 400: redirect_uri_mismatch" | Add `https://<project-ref>.supabase.co/functions/v1/google/callback` to the Google client (section 11.1). |
 | Connect Google comes back with "Connect the Google account for your own Cortex email" | You picked a different Google account. Each admin connects their own. |
 | "Reconnect your Google account in Settings" | Google withdrew Cortex's access (password change, revoked, or the scopes changed). **Connect Google** again. |

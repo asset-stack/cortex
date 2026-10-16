@@ -4,10 +4,12 @@
 
 The full contract is [`docs/PHASE2.md`](PHASE2.md); migration `supabase/migrations/0002_team_workflow.sql` runs
 once on top of `0001` (applied in production, never edited), `0003_timezones_projects_view.sql` on top of `0002`
-([PHASE2.md §8](PHASE2.md#8-0003-time-zones-and-projects-view-only)) and `0004_clients_google.sql` on top of `0003`
+([PHASE2.md §8](PHASE2.md#8-0003-time-zones-and-projects-view-only)), `0004_clients_google.sql` on top of `0003`
 ([PHASE2.md §9](PHASE2.md#9-0004-client-contacts-contracts-credits-and-google-invoice-email-contract-docs): client
-contacts and contracts, credits, the admins' Google accounts and the `google` Edge Function). The rest of this file is
-phase 1, corrected where 0002–0004 changed it.
+contacts and contracts, credits, the admins' Google accounts and the `google` Edge Function), `0005_work_tools.sql`
+([PHASE2.md §10](PHASE2.md#10-0005-each-persons-tools-in-my-work): each person's Tools) and `0006_boards.sql`
+([PHASE2.md §11](PHASE2.md#11-0006-boards-under-projects-and-marketing): boards under Projects and Marketing, each
+person's own Projects page). The rest of this file is phase 1, corrected where 0002–0006 changed it.
 
 - **Roles**: `superadmin | admin | staff` (phase 1's `member` became `staff`). Admins (superadmin or admin) edit
   every module and see finance; only the SuperAdmin changes roles, active flags and module access, and the last
@@ -18,8 +20,10 @@ phase 1, corrected where 0002–0004 changed it.
   (every module table's RLS), JS `src/lib/access.js` (`useAccess()`; nav, read-only screens, store actions).
   My Work, team chat and the timesheet are always available; Settings is admins only.
 - **Boards**: the Admin board merged into **Projects** (`board_key in ('projects','marketing')`; the seeded
-  *To do* group became *Admin*). `items.values.people` (user ids) replaced `values.owner`. An item's `board_key` is
-  its group's (foreign key on `(group_id, board_key)`), so the boards' RLS covers where an item is filed.
+  *To do* group became *Admin*). `items.values.people` (user ids) replaced `values.owner`. Since 0006 each module holds
+  several boards (`boards` table): team boards (admins add, rename, order and delete them) and one personal Projects
+  page per person (the SuperAdmin sees everyone's, an admin their own and staff's, staff their own). Groups and items
+  carry `board_id`, and their RLS follows the board (`board_level` / `can_view_board` / `can_edit_board`).
 - **New tables** (all synced, RLS on, in realtime): `module_access`, `routines`, `todos`, `billing_plans`,
   `client_usage`, `bank_statements`, `payments`, `expenses`, `subscriptions`, `time_entries`. Bank statements,
   payments, expenses and subscriptions are admins only; todos and time entries are your own (admins see all).
@@ -62,9 +66,12 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
   users: [{ id, name, initials, color, email, role: 'superadmin'|'admin'|'staff', active: true }],
   org: { businessName, abn, address, email, phone, bankAccountName, bsb, accountNumber,
          paymentTermsDays: 30, invoicePrefix: 'INV-' },
-  boards: { projects|marketing: { groups: [{ id, name, color,
-            items: [{ id, name, values: { people /* [userId] */, status, ... }, done,
-                      updates: [{ id, user, text, ts }], subtasks: [{ id, text, done }] }] }] } },
+  // 0006: an array (was { projects|marketing: { groups } }). Projects then Marketing; personal boards first (by
+  // owner's name), then team boards in order. A personal board has name '' and owner set (title from boardTitle()).
+  boards: [{ id, module: 'projects'|'marketing', name, owner /* '' | userId */,
+             groups: [{ id, name, color,
+               items: [{ id, name, values: { people /* [userId] */, status, ... }, done,
+                         updates: [{ id, user, text, ts }], subtasks: [{ id, text, done }] }] }] }],
   deals:   [{ id, name, sector, value, priority, stage, contact /* owner user id */, next, clientId?, contactId }],
   clients: [{ id, name, group, status, priority, next, sector, contact /* user id */, team: [userId],
               lastContact /* 'YYYY-MM-DD' | '' */, demo, demoUrl, platformUrl /* 0004 */, avatar,
@@ -107,8 +114,9 @@ maintained by a `touch()` trigger (the sync engine never sends these two columns
 | `profiles` | `id uuid pk → auth.users on delete cascade`, `email text unique not null`, `name text not null`, `initials text not null`, `color text not null`, `role text not null default 'staff' check in ('superadmin','admin','staff')` (0002; was `'member'`, `('admin','member')`), `active bool not null default true`, `created_at timestamptz default now()`, `timezone text not null default 'Australia/Sydney'` (0003; a real IANA name, checked by a trigger) | `users[]` |
 | `admin_emails` | `email text pk`, `role text not null default 'admin' check in ('superadmin','admin')` (0002) (setup only; not synced) | — |
 | `org_settings` | `id int pk default 1 check (id = 1)`, `business_name, abn, address, email, phone, bank_account_name, bsb, account_number, invoice_prefix text not null default ''` (`invoice_prefix` default `'INV-'`), `payment_terms_days int not null default 30` | `org` |
-| `board_groups` | `board_key text not null check in ('projects','marketing')` (0002 merged `admin` into `projects`), `name text`, `color text`, `position int` | `boards[k].groups[]` |
-| `items` | `board_key text not null`, `group_id uuid not null → board_groups cascade`, `position int`, `name text`, `values jsonb not null default '{}'` (`people`: user ids; 0002 replaced `owner`), `done bool not null default false` | `groups[].items[]` |
+| `boards` (0006) | `module text not null check in ('projects','marketing')`, `name text` (`''` for a personal board), `owner_id uuid null → profiles cascade` (a personal board: one per person, Projects only), `position int` (team boards within their module; personal boards 0) | `boards[]` |
+| `board_groups` | `board_key text not null check in ('projects','marketing')` (0002 merged `admin` into `projects`), `board_id uuid not null` (0006; `(board_id, board_key)` → `boards (id, module)` cascade), `name text`, `color text`, `position int` | `boards[].groups[]` |
+| `items` | `board_key text not null`, `board_id uuid not null` (0006; its group's board), `group_id uuid not null → board_groups cascade` (0006: `(group_id, board_id)` → `board_groups (id, board_id)`), `position int`, `name text`, `values jsonb not null default '{}'` (`people`: user ids; 0002 replaced `owner`), `done bool not null default false` | `groups[].items[]` |
 | `item_updates` | `item_id → items cascade`, `user_id uuid → profiles`, `text text`, `created_at timestamptz` | `items[].updates[]` (newest first in state; order by `created_at desc`) |
 | `subtasks` | `item_id → items cascade`, `position int`, `text text`, `done bool` | `items[].subtasks[]` |
 | `clients` | `name, group_name, status, priority, next_step, sector text`, `contact_id uuid null → profiles`, `team uuid[] not null default '{}'`, `last_contact date null`, `demo, key_contact, email, demo_url, avatar, abn, billing_address text not null default ''`, `position int`; 0004: `platform_url text`, and `key_contact` / `email` are no longer synced (moved into `client_contacts`) | `clients[]` |
@@ -142,8 +150,11 @@ Text columns default to `''` and are `not null` unless noted, so the state never
   **`can_edit(module)`**. `module_level(m)` is `'edit'` for admins, else the caller's `module_access` override or the
   staff default, and `'none'` unless `is_staff()`. Outreach: `contacts, emails, sequences, approvals`. Pipeline:
   `deals`. Clients: `clients, client_notes, client_tasks, invoices, invoice_lines, client_access, billing_plans,
-  client_usage`. Boards: `board_groups, items` by their `board_key`; `item_updates, subtasks` by their item's board
-  (`item_board(item_id)`).
+  client_usage`. Boards (0006; 0002 used the module, `board_key`): `boards` select `can_view(module)` (a personal one
+  also `sees_person(owner_id)`), insert/update/delete team boards only and `is_admin()`; `board_groups, items` select
+  `can_view_board(board_id)`, write `can_edit_board(board_id)`; `item_updates, subtasks` by their item's board
+  (`item_board_id(item_id)`). `board_level(board)` is a team board's module level, or `'edit'` on a personal board
+  for whoever `sees_person()` its owner (yourself; staff's for admins; everyone's for the SuperAdmin), else `'none'`.
 - Finance (0002): `bank_statements, payments, expenses, subscriptions` and the `finance` storage bucket: `is_admin()` only.
   `todos`: select/insert/update own (`assignee_id`) or admin, delete creator or admin. `time_entries`: write own only,
   select own or admin. `routines`: select `is_staff()`, write admin. `module_access`: select own or admin, write
@@ -154,7 +165,7 @@ Text columns default to `''` and are `not null` unless noted, so the state never
 - `channels`: select when `is_member(id)` or `created_by = auth.uid()`; insert with `created_by = auth.uid()` and `is_staff()`; update/delete `is_admin()` or creator.
 - `channel_members`: select when `is_staff()` and (`user_id = auth.uid()` or `is_member(channel_id)` or the caller created the channel); insert when `is_staff()` and (`is_member(channel_id)` or the caller created the channel); delete own row or `is_admin()`. (Select needs the creator clause because PostgREST writes use `RETURNING`: a new channel's memberships go up in one upsert, before the creator counts as a member.)
 - `messages`: select `is_member(channel_id)`; insert `is_member(channel_id)` and `user_id = auth.uid()`; update/delete own.
-- `item_updates`, `client_notes`: select `can_view` of their module; insert `user_id = auth.uid()`; update/delete own or admin; every write also needs `can_edit` of the module (0002).
+- `item_updates`, `client_notes`: select `can_view` of their module (updates: of their board since 0006); insert `user_id = auth.uid()`; update/delete own or admin; every write also needs `can_edit` of the module (0002; updates: `can_edit_board` since 0006).
 - `read_state`: all operations only where `user_id = auth.uid()`.
 - `admin_emails`: no policies (not readable by clients).
 
@@ -162,7 +173,7 @@ Text columns default to `''` and are `not null` unless noted, so the state never
 - `handle_new_user` (after insert on `auth.users`, `security definer`): **raises an exception** when the email domain is not `assetstackai.com` (blocks the sign-up); otherwise inserts the profile (name from `raw_user_meta_data->>'full_name'` or the email's local part, two-letter initials, a colour from a fixed palette by hash, the role listed in `admin_emails`, else `'staff'` (0002)) and adds the user to the `general` channel.
 - `touch()` on every table; `protect_profile` on `profiles`. 0002 adds `protect_invoice_status` and `protect_todo`
   (`created_by` can't be forged), `contact_pipeline` on `contacts`, and the RPCs `ensure_todos` / `generate_due_invoices`.
-- Seed (empty start): `org_settings` row 1; board groups `projects`: Active, Backlog · `admin`: To do (0002 moves it to `projects` as *Admin*) · `marketing`: This month; channel `general`.
+- Seed (empty start): `org_settings` row 1; board groups `projects`: Active, Backlog · `admin`: To do (0002 moves it to `projects` as *Admin*) · `marketing`: This month; channel `general`. 0006 adds the starting boards and puts the Projects groups on *General*, the Marketing ones on *Posting schedule*; triggers `add_personal_board` (new profiles) and `place_on_board` (fills a missing `board_id`).
 - `alter publication supabase_realtime add table …` for every synced table.
 - `supabase/setup-admins.sql` (run after 0002): `insert into public.admin_emails (email, role) values ('you@assetstackai.com', 'superadmin'), … on conflict (email) do update set role = excluded.role;` plus updates that promote people who already signed in to their listed role (never demote).
 
@@ -197,10 +208,10 @@ Text columns default to `''` and are `not null` unless noted, so the state never
 - `onRejected`: a duplicate invoice number or channel name (`23505`) gets the next free one; any other row goes back to what the database holds (or is removed if it never saved).
 - New actions (both modes): `updateProfile(userId, patch)`, `updateOrg(patch)`,
   `importRecords(kind, records, options) → { added, skipped }` with `kind` in `'clients' | 'contacts' | 'deals' | 'tasks'`
-  (records already normalised to state shape by `src/lib/importers.js`; `options = { board, groupId, groupName }` for tasks; skips names that already exist, case-insensitive),
+  (records already normalised to state shape by `src/lib/importers.js`; `options = { board /* board id (0006) */, groupId, groupName }` for tasks; skips names that already exist, case-insensitive),
   `signOut({ force }) → { unsaved }` (live): waits up to 3 s for edits to save; if some still haven't, returns `{ unsaved: true }` without signing out unless `force`.
 - Phase 2 actions (access, My Work, routines, billing, money in, expenses, software costs, timesheets) are in
-  `docs/PHASE2.md` §5. Every action refuses (returns `false`) what `src/lib/access.js` says the user can't do;
+  `docs/PHASE2.md` §5; board actions (they take a board id since 0006) in §11. Every action refuses (returns `false`) what `src/lib/access.js` says the user can't do;
   live mode leaves automations to the database (`rpc` and triggers), demo mode runs `src/lib/automations.js`.
 - `setMe` and `reset` are demo-only (no-ops in live).
 - Extra context value `sync: { state, message }` for a small status indicator.

@@ -405,3 +405,45 @@ export function QuickAdd({ placeholder, onSubmit, className }) {
     </form>
   );
 }
+
+/** Asks before deleting: `title` like "Delete Landing Page?", `children` an optional line on what else goes
+ *  ("Its 3 tasks are deleted too."), then Cancel / Delete. `onConfirm` runs, then `onClose`. Escape closes only this
+ *  dialog when it is opened over a Drawer. */
+export function ConfirmModal({ open, onClose, onConfirm, title, children, action = 'Delete' }) {
+  return (
+    <Modal open={open} onClose={onClose} title={title}>
+      {children && <p className="dim">{children}</p>}
+      <div className={cn('flex justify-end gap-2', children && 'mt-4')}>
+        <button type="button" onClick={onClose} className="rounded-full chip px-4 h-10 font-semibold">Cancel</button>
+        <button type="button" onClick={() => { onConfirm(); onClose(); }}
+          className="rounded-full bg-rose-600 px-4 h-10 font-semibold text-white hover:bg-rose-700">{action}</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Rename in place (focused, text selected): Enter or leaving the field saves, Escape cancels; a blank or unchanged
+ *  name saves nothing. `onSave(trimmed)`, then `onDone(byKey)`: true after Enter/Escape, so the caller can put focus
+ *  back on what it renamed. Escape doesn't reach a Drawer underneath. */
+export function InlineRename({ value, label, onSave, onDone, className }) {
+  const start = String(value ?? '');
+  const [v, setV] = useState(start);
+  const done = useRef(false); // Enter/Escape then the blur from unmounting: finish once
+  const finish = (save, byKey) => {
+    if (done.current) return;
+    done.current = true;
+    const t = v.trim();
+    if (save && t && t !== start.trim()) onSave(t);
+    onDone(byKey);
+  };
+  return (
+    <input value={v} onChange={(e) => setV(e.target.value)} aria-label={label} autoFocus onFocus={(e) => e.target.select()}
+      onKeyDown={(e) => {
+        if (e.nativeEvent.isComposing) return;
+        if (e.key === 'Enter') { e.preventDefault(); finish(true, true); }
+        if (e.key === 'Escape') { e.preventDefault(); finish(false, true); }
+      }}
+      onBlur={() => finish(true, false)}
+      className={cn('field', className)} />
+  );
+}

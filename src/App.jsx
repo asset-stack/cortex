@@ -3,7 +3,7 @@ import { useRoute } from '@/lib/router';
 import { MODULES, useAccess } from '@/lib/access';
 import Sidebar, { MobileNav } from '@/components/layout/Sidebar';
 import ChatDock from '@/components/chat/ChatDock';
-import Board from '@/components/board/Board';
+import BoardPage from '@/components/board/BoardPage';
 import TimesheetPrompt from '@/components/timesheet/TimesheetPrompt';
 import MyWork from '@/pages/MyWork';
 import Pipeline from '@/pages/Pipeline';
@@ -11,11 +11,11 @@ import Clients from '@/pages/Clients';
 import Outreach from '@/pages/Outreach';
 import Settings from '@/pages/Settings';
 
-function Page({ route }) {
+function Page({ route, sub }) {
   switch (route) {
     case 'projects':
     case 'marketing':
-      return <Board key={route} boardKey={route} />;
+      return <BoardPage module={route} sub={sub} />;
     case 'pipeline': return <Pipeline />;
     case 'clients': return <Clients />;
     case 'outreach': return <Outreach />;
@@ -32,13 +32,15 @@ function allowed(route, access) {
 
 export default function App() {
   const access = useAccess();
-  const hashRoute = useRoute();
-  const route = allowed(hashRoute, access) ? hashRoute : 'work';
+  const at = useRoute();
+  const ok = allowed(at.route, access);
+  const route = ok ? at.route : 'work';
+  const sub = ok ? at.sub : ''; // the board id under Projects / Marketing
   const scroller = useRef(null);
   const dock = useRef(null);
   const [dockH, setDockH] = useState(0);
   const [, tick] = useReducer((n) => n + 1, 0);
-  useEffect(() => { scroller.current?.scrollTo({ top: 0 }); }, [route]);
+  useEffect(() => { scroller.current?.scrollTo({ top: 0 }); }, [route, sub]);
 
   // Relative times ("5m") and the My Work greeting are worked out at render time: re-render every
   // minute and when the tab comes back so they don't go stale.
@@ -65,13 +67,13 @@ export default function App() {
       <div className="backdrop-vignette" aria-hidden="true" />
       <div className="backdrop-grain" aria-hidden="true" />
       <div className="relative z-[2] flex h-full">
-        <Sidebar route={route} />
+        <Sidebar route={route} sub={sub} />
         <div className="relative flex min-w-0 flex-1 flex-col">
           <main ref={scroller} className="flex-1 overflow-y-auto scroll-thin">
-            <MobileNav route={route} />
+            <MobileNav route={route} sub={sub} />
             <div className="mx-auto max-w-[1240px] px-4 pb-32 pt-6 md:px-8 md:pt-9" style={dockH ? { paddingBottom: `max(8rem, ${dockH + 16}px)` } : undefined}>
               {access.role === 'staff' && <TimesheetPrompt />}
-              <Page route={route} />
+              <Page route={route} sub={sub} />
             </div>
           </main>
           <div ref={dock} className="pointer-events-none absolute inset-x-0 bottom-0 px-4 pb-4 md:px-8">

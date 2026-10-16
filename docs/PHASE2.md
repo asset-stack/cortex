@@ -14,8 +14,9 @@ RLS on every table, repo is public (no real people/client data, keys or bank det
   anyone's schedule.
 - **Projects** and **Admin** boards merge into one **Projects** board; work is assigned by tagging people
   (multi-person column, and an `@Name` in a task update adds that person). Staff edited it until `0003`; since
-  then they **view** it (§8).
-- **Marketing** board: shared, everyone edits ("marketing machine" detail comes later).
+  then they **view** it (§8). Since `0006` Projects holds several team boards plus each person's own page (§11).
+- **Marketing** board: shared, everyone edits ("marketing machine" detail comes later). Since `0006` it is split
+  into boards: Daily Automation, Posting schedule, Campaigns, Events (§11).
 - **Outreach**: admins only by default; the SuperAdmin can switch it on (view/edit) per staff member.
 - **Pipeline**: everyone views, admins edit. **Automation**: a contact moving to *Replied* or
   *Meeting booked* creates (or advances) a deal in Pipeline, plus a follow-up to-do for its owner.
@@ -52,8 +53,12 @@ staff default above. One implementation per side:
 - SQL: `public.module_level(p_module text) returns text` for `auth.uid()`; `public.can_view(m)`, `public.can_edit(m)`.
 - JS: `src/lib/access.js` → `roleOf(state, userId)`, `isAdminRole(role)`, `isSuperadmin(state, userId?)`,
   `moduleLevel(state, module, userId = state.me)`, `canView(state, module, userId?)`, `canEdit(...)`,
-  and React hook `useAccess()` → `{ role, isAdmin, isSuper, level(module), canView(module), canEdit(module) }`.
+  and React hook `useAccess()` → `{ role, isAdmin, isSuper, level(module), canView(module), canEdit(module) }`
+  (0006 adds `seesPerson(userId)`, `canViewBoard(board)`, `canEditBoard(board)`: §11).
   `MODULES` and `STAFF_DEFAULTS` exported from there.
+
+Since 0006 Projects and Marketing boards each have a level (§11): a team board has its module's level; a person's own
+Projects page is edit for whoever may open it.
 
 UI rules: nav hides modules at `none`; a hidden route falls back to My Work. At `view`, pages render
 read-only (no add buttons, pickers disabled, no drag, inputs readOnly). Store actions also refuse edits
@@ -64,7 +69,8 @@ the user can't make (defence in depth); RLS is the real enforcement.
 ```js
 users: [{ ..., role: 'superadmin'|'admin'|'staff' }],
 moduleAccess: [{ userId, module, level }],            // overrides only (staff)
-boards: { projects, marketing },                        // 'admin' board removed (merged into projects)
+boards: [{ id, module, name, owner, groups }],          // 0006 (§11); was { projects, marketing } ('admin' merged
+                                                        // into projects in 0002)
 //   item.values.people: [userId]   replaces values.owner (string)
 todos: [{ id, assignee, createdBy, title, notes, day /* 'YYYY-MM-DD' */, start /* 'HH:MM'|'' */,
           minutes, category, source /* 'manual'|'routine'|'automation' */, routineId /* ''|id */,
@@ -109,7 +115,8 @@ Additive and safe to run once on the live database (which may already hold rows)
     → select `can_view('clients')`, write `can_edit('clients')`; `client_notes` keeps own-row update/delete rules.
   - boards: `board_groups, items` → by `board_key` (`projects`/`marketing` module); `item_updates, subtasks` →
     via their item's board (helper `item_board(item uuid)` security definer). An item's `board_key` is its group's
-    (foreign key `(group_id, board_key)` → `board_groups (id, board_key)`, on update/delete cascade).
+    (foreign key `(group_id, board_key)` → `board_groups (id, board_key)`, on update/delete cascade). 0006 scopes
+    all four by board instead (§11).
 - Board merge: `board_groups`/`items` with `board_key='admin'` move to `projects` (group renamed `Admin` when it
   was the seeded `To do`); new check `board_key in ('projects','marketing')`.
   `items.values`: `owner` (string) → `people` (json array of user ids; empty array when no owner).
@@ -159,7 +166,8 @@ The round-trip property must hold for every table. Rows the user can't read simp
 - Access: `setModuleAccess(userId, module, level)` (superadmin only; `level === default` deletes the override).
   `updateProfile` keeps working; role/active only for superadmin.
 - Boards: `updateItem` accepts `values.people`; `addUpdate` adds every `@Name` mentioned (active users) to the item's `people`.
-  `addItem(board, groupId, name)` defaults `people: [me]`.
+  `addItem(boardId, groupId, name)` defaults `people: [me]`. Board actions take a board id since 0006 (§11; was the
+  module key).
 - My Work: `addTodo({ assignee, title, day, start, minutes, category, notes })` (staff: own only),
   `updateTodo(id, patch)`, `toggleTodo(id)` (sets `doneAt`), `deleteTodo(id)`, `moveTodo(id, day)`;
   `addRoutine`, `updateRoutine`, `deleteRoutine` (admins); `ensureTodos(day)` → live: `rpc('ensure_todos')`;
@@ -181,7 +189,8 @@ The round-trip property must hold for every table. Rows the user can't read simp
 
 ## 6. Screens
 - **Sidebar**: nav = My Work, Projects, Marketing, Outreach (if visible), Pipeline (if visible), Clients (if visible),
-  Settings (admins). `#/admin` redirects to Projects. Role chip shows SuperAdmin / Admin / Staff.
+  Settings (admins). `#/admin` redirects to Projects. Role chip shows SuperAdmin / Admin / Staff. Since 0006 Projects
+  and Marketing list their boards as sub-menus (§11).
 - **My Work** (`src/pages/MyWork.jsx` + `src/components/work/*`): day navigator (‹ Today ›); admins get a person
   picker (default me). Sections: *Carried over* (undone to-dos before today), *Today* (to-dos sorted by start time
   then position: checkbox, title, category pill, minutes, source icon for routine/automation, delete), inline add
@@ -189,7 +198,7 @@ The round-trip property must hold for every table. Rows the user can't read simp
   items whose `people` include the person and aren't done), *Mentions* (existing). KPI row: to-dos today, done,
   carried over, mentions. Calls `ensureTodos(today)` once per day per signed-in user.
 - **Projects / Marketing** boards: people column = multi-avatar picker (`PeoplePicker` in `src/components/ui`);
-  read-only at `view`.
+  read-only at `view` (per board since 0006, §11).
 - **Outreach**: contact status select (New → Meeting booked …) and owner; read-only at `view`.
 - **Pipeline**: read-only for `view` (no drag, no stage select, no New deal, no Make client); deal card shows a small
   link icon when it came from a contact.
@@ -316,3 +325,80 @@ version that uses it.
   (`src/lib/tools.js`). The demo seed gives Hello Gmail, Google Drive, Apollo and Claude.
 - **Tests**: `scripts/test-db.mjs` phase 5 (own / admin access, `created_by` pinned, inactive and anon see nothing,
   realtime); `scripts/test-sync.mjs` (mapping, per-person positions, diff, seed, migrate).
+
+## 11. 0006: boards under Projects and Marketing
+
+`supabase/migrations/0006_boards.sql` runs once on top of `0005` (one transaction, safe to re-run), before the app
+version that uses it.
+
+- **Owner's decisions**: Projects and Marketing get sub-menus in the sidebar. Marketing: Daily Automation, Posting
+  schedule, Campaigns, Events. Projects: first each person's own page (*David’s Projects*), then the team boards
+  (Landing Page, Tender Portal, …). The SuperAdmin sees everyone's page, an admin their own and staff's, staff only
+  their own. Boards, groups, tasks, subtasks and updates can be renamed or edited and deleted by whoever may edit them.
+- **Table** `boards (module check in ('projects','marketing'), name, owner_id uuid null → profiles cascade, position)`:
+  touch, realtime. A **team board** has no owner. A **personal board** has `owner_id` set, one per person (unique
+  index), Projects only (check), and a blank name (the app shows *<first name>’s Projects*, `boardTitle()`).
+  `board_groups.board_id` and `items.board_id` (not null) say which board a group or task is on; `board_key` stays the
+  module. Foreign keys `board_groups (board_id, board_key)` → `boards (id, module)` and `items (group_id, board_id)` →
+  `board_groups (id, board_id)`, on update and delete cascade: a group is on a board of its own module, a task on its
+  group's board, and deleting a board deletes its groups, tasks, subtasks and updates.
+- **Starting boards**: Projects → Landing Page, Tender Portal, General; Marketing → Daily Automation, Posting schedule,
+  Campaigns, Events (only for a module with no team boards yet, so a re-run keeps admins' changes). The existing
+  Projects groups go on **General** and the Marketing ones on **Posting schedule**, with their tasks. A board without
+  groups gets one (Projects *Active*, Marketing *To do*). Every profile gets its personal board, and trigger
+  `add_personal_board` (after insert on `profiles`) gives each new person one with an *Active* group. The names are
+  `STARTING_BOARDS` / `EXISTING_BOARD` / `FIRST_GROUP` in `src/lib/boards.js`.
+- **Access**: `board_level(board)` → `'none' | 'view' | 'edit'`, with `can_view_board()` / `can_edit_board()`; JS
+  `boardLevel` / `canViewBoard` / `canEditBoard` in `src/lib/access.js`, same rules. A team board has its module's
+  level. A personal board is `edit` for whoever may open it (`sees_person(owner)`, JS `seesPerson`: yourself, staff's
+  for an admin, everyone's for the SuperAdmin) while they can view Projects at all, else `none`.
+
+  | board | SuperAdmin | Admin | Staff |
+  |---|---|---|---|
+  | team boards | edit | edit | the module's level (default Projects view, Marketing edit) |
+  | your own page | edit | edit | edit |
+  | a staff member's page | edit | edit | none |
+  | an admin's or SuperAdmin's page | edit | none | none |
+
+- **Who changes what** (RLS ⇄ store; each store action returns `false` and changes nothing when refused):
+  - **Team boards**: only admins add, rename, reorder (within the module) and delete them (`boards` insert / update /
+    delete need `owner_id is null and is_admin()`). `boards` select: `can_view(module)`, and for a personal board also
+    `sees_person(owner_id)`.
+  - **Personal pages** are never written by the app: they can't be renamed or deleted, and come and go with their
+    person's profile.
+  - **Groups and tasks** (`board_groups`, `items`): read with `can_view_board(board_id)`, written with
+    `can_edit_board(board_id)`: add, rename, reorder and delete groups (with their tasks); add, edit and delete tasks.
+    **Subtasks** (add, rename, tick, delete) and **updates** follow their task's board through `item_board_id(item_id)`
+    (0002's `item_board()` is no longer used).
+  - **Updates**: posted as yourself; edited and deleted by their author or an admin, on a board they can edit.
+  - **Moving a task** to another group, on the same board or another board of the same module, needs edit on both;
+    it goes to the end of the group (the target board's first group when none is picked), with its subtasks and
+    updates. In the database the task's `group_id` changes and its `board_id` follows (the composite foreign key and
+    `place_on_board`); the update policy checks the old and the new board.
+- **Old app tabs**: trigger `place_on_board` (before insert or update on `board_groups` and `items`) fills a missing
+  `board_id`, as an app version from before 0006 writes rows without it: a new group lands on **General** / **Posting
+  schedule** (else the module's first team board), a task on its group's board. Reloading the tab ends it.
+- **App**: `state.boards` is an array (`docs/BACKEND.md` §1): Projects then Marketing; personal boards first (by
+  owner's name), then team boards in order. Sync: `boards` → `board_groups` → `items`; team board positions count
+  within their module, personal boards are 0. Pure helpers in `src/lib/boards.js` (`findBoard`, `personalBoard`,
+  `teamBoards`, `boardTitle`, `boardHref`, `resolveBoard`). Store actions take a **board id** (was the module key):
+  `addBoard(module, name) → id` (with one group), `renameBoard`, `moveBoard(id, ±1)`, `removeBoard` (admins, team
+  boards); `addItem(boardId, groupId, name) → id`, `updateItem`, `deleteItem`,
+  `moveItem(boardId, itemId, { board, group })`; `addGroup → id`, `renameGroup`, `moveGroup(boardId, groupId, ±1)`,
+  `removeGroup`; `addUpdate`, `editUpdate`, `removeUpdate`; `addSubtask`, `toggleSubtask`, `renameSubtask`,
+  `removeSubtask`; `importRecords('tasks', records, { board: boardId, groupId, groupName })`. Demo `migrate()`
+  converts a saved `{ projects: { groups }, marketing: { groups } }` the way 0006 does and gives every user missing one
+  a personal page; the demo seed has David's, Josh's and Hello's pages and the starting team boards.
+- **Routes**: `#/projects` opens your own page (else the first team board), `#/marketing` the first Marketing board;
+  `#/projects/<board id>` / `#/marketing/<board id>` a board, and `?item=<id>` opens a task on it (`boardHref()`).
+  Old `#/projects?item=<id>` and `#/admin?item=<id>` links open the board that holds the task. A board you can't see
+  falls back to the module's default (`resolveBoard()`).
+- **Screens**: the sidebar lists each module's boards under it. Admins add team boards, and rename, move and delete
+  them; on any board you can edit, groups, tasks, subtasks and updates (yours, or anyone's for admins) are renamed or
+  edited and deleted in place, and a task moves to another group or board from its drawer. Deleting a board, a group
+  or a task asks first; a subtask or an update goes at once. A read-only board shows none of this. My Work → On boards
+  lists open tasks from every board you can see, with the board's name.
+- **Tests**: `scripts/test-db.mjs` phase 6 (starting boards and where the groups went, personal boards for existing
+  and new profiles, who sees and edits which board, team boards admins only, moving a task across boards,
+  `place_on_board`, re-run, realtime); `scripts/test-sync.mjs` (mapping and positions, `boardLevel` against the SQL
+  rules, store actions refused as in RLS, `migrate`, `resolveBoard`).

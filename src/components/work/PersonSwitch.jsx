@@ -5,13 +5,13 @@ import { Avatar, Popover } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { localClock, localTime } from '@/lib/format';
 
-/** Admins: whose My Work to show. Active team members only. */
-export default function PersonSwitch({ value, onChange }) {
+/** Admins: whose My Work (or Projects page) to show. Active team members only; `people` (user ids) narrows the list. */
+export default function PersonSwitch({ value, onChange, people: only }) {
   const { state } = useStore();
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
   const current = state.users.find((u) => u.id === value);
-  const people = state.users.filter((u) => u.active !== false || u.id === value);
+  const people = state.users.filter((u) => (u.active !== false || u.id === value) && (!only || only.includes(u.id)));
   return (
     <>
       <button type="button" ref={setAnchor} onClick={() => setOpen((o) => !o)} aria-haspopup="true" aria-expanded={open}
