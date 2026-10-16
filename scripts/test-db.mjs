@@ -1729,8 +1729,9 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
 
   const first = await applyMigration6();
   const body = migration6.replace(/--.*$/gm, '').trim();
-  check('33. 0006 runs on top of 0005 and the boards as they were, as one transaction',
-    first === null && /^begin;/i.test(body) && /commit;$/i.test(body), first);
+  const marker = (await one("select obj_description('public.boards'::regclass, 'pg_class') as m")).m;
+  check('33. 0006 runs on top of 0005 and the boards as they were (begin … commit when run whole), and marks itself complete',
+    first === null && /^begin;/i.test(body) && /commit;$/i.test(body) && marker === 'Cortex 0006 complete', { first, marker });
   if (first) return null;
   const snapshot = () => one(`select
     (select string_agg(module || ':' || name || ':' || position, ',' order by module, position, name) from boards where owner_id is null) as team,
@@ -1742,7 +1743,10 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
     from boards b left join board_groups g on g.board_id = b.id
     where b.id not in (select board_id from board_groups where id = any($1::uuid[]))
     group by b.id, b.module, b.owner_id`, [preGroups.map((g) => g.id)]);
-  const second = await applyMigration6();
+  // The re-run goes statement by statement, as the SQL editor may run it (42.).
+  await as(null);
+  const secondErrors = await runSplit(db, migration6);
+  const second = secondErrors[0] ?? null;
   const afterSecond = await snapshot();
   // 0006 redefines module_level (staff edit Projects again), so it may name it; it must define it, not just call it.
   check('33. 0006 re-runs cleanly (adding no boards or groups) and only mentions module_level to redefine it',
@@ -2518,6 +2522,141 @@ async function syncWriteCheck({ david, alice, boss, hello, early, board, page })
   await as(null);
 }
 
+// Editor-style runs ------------------------------------------------------------------------------------------------
+// The Supabase SQL editor may run a pasted file statement by statement, each on its own (no surrounding transaction),
+// and carry on after an error: 0006's first live run did. splitSql() cuts a file into statements (respecting quotes,
+// comments and $tag$ bodies); runSplit() runs them one by one without begin/commit, stopping at the first error or
+// carrying on, and skipping statements a test marks as failed (`skip`).
+
+function splitSql(sql) {
+  const out = [];
+  let cur = '';
+  let i = 0;
+  while (i < sql.length) {
+    const ch = sql[i];
+    const two = sql.slice(i, i + 2);
+    if (two === '--') { const end = sql.indexOf('\n', i); const stop = end < 0 ? sql.length : end + 1; cur += sql.slice(i, stop); i = stop; continue; }
+    if (two === '/*') { const stop = sql.indexOf('*/', i) + 2; cur += sql.slice(i, stop); i = stop; continue; }
+    if (ch === "'" || ch === '"') {
+      let j = i + 1;
+      while (j < sql.length && !(sql[j] === ch && sql[j + 1] !== ch)) j += sql[j] === ch ? 2 : 1;
+      cur += sql.slice(i, j + 1); i = j + 1; continue;
+    }
+    if (ch === '$') {
+      const m = /^\$[A-Za-z_]*\$/.exec(sql.slice(i));
+      if (m) { const stop = sql.indexOf(m[0], i + m[0].length) + m[0].length; cur += sql.slice(i, stop); i = stop; continue; }
+    }
+    if (ch === ';') { out.push(cur); cur = ''; i++; continue; }
+    cur += ch; i++;
+  }
+  out.push(cur);
+  const code = (st) => st.replace(/--.*$/gm, '').trim();
+  return out.filter((st) => code(st) && !/^(begin|commit)$/i.test(code(st)));
+}
+
+async function runSplit(dbx, sql, { continueOnError = false, skip = () => false } = {}) {
+  const errors = [];
+  for (const st of splitSql(sql)) {
+    if (skip(st)) continue;
+    try {
+      await dbx.exec(st);
+    } catch (e) {
+      errors.push(e.message);
+      if (!continueOnError) break;
+    }
+  }
+  return errors;
+}
+
+// 42. Running 0006 as the SQL editor did: statement by statement, carrying on after errors -------------------------
+// On a fresh database with 0001-0005 and boards from before 0006: (a) a statement-by-statement first run ends in the
+// intended state; (b) the live failure (the seeding statements failing, everything else applied, nothing marked
+// complete) leaves rows unlinked and hidden, and running the current 0006 again repairs it; a further run changes nothing.
+async function editorRunCheck() {
+  const fresh = async () => {
+    const dbx = new PGlite({ extensions: { pgcrypto } });
+    await dbx.exec(SUPABASE_STUB);
+    for (const m of [migration, migration2, migration3, migration4, migration5]) await dbx.exec(m);
+    await dbx.exec("insert into public.admin_emails (email, role) values ('owner@assetstackai.com', 'superadmin') on conflict do nothing");
+    const user = async (email, name) => {
+      const id = randomUUID();
+      await dbx.query('insert into auth.users (id, email, raw_user_meta_data) values ($1, $2, $3)', [id, email, { full_name: name }]);
+      return id;
+    };
+    const owner = await user('owner@assetstackai.com', 'Owner Example');
+    const staff = await user('staff@assetstackai.com', 'Staff Example');
+    const one2 = async (q, p) => (await dbx.query(q, p)).rows[0];
+    const legacy = {};
+    for (const [module, name] of [['projects', 'Active'], ['projects', 'Admin'], ['marketing', 'October']]) {
+      const g = (await one2('insert into board_groups (board_key, name, color, position) values ($1, $2, $3, 0) returning id', [module, name, '#c9ffe6'])).id;
+      const it = (await one2(`insert into items (board_key, group_id, name, "values") values ($1, $2, $3, '{"people": []}') returning id`, [module, g, `${name} task`])).id;
+      await dbx.query("insert into subtasks (item_id, text) values ($1, 'Step')", [it]);
+      await dbx.query("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Note')", [it, staff]);
+      legacy[`${module}:${name}`] = { group: g, item: it };
+    }
+    return { dbx, owner, staff, legacy };
+  };
+  const state = async ({ dbx, staff, legacy }) => {
+    const r = (await dbx.query(`select
+      (select string_agg(module || ':' || name || ':' || position, ',' order by module, position) from boards where owner_id is null) as team,
+      (select count(*)::int from boards where owner_id is not null) as pages,
+      (select count(*)::int from profiles) as profiles,
+      (select count(*)::int from board_groups where board_id is null) as groups_unlinked,
+      (select count(*)::int from items where board_id is null) as tasks_unlinked,
+      (select count(*)::int from boards b where not exists (select 1 from board_groups g where g.board_id = b.id)) as boards_without_group,
+      (select string_agg(table_name || ':' || is_nullable, ',' order by table_name) from information_schema.columns
+        where table_schema = 'public' and column_name = 'board_id') as nullable,
+      obj_description('public.boards'::regclass, 'pg_class') as marker,
+      (select string_agg(distinct tgname, ',' order by tgname) from pg_trigger where tgname in ('place_on_board', 'same_audience',
+        'keep_board_links', 'add_personal_board')) as triggers,
+      (select count(*)::int from board_groups) as groups, (select count(*)::int from items) as items,
+      (select count(*)::int from subtasks) as subtasks, (select count(*)::int from item_updates) as updates`)).rows[0];
+    const placed = (await dbx.query(`select g.id, b.name from board_groups g join boards b on b.id = g.board_id
+      where g.id = any($1::uuid[])`, [Object.values(legacy).map((x) => x.group)])).rows;
+    r.legacy_on = [...new Set(placed.map((x) => x.name))].sort().join(',');
+    await dbx.exec('set role authenticated');
+    await dbx.query("select set_config('request.jwt.claim.sub', $1, false)", [staff]);
+    r.staff_sees_tasks = (await dbx.query('select count(*)::int as n from items where id = any($1::uuid[])',
+      [Object.values(legacy).map((x) => x.item)])).rows[0].n;
+    await dbx.exec('reset role');
+    await dbx.query("select set_config('request.jwt.claim.sub', '', false)");
+    return r;
+  };
+  const intended = (r) => r.team === 'marketing:Daily Automation:0,marketing:Posting schedule:1,marketing:Campaigns:2,marketing:Events:3,'
+      + 'projects:Landing Page:0,projects:Tender Portal:1,projects:General:2'
+    && r.pages === r.profiles && r.groups_unlinked === 0 && r.tasks_unlinked === 0 && r.boards_without_group === 0
+    && r.nullable === 'board_groups:NO,items:NO' && r.marker === 'Cortex 0006 complete'
+    && r.triggers === 'add_personal_board,keep_board_links,place_on_board,same_audience'
+    && r.legacy_on === 'General,Posting schedule' && r.staff_sees_tasks === 3 && r.items === 3 && r.subtasks === 3 && r.updates === 3;
+
+  // (a) A first run, statement by statement.
+  const a = await fresh();
+  const aErrors = await runSplit(a.dbx, migration6);
+  const aState = await state(a);
+  check('42. 0006 run statement by statement (as the SQL editor may) ends in the intended state',
+    aErrors.length === 0 && intended(aState), { aErrors, aState });
+  await a.dbx.close();
+
+  // (b) The live failure, then the repair.
+  const b = await fresh();
+  const seed = (st) => /^\s*-- seed/m.test(st);
+  const bErrors = await runSplit(b.dbx, migration6, { continueOnError: true, skip: seed });
+  const broken = await state(b);
+  check('42. a run whose seeding statements failed (the live 0006 run) leaves tasks unlinked and hidden, and is not marked complete',
+    broken.team === null && broken.groups_unlinked === broken.groups && broken.tasks_unlinked === 3 && broken.staff_sees_tasks === 0
+      && broken.marker === null && broken.items === 3 && broken.nullable === 'board_groups:YES,items:YES', { bErrors, broken });
+  const repair = await b.dbx.exec(migration6).then(() => null, (e) => e.message);
+  const repaired = await state(b);
+  check('42. running the current 0006 again repairs it: starting boards once, old groups on General / Posting schedule, '
+    + 'nothing unlinked, every board with a group, staff see their tasks again, marked complete',
+    repair === null && intended(repaired), { repair, repaired });
+  const again = await runSplit(b.dbx, migration6, { continueOnError: true });
+  const afterAgain = await state(b);
+  check('42. one more run (statement by statement) changes nothing',
+    again.length === 0 && stable(afterAgain) === stable(repaired), { again, afterAgain });
+  await b.dbx.close();
+}
+
 // An unexpected exception (e.g. a policy now raising where a check expected 0 rows) is a failure too.
 try {
   const ctx = await main();
@@ -2527,6 +2666,7 @@ try {
   const ctx5 = ctx4 && await phase5(ctx4);
   const ctx6 = ctx5 && await phase6(ctx5);
   if (ctx6) await syncWriteCheck(ctx6);
+  if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);
 }

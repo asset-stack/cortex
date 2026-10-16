@@ -1,6 +1,7 @@
 -- Cortex 0006: Projects and Marketing sub-boards (the sidebar's sub-menus), and each person's own Projects page. Run
--- once in the Supabase SQL editor after 0004 and 0005, BEFORE the app version that uses it goes live. One transaction;
--- safe to re-run. Contract: docs/PHASE2.md §11.
+-- in the Supabase SQL editor after 0004 and 0005, BEFORE the app version that uses it goes live. Safe to re-run, and a
+-- re-run finishes an earlier run that stopped part-way: the SQL editor may run the statements one by one, so no
+-- statement relies on another having run in the same transaction or session. Contract: docs/PHASE2.md §11.
 --
 -- - public.boards: the boards under a module. Team boards (owner_id null) are added, renamed, ordered and deleted by
 --   admins. To start: Projects → Landing Page, Tender Portal and General (the existing Projects board);
@@ -36,17 +37,14 @@ create table if not exists public.boards (
 
 create unique index if not exists boards_owner_key on public.boards (owner_id) where owner_id is not null;
 
--- The starting boards and the one-group-per-board seed happen on the first run only (before board_groups.board_id
--- exists): a re-run leaves boards and groups as people left them, even a module whose boards were all deleted or a
--- board whose groups were.
-create temp table m6_first_run on commit drop as
-select not exists (select 1 from information_schema.columns
-                   where table_schema = 'public' and table_name = 'board_groups' and column_name = 'board_id') as yes;
+-- The starting boards and the one-group-per-board seed (marked "-- seed") run until a run has completed: the last
+-- statement labels public.boards "Cortex 0006 complete". After that a re-run leaves boards and groups as people left
+-- them, even a module whose boards were all deleted or a board whose groups were.
 
--- The starting team boards, once per module (a module that already has team boards is left as it is).
+-- seed: the starting team boards, once per module (a module that already has team boards is left as it is).
 do $$
 begin
-  if not (select yes from m6_first_run) then
+  if obj_description('public.boards'::regclass, 'pg_class') = 'Cortex 0006 complete' then
     return;
   end if;
   if not exists (select 1 from public.boards where module = 'projects' and owner_id is null) then
@@ -107,11 +105,12 @@ end $$;
 create index if not exists board_groups_board_id_idx on public.board_groups (board_id);
 create index if not exists items_board_id_idx on public.items (board_id);
 
--- A board with no groups starts with one, so it has somewhere to add tasks (first run only).
+-- seed: a board with no groups starts with one, so it has somewhere to add tasks (until a run has completed).
 insert into public.board_groups (board_key, board_id, name, color, position)
 select b.module, b.id, case b.module when 'projects' then 'Active' else 'To do' end, '#c9ffe6', 0
 from public.boards b
-where (select yes from m6_first_run) and not exists (select 1 from public.board_groups g where g.board_id = b.id);
+where obj_description('public.boards'::regclass, 'pg_class') is distinct from 'Cortex 0006 complete'
+  and not exists (select 1 from public.board_groups g where g.board_id = b.id);
 
 -- Writes that don't name a board (an app version from before this migration, still open in a tab) land where they
 -- did before: a new group on General / Posting schedule (else the module's first team board), a task on its group's
@@ -171,7 +170,8 @@ declare
   v_from record;
   v_to record;
 begin
-  if new.board_id is distinct from old.board_id then
+  -- Placing a row that has no board yet (the backfill, re-run after a run that stopped part-way) is not a move.
+  if old.board_id is not null and new.board_id is distinct from old.board_id then
     select owner_id, module into v_from from public.boards where id = old.board_id;
     select owner_id, module into v_to from public.boards where id = new.board_id;
     if v_from.owner_id is distinct from v_to.owner_id or v_from.module is distinct from v_to.module then
@@ -391,5 +391,18 @@ create policy author_update on public.item_updates for update to authenticated
   with check ((user_id = auth.uid() or public.is_admin()) and public.can_write_item(item_id));
 create policy author_delete on public.item_updates for delete to authenticated
   using ((user_id = auth.uid() or public.is_admin()) and public.can_edit_board(public.item_board_id(item_id)));
+
+-- Last: mark the run complete, so a later re-run doesn't seed again; only once every group and task is on a board and
+-- every board has a group (a run that stopped part-way, or skipped a statement, leaves it unmarked to finish next time).
+do $$
+begin
+  if not exists (select 1 from public.board_groups where board_id is null)
+     and not exists (select 1 from public.items where board_id is null)
+     and not exists (select 1 from public.boards b where not exists (select 1 from public.board_groups g where g.board_id = b.id))
+     and exists (select 1 from public.boards where module = 'projects' and owner_id is null)
+     and exists (select 1 from public.boards where module = 'marketing' and owner_id is null) then
+    execute 'comment on table public.boards is ''Cortex 0006 complete''';
+  end if;
+end $$;
 
 commit;

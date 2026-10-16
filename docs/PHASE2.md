@@ -329,7 +329,9 @@ version that uses it.
 
 ## 11. 0006: boards under Projects and Marketing
 
-`supabase/migrations/0006_boards.sql` runs once on top of `0005` (one transaction, safe to re-run), before the app
+`supabase/migrations/0006_boards.sql` runs on top of `0005` (safe to re-run; it does not rely on running as one
+transaction, since the SQL editor may run statements one by one and carry on after an error, as its first live run
+did), before the app
 version that uses it.
 
 - **Owner's decisions**: Projects and Marketing get sub-menus in the sidebar. Marketing: Daily Automation, Posting
@@ -347,9 +349,14 @@ version that uses it.
   `board_groups (id, board_id)`, on update and delete cascade: a group is on a board of its own module, a task on its
   group's board, and deleting a board deletes its groups, tasks, subtasks and updates.
 - **Starting boards**: Projects → Landing Page, Tender Portal, General; Marketing → Daily Automation, Posting schedule,
-  Campaigns, Events (first run only, and only for a module with no team boards yet, so a re-run keeps admins' changes). The existing
+  Campaigns, Events (only for a module with no team boards yet, and only until a run has completed, so a re-run keeps
+  admins' changes). The existing
   Projects groups go on **General** and the Marketing ones on **Posting schedule**, with their tasks. A board without
-  groups gets one (Projects *Active*, Marketing *To do*; first run only, so a re-run leaves emptied boards empty). Every profile gets its personal board, and trigger
+  groups gets one (Projects *Active*, Marketing *To do*), likewise only until a run has completed: the last statement
+  labels `public.boards` *Cortex 0006 complete* once every group and task is on a board and every board has a group,
+  and the seeding statements check for that label. A run that stopped part-way (the first live run, whose seeding
+  failed, left every group and task unlinked and hidden) is finished by running the file again. `same_audience` lets
+  that backfill place a row that has no board yet. Every profile gets its personal board, and trigger
   `add_personal_board` (after insert on `profiles`) gives each new person one with an *Active* group. The names are
   `STARTING_BOARDS` / `EXISTING_BOARD` / `FIRST_GROUP` in `src/lib/boards.js`.
 - **Access**: `board_level(board)` → `'none' | 'view' | 'edit'`, with `can_view_board()` / `can_edit_board()`; JS
