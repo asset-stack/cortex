@@ -1867,7 +1867,8 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
   const tempTask = (await one(`insert into items (board_key, board_id, group_id, name) values ('projects', $1, $2, 'Mine')
     returning id`, [tempPage, await groupOn(tempPage)])).id;
   await db.query("insert into subtasks (item_id, text) values ($1, 'Mine')", [tempTask]);
-  await db.query("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Mine')", [tempTask, temp]);
+  // By someone else: item_updates.user_id (0001) has no on delete action, so a person who wrote an update can't be deleted.
+  await db.query("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Mine')", [tempTask, boss]);
   const tempHad = await remains(tempPage, tempTask);
   const removePerson = await error('delete from auth.users where id = $1', [temp]);
   const tempLeft = await remains(tempPage, tempTask);
@@ -1895,7 +1896,9 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
       && oldTask?.board_id === board['Landing Page'] && regrouped?.board_id === board['Tender Portal'] && ownOld?.board_id === page[alice],
     { oldGroups, oldTask, regrouped, ownOld });
 
-  // An old tab's full-row re-save (a PostgREST upsert without board_id) of a group and a task on someone's page.
+  // An old tab's full-row re-save (a PostgREST upsert without board_id) of a group and a task on someone's page, by an
+  // admin and by its owner with Projects edit (the old app only wrote Projects with edit; the proposed row is placed on
+  // General before the conflict, and INSERT ... ON CONFLICT checks the insert policy on it).
   const oldRows = (name) => ({
     group: { id: pageGroup[alice], board_key: 'projects', name: 'Active', color: '#c9ffe6', position: 0 },
     task: { id: ownOld?.id, board_key: 'projects', group_id: pageGroup[alice], position: 0, name, values: { people: [] }, done: false },
@@ -1905,11 +1908,15 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
     group: await postgrestUpsert('board_groups', [oldRows().group]),
     task: await postgrestUpsert('items', [oldRows('Re-saved by an admin').task]),
   };
+  await as(david);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', 'edit')", [alice]);
   await as(alice);
   const resavedByOwner = {
     group: await postgrestUpsert('board_groups', [oldRows().group]),
     task: await postgrestUpsert('items', [oldRows('Re-saved by its owner').task]),
   };
+  await as(david);
+  await db.query("delete from module_access where user_id = $1 and module = 'projects'", [alice]);
   await as(null);
   const stayed = await one(`select (select board_id from board_groups where id = $1) as group_board,
     (select board_id from items where id = $2) as task_board, (select name from items where id = $2) as name`, [pageGroup[alice], ownOld?.id]);
@@ -2056,6 +2063,7 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
     offPage);
 
   // Team Projects boards: view-only for staff by default (newcomer), editable with an edit override.
+  await as(null);
   const generalTask = (await one('select id from items where group_id = $1 limit 1', [generalGroup])).id;
   await as(newcomer);
   const viewOnly = {
@@ -2228,6 +2236,7 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
   // An admin renamed a starting board; re-running neither brings it back nor adds anything else to a used database.
   await as(boss);
   await db.query("update boards set name = 'Meetups' where id = $1", [board.Events]);
+  await as(null);
   const used = await snapshot();
   const third = await applyMigration6();
   const rerun = await snapshot();
@@ -2241,26 +2250,26 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
 }
 
 // 22. (After the newest migration, since flatten() writes every synced column and table.)
-async function syncWriteCheck({ david, alice, boss, hello }) {
+async function syncWriteCheck({ david, alice, boss, hello, early, board, page }) {
   // The sync engine's writes: the superadmin (who may write every table) saves flatten() rows for every synced
   // table the way PostgREST sends them, and reading them back the way PostgREST returns them (json) gives the same
   // rows. Catches a column, type or FK order that schema.js and the migrations disagree on, and policies that refuse
-  // a normal save.
+  // a normal save. Boards are new team boards here (personal pages: below).
 
   await as(david);
-  const [grp, grp2, itm, cli, inv, pln, con, chn, rtn, stm] = Array.from({ length: 10 }, uid);
+  const [grp, grp2, itm, cli, inv, pln, con, chn, rtn, stm, teamP, teamM] = Array.from({ length: 12 }, uid);
   const flat = flatten({
     me: david,
     users: [],
     org: {},
     moduleAccess: [{ userId: hello, module: 'outreach', level: 'view' }],
-    boards: {
-      projects: { groups: [{ id: grp, name: 'Sync check', color: '#d6e4ff', items: [{
+    boards: [
+      { id: teamP, module: 'projects', name: 'Sync check', owner: '', groups: [{ id: grp, name: 'Sync check', color: '#d6e4ff', items: [{
         id: itm, name: 'Item', values: { people: [david, alice], status: 'Done', due: '2026-10-30' }, done: true,
         updates: [{ id: uid(), user: david, text: 'Update', ts: '2026-10-01T03:00:00.000Z' }], subtasks: [{ id: uid(), text: 'Sub', done: true }],
       }] }] },
-      marketing: { groups: [{ id: grp2, name: 'Sync check', color: '#bfe9ff', items: [] }] },
-    },
+      { id: teamM, module: 'marketing', name: 'Sync check', owner: '', groups: [{ id: grp2, name: 'Sync check', color: '#bfe9ff', items: [] }] },
+    ],
     clients: [{
       id: cli, name: 'Example Client', group: 'Active', status: 'Active', priority: 'P1', next: 'Call', sector: 'Utilities',
       contact: david, team: [david, alice], lastContact: '2026-10-01', demo: '', demoUrl: '', platformUrl: 'https://example-client.example.com',
@@ -2328,6 +2337,46 @@ async function syncWriteCheck({ david, alice, boss, hello }) {
   }
   check('sync: flatten() rows for every synced table save as PostgREST sends them and read back unchanged',
     !Object.keys(writeErrors).length && !Object.keys(mismatched).length, { writeErrors, mismatched });
+
+  // Boards for the people who may write them (39.), saved the same way. A personal page's own row is never sent:
+  // flatten() makes it exactly as the database holds it (unnamed, position 0), so diff() leaves it out (no client may
+  // write it); only what's on the page is.
+  const onBoard = (id, module, owner, author) => ({
+    id, module, name: owner ? '' : 'Unchanged', owner: owner || '', groups: [{
+      id: uid(), name: 'Synced', color: '#d6e4ff', items: [{
+        id: uid(), name: 'Synced task', values: { people: [author] }, done: false,
+        updates: [{ id: uid(), user: author, text: 'Synced', ts: '2026-10-16T00:00:00.000Z' }], subtasks: [{ id: uid(), text: 'Synced', done: false }],
+      }],
+    }],
+  });
+  const saveAs = async (user, spec, tables = ['board_groups', 'items', 'item_updates', 'subtasks']) => {
+    const sent = flatten({ me: user, users: [], org: {}, boards: [spec] });
+    await as(user);
+    const out = {};
+    for (const t of TABLES.filter((x) => tables.includes(x.name))) out[t.name] = await postgrestUpsert(t.name, [...sent[t.name].values()], t);
+    await as(null);
+    return out;
+  };
+  const saved = {
+    staffOwnPage: await saveAs(alice, onBoard(page[alice], 'projects', alice, alice)),
+    staffMarketing: await saveAs(alice, onBoard(board['Daily Automation'], 'marketing', '', alice)),
+    staffProjects: await saveAs(alice, onBoard(board['Landing Page'], 'projects', '', alice)),
+    adminStaffPage: await saveAs(boss, onBoard(page[alice], 'projects', alice, boss)),
+    adminSuperPage: await saveAs(boss, onBoard(page[david], 'projects', david, boss)),
+    adminAdminPage: await saveAs(boss, onBoard(page[early], 'projects', early, boss)),
+    superAdminPage: await saveAs(david, onBoard(page[boss], 'projects', boss, david)),
+    adminNewBoard: await saveAs(boss, { id: uid(), module: 'marketing', name: 'Synced board', owner: '', groups: [] }, ['boards']),
+    staffNewBoard: await saveAs(alice, { id: uid(), module: 'marketing', name: 'Synced board', owner: '', groups: [] }, ['boards']),
+  };
+  const ok = (r) => Object.values(r).every((e) => e === null);
+  const refused = (r) => Object.values(r).every((e) => typeof e === 'string');
+  const pageRow = flatten({ boards: [{ id: page[alice], module: 'projects', name: '', owner: alice, groups: [] }] }).boards.get(page[alice]);
+  const pageInDb = normalizeRow('boards', (await one('select row_to_json(b) as r from public.boards b where id = $1', [page[alice]])).r);
+  check("sync: boards, groups (board_id) and tasks (board_id) save for whoever may write them: staff their page and Marketing, admins staff's pages and new team boards, the SuperAdmin anyone's",
+    ok(saved.staffOwnPage) && ok(saved.staffMarketing) && refused(saved.staffProjects) && ok(saved.adminStaffPage)
+      && refused(saved.adminSuperPage) && refused(saved.adminAdminPage) && ok(saved.superAdminPage) && ok(saved.adminNewBoard)
+      && refused(saved.staffNewBoard) && stable(pageRow) === stable(pageInDb),
+    { saved, pageRow, pageInDb });
 
   await as(null);
 }
