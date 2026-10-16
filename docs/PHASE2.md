@@ -13,8 +13,9 @@ RLS on every table, repo is public (no real people/client data, keys or bank det
   daily marketing routines generated automatically, and automation items. Admins can view and add to
   anyone's schedule.
 - **Projects** and **Admin** boards merge into one **Projects** board; work is assigned by tagging people
-  (multi-person column, and an `@Name` in a task update adds that person). Staff edited it until `0003`; since
-  then they **view** it (§8). Since `0006` Projects holds several team boards plus each person's own page (§11).
+  (multi-person column, and an `@Name` in a task update adds that person). Staff edited it until `0003`, viewed it
+  under `0003` (§8), and edit it again since `0006`, when Projects became several team boards plus each person's own
+  page (§11).
 - **Marketing** board: shared, everyone edits ("marketing machine" detail comes later). Since `0006` it is split
   into boards: Daily Automation, Posting schedule, Campaigns, Events (§11).
 - **Outreach**: admins only by default; the SuperAdmin can switch it on (view/edit) per staff member.
@@ -38,7 +39,7 @@ Modules with access levels `'none' | 'view' | 'edit'`:
 
 | module | superadmin / admin | staff default |
 |---|---|---|
-| `projects` | edit | **view** (0003; was edit) |
+| `projects` | edit | **edit** (0006; view in 0003, edit before) |
 | `marketing` | edit | edit |
 | `outreach` | edit | **none** |
 | `pipeline` | edit | **view** |
@@ -346,9 +347,9 @@ version that uses it.
   `board_groups (id, board_id)`, on update and delete cascade: a group is on a board of its own module, a task on its
   group's board, and deleting a board deletes its groups, tasks, subtasks and updates.
 - **Starting boards**: Projects → Landing Page, Tender Portal, General; Marketing → Daily Automation, Posting schedule,
-  Campaigns, Events (only for a module with no team boards yet, so a re-run keeps admins' changes). The existing
+  Campaigns, Events (first run only, and only for a module with no team boards yet, so a re-run keeps admins' changes). The existing
   Projects groups go on **General** and the Marketing ones on **Posting schedule**, with their tasks. A board without
-  groups gets one (Projects *Active*, Marketing *To do*). Every profile gets its personal board, and trigger
+  groups gets one (Projects *Active*, Marketing *To do*; first run only, so a re-run leaves emptied boards empty). Every profile gets its personal board, and trigger
   `add_personal_board` (after insert on `profiles`) gives each new person one with an *Active* group. The names are
   `STARTING_BOARDS` / `EXISTING_BOARD` / `FIRST_GROUP` in `src/lib/boards.js`.
 - **Access**: `board_level(board)` → `'none' | 'view' | 'edit'`, with `can_view_board()` / `can_edit_board()`; JS
@@ -383,10 +384,11 @@ version that uses it.
     both; it goes to the end of the group (the target board's first group when none is picked), with its subtasks and
     updates. In the database the task's `group_id` and `board_id` change together (the composite foreign key keeps
     them consistent); the update policy checks the old and the new board. Trigger `same_audience` (before update on
-    `items` and `board_groups`, after `place_on_board`) refuses a `board_id` change between boards with different
-    owners — onto, off or between personal pages — with `check_violation`, as `sameAudience()` in
+    `items` and `board_groups`, after `place_on_board`) refuses a `board_id` change between boards with a different
+    owner or module — onto, off or between personal pages, or Projects ⇄ Marketing — with `check_violation`, as `sameAudience()` in
     `src/lib/boards.js` does in the app: a move never changes who can see a task, so everyone's realtime view stays
-    right. On a personal page the drawer offers other groups only.
+    right. On a personal page the drawer offers other groups only. Trigger `keep_board_links` keeps what the app never
+    changes fixed for signed-in requests: a board's `module`, a subtask's or update's `item_id`, an update's `user_id`.
 - **Old app tabs**: trigger `place_on_board` (before insert or update on `board_groups` and `items`) fills a missing
   `board_id`, as an app version from before 0006 writes rows without it: a new group lands on **General** / **Posting
   schedule** (else the module's first team board), a task on its group's board. Reloading the tab ends it. Until

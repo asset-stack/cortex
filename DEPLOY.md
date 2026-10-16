@@ -102,9 +102,12 @@ tables: choose **Run this query**. Afterwards:
   deleted.
 - Staff edit Projects again by default (0003 had made it view-only): the team Projects and Marketing boards and their
   own page. Only admins add, rename, order or delete boards. To make one person view-only on Projects, the SuperAdmin
-  sets Projects to **View** for them in **Settings** → **Team**.
-- Tasks move between groups and between team boards, but not onto or off someone's own page (who can see them would
-  change).
+  sets Projects to **View** for them in **Settings** → **Team**. Under 0003, View was the default, so choosing it was
+  not stored: anyone you set back to View before 0006 edits again afterwards. Note who they are before running 0006
+  and set them to View again after the deploy (it is stored now).
+- Tasks move between groups and between team boards of the same module, but not onto or off someone's own page (who
+  can see them would change). Re-running 0006 later changes nothing people did: it doesn't bring back deleted boards
+  or add groups to emptied ones.
 - Deploy the new app straight after, then everyone opens Cortex again (or reloads). A tab left open on the old app
   until then still saves, but it shows the new boards' starting groups (several **Active** / **To do** groups) on one
   page, and a task added to one of those goes to that board, possibly someone's own page. A group it adds goes on

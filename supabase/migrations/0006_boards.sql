@@ -14,8 +14,9 @@
 -- - Staff edit Projects by default again (0003 made it view): with their own page and team boards, staff add and edit
 --   tasks on Landing Page, Tender Portal… as they do on Marketing. Only admins add, rename, order or delete boards; an
 --   explicit per-person override (Settings → Team) still wins.
--- - A task or group moves only within its audience: between team boards, or within one person's page (who can see it
---   never changes on a move, so everyone's realtime view stays right). sameAudience() in src/lib/boards.js.
+-- - A task or group moves only within its audience: between team boards of one module, or within one person's page
+--   (who can see it never changes on a move, so everyone's realtime view stays right). sameAudience() in
+--   src/lib/boards.js. A board's module, a subtask's or update's task, and an update's author never change.
 
 begin;
 
@@ -35,9 +36,19 @@ create table if not exists public.boards (
 
 create unique index if not exists boards_owner_key on public.boards (owner_id) where owner_id is not null;
 
+-- The starting boards and the one-group-per-board seed happen on the first run only (before board_groups.board_id
+-- exists): a re-run leaves boards and groups as people left them, even a module whose boards were all deleted or a
+-- board whose groups were.
+create temp table m6_first_run on commit drop as
+select not exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'board_groups' and column_name = 'board_id') as yes;
+
 -- The starting team boards, once per module (a module that already has team boards is left as it is).
 do $$
 begin
+  if not (select yes from m6_first_run) then
+    return;
+  end if;
   if not exists (select 1 from public.boards where module = 'projects' and owner_id is null) then
     insert into public.boards (module, name, position)
     values ('projects', 'Landing Page', 0), ('projects', 'Tender Portal', 1), ('projects', 'General', 2);
@@ -96,11 +107,11 @@ end $$;
 create index if not exists board_groups_board_id_idx on public.board_groups (board_id);
 create index if not exists items_board_id_idx on public.items (board_id);
 
--- A board with no groups starts with one, so it has somewhere to add tasks.
+-- A board with no groups starts with one, so it has somewhere to add tasks (first run only).
 insert into public.board_groups (board_key, board_id, name, color, position)
 select b.module, b.id, case b.module when 'projects' then 'Active' else 'To do' end, '#c9ffe6', 0
 from public.boards b
-where not exists (select 1 from public.board_groups g where g.board_id = b.id);
+where (select yes from m6_first_run) and not exists (select 1 from public.board_groups g where g.board_id = b.id);
 
 -- Writes that don't name a board (an app version from before this migration, still open in a tab) land where they
 -- did before: a new group on General / Posting schedule (else the module's first team board), a task on its group's
@@ -156,12 +167,17 @@ create trigger add_personal_board after insert on public.profiles
 -- old tab's move to another group is checked on the board it lands on.
 create or replace function public.same_audience() returns trigger
 language plpgsql security definer set search_path = public as $$
+declare
+  v_from record;
+  v_to record;
 begin
-  if new.board_id is distinct from old.board_id
-     and (select owner_id from public.boards where id = old.board_id)
-         is distinct from (select owner_id from public.boards where id = new.board_id) then
-    raise exception 'Tasks and groups move between team boards, or within one person''s page'
-      using errcode = 'check_violation';
+  if new.board_id is distinct from old.board_id then
+    select owner_id, module into v_from from public.boards where id = old.board_id;
+    select owner_id, module into v_to from public.boards where id = new.board_id;
+    if v_from.owner_id is distinct from v_to.owner_id or v_from.module is distinct from v_to.module then
+      raise exception 'Tasks and groups move between team boards of one module, or within one person''s page'
+        using errcode = 'check_violation';
+    end if;
   end if;
   return new;
 end;
@@ -173,6 +189,35 @@ create trigger same_audience before update on public.board_groups
 drop trigger if exists same_audience on public.items;
 create trigger same_audience before update on public.items
   for each row execute function public.same_audience();
+
+-- What a signed-in request can't change once written (the app never does): a board's module, the task a subtask or an
+-- update belongs to, and who wrote an update. Like protect_todo, the SQL editor (no signed-in user) still can.
+create or replace function public.keep_board_links() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if auth.uid() is not null then
+    if tg_table_name = 'boards' then
+      new.module := old.module;
+    else
+      new.item_id := old.item_id;
+      if tg_table_name = 'item_updates' then
+        new.user_id := old.user_id;
+      end if;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists keep_board_links on public.boards;
+create trigger keep_board_links before update on public.boards
+  for each row execute function public.keep_board_links();
+drop trigger if exists keep_board_links on public.subtasks;
+create trigger keep_board_links before update on public.subtasks
+  for each row execute function public.keep_board_links();
+drop trigger if exists keep_board_links on public.item_updates;
+create trigger keep_board_links before update on public.item_updates
+  for each row execute function public.keep_board_links();
 
 -- 3. Access ------------------------------------------------------------------------------------------------------
 

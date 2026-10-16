@@ -91,6 +91,11 @@ export default function Board({ board }) {
     setOpenId(null);
     // Drop ?item= so a reload or Back doesn't reopen it; replaceState fires no hashchange.
     if (window.location.hash.includes('?')) window.history.replaceState(null, '', `#/${board.module}/${board.id}`);
+    // The drawer hands focus back to what opened it; a task moved here from another board was opened by a row on that
+    // board, which is gone, so focus would fall to the page: put it on this board's title instead.
+    window.setTimeout(() => {
+      if (!document.activeElement || document.activeElement === document.body) heading.current?.focus({ preventScroll: true });
+    }, 50);
   };
 
   // Personal page: whose page to show, for those who see more than their own (SuperAdmin: everyone; admin: staff).

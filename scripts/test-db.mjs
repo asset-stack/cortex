@@ -2217,7 +2217,9 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
   updates.ownerEditsAdmins = await affected("update item_updates set text = 'Nope' where id = $1", [bossOnAlice]);
   updates.ownerDeletesAdmins = await affected('delete from item_updates where id = $1', [bossOnAlice]);
   updates.forged = await error("insert into item_updates (item_id, user_id, text) values ($1, $2, 'As Boss')", [task[alice], boss]);
+  // Handing your update to someone else: the request goes through but the author stays (keep_board_links).
   updates.handOver = await error('update item_updates set user_id = $2 where id = $1', [note[alice], boss]);
+  updates.handOverAuthor = (await one('select user_id from item_updates where id = $1', [note[alice]]))?.user_id;
   await as(newcomer);
   updates.authorEdits = await affected("update item_updates set text = 'Booked the venue (deposit paid)' where id = $1", [mkWrites.update?.id]);
   updates.staffEditsOthers = await affected("update item_updates set text = 'Nope' where id = $1", [bossOnCampaign]);
@@ -2228,7 +2230,7 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
   await as(null);
   check("39. updates: authors edit and delete their own, admins anyone's (on boards they edit); staff never someone else's, nor post as them",
     updates.adminEditsStaffs === 1 && updates.adminEditsSupers === 0 && updates.ownerEditsAdmins === 0 && updates.ownerDeletesAdmins === 0
-      && typeof updates.forged === 'string' && typeof updates.handOver === 'string' && updates.authorEdits === 1
+      && typeof updates.forged === 'string' && updates.handOver === null && updates.handOverAuthor === alice && updates.authorEdits === 1
       && updates.staffEditsOthers === 0 && updates.staffDeletesOthers === 0 && updates.adminDeletesStaffs === 1 && updates.adminDeletesOwn === 1,
     updates);
 
@@ -2337,7 +2339,47 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
     check('41. a task or group moves between team boards, but not onto, off or between personal pages (even for the SuperAdmin or an old tab)',
       moves.teamToTeam === null && landed === board['Tender Portal'] && ['teamToPage', 'oldTabToPage', 'pageToPage', 'groupToPage']
         .every((k) => moves[k] === '23514'), { moves, landed });
+
+    // … nor between Projects and Marketing team boards (both have no owner; the module differs).
+    const postingGroup = await groupOn(board['Posting schedule']);
+    const crossModule = {
+      task: await codeOf("update items set board_key = 'marketing', board_id = $2, group_id = $3 where id = $1",
+        [generalTask, board['Posting schedule'], postingGroup]),
+      group: await codeOf("update board_groups set board_key = 'marketing', board_id = $2 where id = $1", [tenderGroup2, board['Posting schedule']]),
+    };
+    check('41. a task or group can\'t move between a Projects and a Marketing team board',
+      crossModule.task === '23514' && crossModule.group === '23514', crossModule);
+
+    // A board's module, a subtask's or update's task and an update's author stay as written, whatever a signed-in
+    // request sends (the app never changes them); an admin's edit of the text still saves.
+    const generalSub = (await one("insert into subtasks (item_id, text) values ($1, 'Step') returning id", [generalTask])).id;
+    await as(boss);
+    const bossNote = (await one("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Mine') returning id", [generalTask, boss])).id;
+    const pins = {
+      module: await codeOf("update boards set module = 'marketing' where id = $1", [board['Tender Portal']]),
+      subtask: await codeOf('update subtasks set item_id = $2 where id = $1', [generalSub, task[alice]]),
+      reassign: await codeOf("update item_updates set user_id = $2, text = 'Approved - David' where id = $1", [bossNote, david]),
+      moveNote: await codeOf('update item_updates set item_id = $2 where id = $1', [bossNote, task[alice]]),
+    };
+    await as(null);
+    const pinned = await one(`select (select module from boards where id = $1) as module, (select item_id from subtasks where id = $2) as sub_item,
+      (select user_id from item_updates where id = $3) as author, (select text from item_updates where id = $3) as text,
+      (select item_id from item_updates where id = $3) as note_item`, [board['Tender Portal'], generalSub, bossNote]);
+    check("41. a board's module, a subtask's or update's task and an update's author can't be changed by a request (text edits still save)",
+      Object.values(pins).every((c) => c === null) && pinned.module === 'projects' && pinned.sub_item === generalTask
+        && pinned.author === boss && pinned.text === 'Approved - David' && pinned.note_item === generalTask, { pins, pinned });
     await db.query('delete from items where id = $1', [generalTask]);
+
+    // A re-run changes nothing people did: an emptied board stays empty (no starting group comes back).
+    await as(alice);
+    await db.query('delete from board_groups where board_id = $1', [page[alice]]);
+    await as(null);
+    const rerun2 = await applyMigration6();
+    const aliceGroups = (await one('select count(*)::int as n from board_groups where board_id = $1', [page[alice]])).n;
+    check('41. re-running 0006 leaves a board whose groups were all deleted empty',
+      rerun2 === null && aliceGroups === 0, { rerun2, aliceGroups });
+    await db.query("insert into board_groups (id, board_key, board_id, name, color, position) values ($1, 'projects', $2, 'Active', '#c9ffe6', 0)",
+      [pageGroup[alice], page[alice]]);
   }
 
   return { alice, boss, david, hello, carol, newcomer, early, late, board, page };
