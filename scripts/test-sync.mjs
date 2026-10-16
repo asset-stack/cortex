@@ -1868,6 +1868,33 @@ if (createSeed) {
     assert.ok(s.clients.some((c) => c.usage.length));
     assert.equal(auto.generateDueInvoicesLocal(s, today), 0, 'plans are up to date');
   });
+
+  await check('seed: own Projects pages for David, Josh and Hello, then the starting team boards (0006)', () => {
+    const s = createSeed();
+    const { BOARD_MODULES, STARTING_BOARDS, teamBoards, boardTitle, boardItems } = boardsLib;
+    assert.deepEqual(s.boards.filter((b) => b.owner).map((b) => [b.module, b.name, b.owner]),
+      [['projects', '', 'david'], ['projects', '', 'josh'], ['projects', '', 'hello']]);
+    assert.deepEqual(s.boards.filter((b) => b.owner).map((b) => boardTitle(s, b)), ['David’s Projects', 'Josh’s Projects', 'Hello’s Projects']);
+    BOARD_MODULES.forEach((module) => assert.deepEqual(teamBoards(s, module).map((b) => b.name), STARTING_BOARDS[module], module));
+    // Projects (own pages first) then Marketing, as the live order has them; every board has somewhere to add tasks.
+    assert.deepEqual(s.boards.map((b) => `${b.module}:${b.owner ? 'own' : 'team'}`), [
+      ...Array(3).fill('projects:own'), ...Array(STARTING_BOARDS.projects.length).fill('projects:team'),
+      ...Array(STARTING_BOARDS.marketing.length).fill('marketing:team'),
+    ]);
+    s.boards.forEach((b) => assert.ok(b.groups.length, boardTitle(s, b)));
+    // Ids are unique across boards, groups, tasks, updates and subtasks; people are real users.
+    const ids = s.boards.flatMap((b) => [b.id, ...b.groups.flatMap((g) => [g.id, ...g.items.flatMap((it) => [
+      it.id, ...it.updates.map((u) => u.id), ...it.subtasks.map((x) => x.id)])])]);
+    assert.equal(new Set(ids).size, ids.length);
+    const userIds = new Set(s.users.map((u) => u.id));
+    s.boards.flatMap(boardItems).forEach((it) => it.values.people.forEach((p) => assert.ok(userIds.has(p), p)));
+    // Who sees which page in the demo: David everyone's, Josh his and Hello's, Hello only hers (and every team board).
+    const pagesFor = (me) => s.boards.filter((b) => access.canViewBoard({ ...s, me }, b));
+    assert.deepEqual(['david', 'josh', 'hello'].map((me) => pagesFor(me).filter((b) => b.owner).map((b) => b.owner)),
+      [['david', 'josh', 'hello'], ['josh', 'hello'], ['hello']]);
+    assert.deepEqual(pagesFor('hello').filter((b) => !b.owner).map((b) => [b.name, access.canEditBoard({ ...s, me: 'hello' }, b)]),
+      [...STARTING_BOARDS.projects.map((n) => [n, false]), ...STARTING_BOARDS.marketing.map((n) => [n, true])]);
+  });
 }
 
 if (migrate) {
@@ -1977,6 +2004,45 @@ if (migrate) {
     assert.deepEqual(migrate(structuredClone(m)), m, 'running it again changes nothing');
     assert.deepEqual(phase1().clients.map((x) => migrate({ ...phase1(), clients: [{ ...x, keyContact: '', email: '' }] }).clients[0].contacts), [[]],
       'no key contact: no contacts');
+  });
+
+  await check('migrate: 0006 sub-boards — the starting team boards, the old groups on them, one own page per person, once', () => {
+    const { BOARD_MODULES, STARTING_BOARDS, EXISTING_BOARD, FIRST_GROUP, FIRST_GROUP_COLOR } = boardsLib;
+    const boardIds = (data) => data.boards.flatMap((b) => [b.id, ...b.groups.map((g) => g.id)]);
+    // Every user has exactly one personal Projects page, with one empty group.
+    const ownPages = (data) => {
+      data.users.forEach((u) => assert.equal(data.boards.filter((b) => b.owner === u.id).length, 1, u.id));
+      data.boards.filter((b) => b.owner).forEach((b) => assert.deepEqual([b.module, b.name], ['projects', ''], b.owner));
+    };
+    const m = migrate(phase1());
+    ownPages(m);
+    m.boards.filter((b) => b.owner).forEach((b) => assert.deepEqual(b.groups.map((g) => [g.name, g.color, g.items]), [['Active', FIRST_GROUP_COLOR, []]]));
+    // The starting team boards in order: the old groups on General / Posting schedule, the others one empty group.
+    BOARD_MODULES.forEach((module) => {
+      const starting = m.boards.filter((b) => b.module === module && !b.owner);
+      assert.deepEqual(starting.map((b) => b.name), STARTING_BOARDS[module], module);
+      starting.filter((b) => b.name !== EXISTING_BOARD[module])
+        .forEach((b) => assert.deepEqual(b.groups.map((g) => [g.name, g.color, g.items]), [[FIRST_GROUP[module], FIRST_GROUP_COLOR, []]], b.name));
+    });
+    assert.equal(new Set(boardIds(m)).size, boardIds(m).length, 'ids unique');
+    // Running it again adds nothing; someone new gets their page on the next run, and nothing else changes.
+    assert.deepEqual(migrate(structuredClone(m)), m);
+    const more = structuredClone(m);
+    more.users.push({ id: 'newbie', name: 'Newbie', initials: 'NB', color: '#579bfc', email: 'newbie@example.com', role: 'staff', active: true,
+      timezone: 'Asia/Manila' });
+    const after = migrate(more);
+    ownPages(after);
+    assert.deepEqual(after.boards.filter((b) => b.owner !== 'newbie'), m.boards);
+    assert.equal(new Set(boardIds(after)).size, boardIds(after).length);
+    // Older shapes: no Marketing groups (Posting schedule starts with one), or no boards at all.
+    [{ projects: { groups: [] } }, undefined, {}].forEach((boards) => {
+      const x = migrate({ ...phase1(), boards });
+      ownPages(x);
+      assert.deepEqual(x.boards.filter((b) => !b.owner).map((b) => [b.module, b.name, b.groups.map((g) => g.name)]),
+        BOARD_MODULES.flatMap((module) => STARTING_BOARDS[module].map((name) => [module, name, [FIRST_GROUP[module]]])), JSON.stringify(boards));
+      assert.equal(new Set(boardIds(x)).size, boardIds(x).length);
+      assert.deepEqual(plain(roundTrip({ ...x, mode: 'live' })), plain(flatten(x)));
+    });
   });
 }
 

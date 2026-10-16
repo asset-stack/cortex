@@ -4,10 +4,13 @@
 // the live database) and checks roles, module access, the board merge, automations, finance and storage; then
 // 0003_timezones_projects_view.sql (Sydney business day, per-person time zones, Projects view-only for staff); then
 // 0004_clients_google.sql (client contacts and contracts, credits, approve / contract to-dos, Google accounts); then
-// 0005_work_tools.sql (each person's Tools in My Work).
+// 0005_work_tools.sql (each person's Tools in My Work); then 0006_boards.sql (sub-boards under Projects and Marketing,
+// each person's own Projects page, and who sees and edits which board). Last, the sync engine's writes of every
+// synced table (flatten() rows as PostgREST upserts), personal pages included.
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { register } from 'node:module';
 import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { TABLES, flatten, normalizeRow } from '../src/data/backend/schema.js';
@@ -18,6 +21,7 @@ const migration2 = await readFile(new URL('supabase/migrations/0002_team_workflo
 const migration3 = await readFile(new URL('supabase/migrations/0003_timezones_projects_view.sql', root), 'utf8');
 const migration4 = await readFile(new URL('supabase/migrations/0004_clients_google.sql', root), 'utf8');
 const migration5 = await readFile(new URL('supabase/migrations/0005_work_tools.sql', root), 'utf8');
+const migration6 = await readFile(new URL('supabase/migrations/0006_boards.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -1666,7 +1670,7 @@ async function phase5({ alice, boss, david, hello, carol, newcomer }) {
       && inactive === 0 && typeof inactiveAdd === 'string' && anon !== null,
     { forged, forgedRow, insertForged, inactive, inactiveAdd, anon });
 
-  return { alice, boss, david, hello };
+  return { alice, boss, david, hello, carol, newcomer };
 }
 
 // 22. (After the newest migration, since flatten() writes every synced column and table.)
