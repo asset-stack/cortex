@@ -335,6 +335,9 @@ version that uses it.
   schedule, Campaigns, Events. Projects: first each person's own page (*David’s Projects*), then the team boards
   (Landing Page, Tender Portal, …). The SuperAdmin sees everyone's page, an admin their own and staff's, staff only
   their own. Boards, groups, tasks, subtasks and updates can be renamed or edited and deleted by whoever may edit them.
+  Staff edit the team Projects boards too (0003 had made Projects view-only for staff; 0006 redefines `module_level()`
+  with the Projects default back to `edit`, and `STAFF_DEFAULTS` to match; per-person overrides still win). Tasks
+  move between team boards, never onto, off or between personal pages (see *Moving a task*).
 - **Table** `boards (module check in ('projects','marketing'), name, owner_id uuid null → profiles cascade, position)`:
   touch, realtime. A **team board** has no owner. A **personal board** has `owner_id` set, one per person (unique
   index), Projects only (check), and a blank name (the app shows *<first name>’s Projects*, `boardTitle()`).
@@ -355,7 +358,7 @@ version that uses it.
 
   | board | SuperAdmin | Admin | Staff |
   |---|---|---|---|
-  | team boards | edit | edit | the module's level (default Projects view, Marketing edit) |
+  | team boards | edit | edit | the module's level (default edit for Projects and Marketing) |
   | your own page | edit | edit | edit |
   | a staff member's page | edit | edit | none |
   | an admin's or SuperAdmin's page | edit | none | none |
@@ -369,12 +372,21 @@ version that uses it.
   - **Groups and tasks** (`board_groups`, `items`): read with `can_view_board(board_id)`, written with
     `can_edit_board(board_id)`: add, rename, reorder and delete groups (with their tasks); add, edit and delete tasks.
     **Subtasks** (add, rename, tick, delete) and **updates** follow their task's board through `item_board_id(item_id)`
-    (0002's `item_board()` is no longer used).
-  - **Updates**: posted as yourself; edited and deleted by their author or an admin, on a board they can edit.
-  - **Moving a task** to another group, on the same board or another board of the same module, needs edit on both;
-    it goes to the end of the group (the target board's first group when none is picked), with its subtasks and
+    (0002's `item_board()` is no longer used). The write checks (`with check`) use `can_write_board()` /
+    `can_write_item()`, which also pass when the board or task no longer exists: the foreign key then refuses the row
+    with 23503, which the sync drops as "deleted elsewhere", instead of an RLS refusal it would retry and report.
+  - **Updates**: posted as yourself; edited and deleted by their author or an admin, on a board they can edit. The
+    sync saves an edit as an upsert, and Postgres checks the insert policies on an upsert too, so policy
+    `admin_resave` (insert, `is_admin() and update_exists(id)`) lets an admin's edit of someone else's update through
+    to `author_update`; a new update is always the signed-in user's own.
+  - **Moving a task** to another group, on the same board or another **team** board of the same module, needs edit on
+    both; it goes to the end of the group (the target board's first group when none is picked), with its subtasks and
     updates. In the database the task's `group_id` and `board_id` change together (the composite foreign key keeps
-    them consistent); the update policy checks the old and the new board.
+    them consistent); the update policy checks the old and the new board. Trigger `same_audience` (before update on
+    `items` and `board_groups`, after `place_on_board`) refuses a `board_id` change between boards with different
+    owners — onto, off or between personal pages — with `check_violation`, as `sameAudience()` in
+    `src/lib/boards.js` does in the app: a move never changes who can see a task, so everyone's realtime view stays
+    right. On a personal page the drawer offers other groups only.
 - **Old app tabs**: trigger `place_on_board` (before insert or update on `board_groups` and `items`) fills a missing
   `board_id`, as an app version from before 0006 writes rows without it: a new group lands on **General** / **Posting
   schedule** (else the module's first team board), a task on its group's board. Reloading the tab ends it.
@@ -392,7 +404,10 @@ version that uses it.
 - **Routes**: `#/projects` opens your own page (else the first team board), `#/marketing` the first Marketing board;
   `#/projects/<board id>` / `#/marketing/<board id>` a board, and `?item=<id>` opens a task on it (`boardHref()`).
   Old `#/projects?item=<id>` and `#/admin?item=<id>` links open the board that holds the task. A board you can't see
-  falls back to the module's default (`resolveBoard()`).
+  falls back to the module's default (`resolveBoard()`). The address is then replaced with the board on screen, so
+  boards reordered or added elsewhere never swap it under you.
+- **Live updates**: an admin's engine reloads when someone else's role changes, because which personal pages an admin
+  may read depends on whether their owners are staff.
 - **Screens**: the sidebar lists each module's boards under it. Admins add team boards, and rename, move and delete
   them; on any board you can edit, groups, tasks, subtasks and updates (yours, or anyone's for admins) are renamed or
   edited and deleted in place, and a task moves to another group or board from its drawer. Deleting a board, a group

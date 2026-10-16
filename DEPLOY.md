@@ -100,8 +100,11 @@ tables: choose **Run this query**. Afterwards:
 - Everyone has their own Projects page (*Name’s Projects*), and each new person gets one on first sign-in. The
   SuperAdmin sees everyone's, an admin their own and staff's, staff their own. Personal pages can't be renamed or
   deleted.
-- Team boards follow the module levels in **Settings** → **Team**: by default staff view the team Projects boards
-  (and edit their own page) and edit the Marketing boards. Give one person Edit on Projects there.
+- Staff edit Projects again by default (0003 had made it view-only): the team Projects and Marketing boards and their
+  own page. Only admins add, rename, order or delete boards. To make one person view-only on Projects, the SuperAdmin
+  sets Projects to **View** for them in **Settings** → **Team**.
+- Tasks move between groups and between team boards, but not onto or off someone's own page (who can see them would
+  change).
 - Deploy the new app straight after and ask everyone to reload. Until they do, an old open tab still saves, and a
   group it adds goes on **General** / **Posting schedule**.
 
@@ -393,7 +396,8 @@ revoke it at Google too: <https://myaccount.google.com/connections>. When someon
 | "Couldn't load your workspace … client_contacts" after an update | `0004_clients_google.sql` hasn't run yet (section 2). |
 | "Couldn't load your workspace … work_tools" after an update | `0005_work_tools.sql` hasn't run yet (section 2). |
 | "Couldn't load your workspace … boards", Projects shows nothing, or "Not saved" mentions `board_id` | `0006_boards.sql` hasn't run yet (section 2). |
-| A staff member can edit their own Projects page but not **Landing Page** or another team board | By design: staff view team Projects boards. To let one person edit them, the SuperAdmin sets Projects to **Edit** for that person in **Settings** → **Team**. |
+| A staff member can edit their own Projects page but not **Landing Page** or another team board | Their Projects level is **View** in **Settings** → **Team** (an override; the default after 0006 is Edit). The SuperAdmin sets it back to **Edit**. |
+| A task's drawer on someone's own page offers no **Board** to move it to | By design: tasks move between team boards, or between groups of one page, never onto or off a personal page. |
 | An admin can't see another admin's Projects page | By design: admins see their own and staff's pages; only the SuperAdmin sees everyone's. |
 | No rename or delete on someone's Projects page | Personal pages come and go with their person. Only team boards are renamed or deleted (by admins). |
 | A new group turned up on **General** or **Posting schedule** after the 0006 update | An old open tab (the app from before 0006) added it. Move its tasks where they belong, delete it, and reload that tab. |

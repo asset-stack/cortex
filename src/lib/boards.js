@@ -23,6 +23,10 @@ export const teamBoards = (state, module) => list(state).filter((b) => b.module 
 export const boardOfItem = (state, itemId) => list(state).find((b) => b.groups.some((g) => g.items.some((i) => i.id === itemId)));
 export const boardItems = (board) => (board?.groups || []).flatMap((g) => g.items);
 
+/** Whether a task or group may move from one board to the other: the same module and the same audience (two team
+ *  boards, or within one person's page), so who can see it never changes. same_audience() in 0006. */
+export const sameAudience = (a, b) => Boolean(a && b) && a.module === b.module && (a.owner || '') === (b.owner || '');
+
 export const firstName = (name) => String(name ?? '').trim().split(/\s+/)[0] || 'Someone';
 
 /** "Landing Page", or "Shem’s Projects" for a personal board. */

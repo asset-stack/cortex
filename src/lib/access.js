@@ -9,7 +9,7 @@ export const ROLE_LABELS = { superadmin: 'SuperAdmin', admin: 'Admin', staff: 'S
 export const LEVELS = ['none', 'view', 'edit'];
 export const MODULES = ['projects', 'marketing', 'outreach', 'pipeline', 'clients'];
 // What staff get without an override. Admins always have edit.
-export const STAFF_DEFAULTS = { projects: 'view', marketing: 'edit', outreach: 'none', pipeline: 'view', clients: 'view' };
+export const STAFF_DEFAULTS = { projects: 'edit', marketing: 'edit', outreach: 'none', pipeline: 'view', clients: 'view' };
 
 const userOf = (state, userId) => (state?.users || []).find((u) => u.id === userId);
 const isActive = (u) => Boolean(u) && u.active !== false;

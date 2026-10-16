@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Calendar, Columns3, ListFilter, MoreHorizontal, Pencil, Plus, Table2, Trash2, User } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { useAccess } from '@/lib/access';
@@ -65,6 +65,13 @@ export default function Board({ board }) {
 
   useEffect(() => { setAdded((a) => (a.length ? [] : a)); }, [q, person, status]);
 
+  // A board opens fresh (keyed by id). If the control that switched to it went away with the old board (person switch,
+  // delete, move), focus fell to the page: start keyboard users at this board's title instead of the top.
+  const heading = useRef(null);
+  useEffect(() => {
+    if (!document.activeElement || document.activeElement === document.body) heading.current?.focus({ preventScroll: true });
+  }, []);
+
   const groups = useMemo(() => (board.groups || []).map((g) => {
     let items = g.items.filter((it) => added.includes(it.id) || (
       (!q || it.name.toLowerCase().includes(q.toLowerCase())) &&
@@ -100,7 +107,8 @@ export default function Board({ board }) {
   const groupCount = board.groups.length;
   const taskCount = boardItems(board).length;
   const goes = [groupCount && count(groupCount, 'group'), taskCount && count(taskCount, 'task')].filter(Boolean);
-  const remove = () => { if (actions.removeBoard(board.id)) window.location.hash = `/${board.module}`; };
+  // Replace, not push: Back shouldn't lead to the deleted board's address.
+  const remove = () => { if (actions.removeBoard(board.id)) window.location.replace(`#/${board.module}`); };
 
   if (!schema) return null;
 
@@ -108,7 +116,7 @@ export default function Board({ board }) {
     <div>
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-3">
-          <h1 className="page-title min-w-0 break-words text-[34px] md:text-[44px] leading-none">{title}</h1>
+          <h1 ref={heading} tabIndex={-1} className="page-title min-w-0 break-words text-[34px] md:text-[44px] leading-none outline-none">{title}</h1>
           {people.length > 1 && <PersonSwitch value={board.owner} onChange={showPerson} people={people} />}
         </div>
         <div className="flex shrink-0 items-center gap-2">

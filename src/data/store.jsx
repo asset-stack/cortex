@@ -11,7 +11,7 @@ import { TABLES, assemble, diff, flatten, normalizeRow, stable } from '@/data/ba
 import { createSync } from '@/data/backend/sync';
 import { GateScreen, Spinner } from '@/components/auth/AuthGate';
 import { LEVELS, MODULES, ROLES, STAFF_DEFAULTS, canEdit, canEditBoard, isAdmin, isSuperadmin } from '@/lib/access';
-import { BOARD_MODULES, FIRST_GROUP, FIRST_GROUP_COLOR, GROUP_COLORS, findBoard } from '@/lib/boards';
+import { BOARD_MODULES, FIRST_GROUP, FIRST_GROUP_COLOR, GROUP_COLORS, findBoard, sameAudience } from '@/lib/boards';
 import {
   PLAN_MONTHS, addDays, addMonths, clientCreatedLocal, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isPlanDate,
   isYmd, makeTodo, mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
@@ -385,12 +385,13 @@ function createActions(mutate, mode) {
       b.groups.forEach((g) => { g.items = g.items.filter((i) => i.id !== itemId); });
       return true;
     }),
-    // To another group, on this board or another board of the same module you can edit (to the end of its group;
-    // the target board's first group when no group is named).
+    // To another group, on this board or another board you can edit with the same audience (two team boards of a
+    // module, or within one person's page; 0006's same_audience trigger), to the end of the group (the target
+    // board's first group when no group is named).
     moveItem: (boardId, itemId, { board: toBoardId = boardId, group: toGroupId } = {}) => onBoard(boardId, (d, b) => {
       const { group, item } = findItem(d, boardId, itemId);
       const to = findBoard(d, toBoardId);
-      if (!item || !to || to.module !== b.module || !canEditBoard(d, to)) return false;
+      if (!item || !sameAudience(b, to) || !canEditBoard(d, to)) return false;
       if (!to.groups.length) to.groups.push(firstGroup(to.module));
       const g = to.groups.find((x) => x.id === toGroupId) || to.groups[0];
       if (g === group) return false;
@@ -1280,7 +1281,10 @@ function createLiveEngine({ me, onState, onPhase, onSync }) {
       // Added to a channel someone else made: its row wasn't visible to us until now, so fetch it.
       if (table === 'channel_members' && r.user_id === me && !rows.channels.has(r.channel_id)) fetchChannel(r.channel_id);
       access = (table === 'module_access' && r.user_id === me && before?.level !== r.level)
-        || (table === 'profiles' && r.id === me && (before?.role !== r.role || before?.active !== r.active));
+        || (table === 'profiles' && r.id === me && (before?.role !== r.role || before?.active !== r.active))
+        // An admin sees staff members' Projects pages (sees_person): someone else becoming or stopping being staff
+        // changes which pages they may read.
+        || (table === 'profiles' && r.id !== me && before && before.role !== r.role && isAdmin(state) && !isSuperadmin(state));
     }
     later();
     if (access) { missed = true; maybeResync(); }

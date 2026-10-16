@@ -18,11 +18,12 @@ export default function BoardPage({ module, sub }) {
   const board = resolveBoard(state, visible, module, sub, item);
   const id = board?.id;
 
-  // A board you can't see (or one that was deleted) shows the default, and an old task link (#/projects?item=…) shows
-  // the board holding the task: put that board in the address so closing the task or a re-render keeps it.
-  // location.replace adds no history entry and, unlike replaceState, fires the hashchange useRoute listens for.
+  // The address always names the board on screen: #/marketing (the default), a board you can't see or that was deleted,
+  // and an old task link (#/projects?item=…) are all replaced by the board shown, so reordering or adding boards
+  // elsewhere never swaps it under you. location.replace adds no history entry and, unlike replaceState, fires the
+  // hashchange useRoute listens for.
   useEffect(() => {
-    if (id && sub !== id && (sub || item)) window.location.replace(boardHref({ module, id }, item || undefined));
+    if (id && sub !== id) window.location.replace(boardHref({ module, id }, item || undefined));
   }, [module, sub, id, item]);
 
   if (!board) {

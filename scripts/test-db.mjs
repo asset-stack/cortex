@@ -1744,10 +1744,24 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
     group by b.id, b.module, b.owner_id`, [preGroups.map((g) => g.id)]);
   const second = await applyMigration6();
   const afterSecond = await snapshot();
-  check('33. 0006 re-runs cleanly (adding no boards or groups) and never mentions module_level',
-    second === null && stable(afterSecond) === stable(afterFirst) && !migration6.includes('module_level'),
+  // 0006 redefines module_level (staff edit Projects again), so it may name it; it must define it, not just call it.
+  check('33. 0006 re-runs cleanly (adding no boards or groups) and only mentions module_level to redefine it',
+    second === null && stable(afterSecond) === stable(afterFirst)
+      && migration6.includes('create or replace function public.module_level(p_module text)'),
     { second, afterFirst, afterSecond });
   if (second) return null;
+
+  // Staff edit Projects by default again; overrides (hello: Projects none from 13.) still win; admins edit.
+  const projectLevels = {};
+  for (const [name, user] of Object.entries({ newcomer, hello, boss })) {
+    await as(user);
+    projectLevels[name] = (await one("select public.module_level('projects') as p, public.module_level('marketing') as m")).p;
+  }
+  await as(null);
+  check('33. module_level: the staff default for Projects is edit again (0003 made it view); overrides still win; admins edit',
+    projectLevels.newcomer === 'edit' && projectLevels.hello === 'none' && projectLevels.boss === 'edit', projectLevels);
+  // alice keeps Projects at view from here on (an override), so the checks below still cover view-only staff.
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', 'view')", [alice]);
   const shape = await one(`select c.relrowsecurity as rls,
       exists (select 1 from pg_trigger t where t.tgrelid = c.oid and t.tgname = 'touch') as touched,
       exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'boards') as published,
@@ -1889,7 +1903,7 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
   const oldTask = await attempt("insert into items (board_key, group_id, name) values ('projects', $1, 'Old tab task') returning id, board_id",
     [landingGroup]);
   const regrouped = await attempt('update items set group_id = $2 where id = $1 returning board_id', [oldTask?.id, tenderGroup]);
-  await as(alice); // staff with Projects view, on their own page
+  await as(alice); // staff with a Projects view override, on their own page
   const ownOld = await attempt("insert into items (board_key, group_id, name) values ('projects', $1, 'From an old tab') returning id, board_id",
     [pageGroup[alice]]);
   check("37. old tabs: a new group without board_id lands on General / Posting schedule; a task takes its group's board; "
@@ -1911,14 +1925,14 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
     task: await postgrestUpsert('items', [oldRows('Re-saved by an admin').task]),
   };
   await as(david);
-  await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', 'edit')", [alice]);
+  await db.query("update module_access set level = 'edit' where user_id = $1 and module = 'projects'", [alice]);
   await as(alice);
   const resavedByOwner = {
     group: await postgrestUpsert('board_groups', [oldRows().group]),
     task: await postgrestUpsert('items', [oldRows('Re-saved by its owner').task]),
   };
   await as(david);
-  await db.query("delete from module_access where user_id = $1 and module = 'projects'", [alice]);
+  await db.query("update module_access set level = 'view' where user_id = $1 and module = 'projects'", [alice]);
   await as(null);
   const stayed = await one(`select (select board_id from board_groups where id = $1) as group_board,
     (select board_id from items where id = $2) as task_board, (select name from items where id = $2) as name`, [pageGroup[alice], ownOld?.id]);
@@ -2067,9 +2081,16 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
       && offPage.otherTask === 0 && typeof offPage.inactive === 'string',
     offPage);
 
-  // Team Projects boards: view-only for staff by default (newcomer), editable with an edit override.
+  // Team Projects boards: staff edit them by default (newcomer, 0006); with a view override they can't.
   await as(null);
   const generalTask = (await one('select id from items where group_id = $1 limit 1', [generalGroup])).id;
+  await as(newcomer);
+  const withEdit = {
+    task: await attempt(addTask, ['projects', board['Landing Page'], landingGroup, 'Granted']),
+    editTask: await affected("update items set name = 'Granted (edited)' where id = $1", [generalTask]),
+  };
+  await as(david);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', 'view')", [newcomer]);
   await as(newcomer);
   const viewOnly = {
     group: await error("insert into board_groups (board_key, board_id, name) values ('projects', $1, 'Nope')", [board['Landing Page']]),
@@ -2081,15 +2102,8 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
     dropTask: await affected('delete from items where id = $1', [generalTask]),
   };
   await as(david);
-  await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', 'edit')", [newcomer]);
-  await as(newcomer);
-  const withEdit = {
-    task: await attempt(addTask, ['projects', board['Landing Page'], landingGroup, 'Granted']),
-    editTask: await affected("update items set name = 'Granted (edited)' where id = $1", [generalTask]),
-  };
-  await as(david);
   await db.query("delete from module_access where user_id = $1 and module = 'projects'", [newcomer]);
-  check("39. staff can't write a team Projects board at the default view level, and can with an edit override",
+  check("39. staff write team Projects boards by default (0006), and can't with a view override",
     typeof viewOnly.group === 'string' && typeof viewOnly.task === 'string' && viewOnly.renameGroup === 0 && viewOnly.editTask === 0
       && typeof viewOnly.subtask === 'string' && typeof viewOnly.update === 'string' && viewOnly.dropTask === 0
       && Boolean(withEdit.task?.id) && withEdit.editTask === 1,
@@ -2220,7 +2234,8 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
 
   // 40. Helper functions and a re-run on a used database ---------------------------------------------------------------
 
-  const HELPERS = ['sees_person', 'board_level', 'can_view_board', 'can_edit_board', 'item_board_id'];
+  const HELPERS = ['sees_person', 'board_level', 'can_view_board', 'can_edit_board', 'item_board_id', 'can_write_board',
+    'can_write_item', 'update_exists'];
   const grants = await rows(`select f, has_function_privilege('anon', 'public.' || f || '(uuid)', 'execute') as anon,
       has_function_privilege('authenticated', 'public.' || f || '(uuid)', 'execute') as authenticated,
       (select prosecdef from pg_proc where proname = f and pronamespace = 'public'::regnamespace) as definer
@@ -2250,6 +2265,80 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
     third === null && stable(rerun) === stable(used) && !rerun.team.includes('Events') && rerun.team.includes('marketing:Meetups:3') && strays === 0,
     { third, used, rerun, strays });
   await db.query("update boards set name = 'Events' where id = $1", [board.Events]);
+
+  // 41. Review fixes ------------------------------------------------------------------------------------------------
+
+  {
+    // The sync saves an edited update as an upsert, and INSERT ... ON CONFLICT checks the insert policies on the proposed
+    // row: an admin re-saving a staff member's update goes through admin_resave to author_update; staff can't re-save
+    // someone else's, and admin_resave never lets an admin create an update in someone else's name.
+    const asSaved = async (id) => one('select id, item_id, user_id, text, created_at from item_updates where id = $1', [id]);
+    const resave = async (user, row, text) => { await as(user); return postgrestUpsert('item_updates', [{ ...row, text, created_at: new Date(row.created_at).toISOString() }]); };
+    await as(null);
+    const staffNote = await asSaved(note[alice]);
+    const bossDraft = await one('select id, item_id, user_id, text, created_at from item_updates where user_id = $1 order by created_at limit 1', [boss]);
+    const adminEdit = await resave(boss, staffNote, 'Started (tidied by an admin)');
+    const superEdit = await resave(david, staffNote, 'Started (tidied by the SuperAdmin)');
+    await as(null);
+    const afterAdmin = await asSaved(note[alice]);
+    const staffEdit = await resave(alice, bossDraft, 'Changed by staff');
+    const forged = await resave(boss, { id: randomUUID(), item_id: task[alice], user_id: alice, created_at: new Date().toISOString() }, 'Not Alice');
+    const ownEdit = await resave(alice, staffNote, 'Started today');
+    await as(null);
+    const final = await one('select (select text from item_updates where id = $1) as staff_note, (select text from item_updates where id = $2) as boss_draft,'
+      + ' (select count(*)::int from item_updates where text = \'Not Alice\') as forged', [note[alice], bossDraft.id]);
+    check('41. an admin (or the SuperAdmin) re-saves a staff member\'s update as the sync does (upsert); staff can\'t re-save someone '
+      + 'else\'s; an admin can\'t create an update in someone else\'s name; authors still edit their own',
+      adminEdit === null && superEdit === null && afterAdmin.user_id === alice && staffEdit !== null && forged !== null && ownEdit === null
+        && final.staff_note === 'Started today' && final.boss_draft === bossDraft.text && final.forged === 0,
+      { adminEdit, superEdit, afterAdmin, staffEdit, forged, ownEdit, final });
+
+    // A write under a board or task someone else just deleted fails on the foreign key (23503, which the sync drops as
+    // "deleted elsewhere"), not on RLS (which it would retry and report).
+    const codeOf = (sql, params) => db.query(sql, params).then(() => null, (e) => e.code || e.message);
+    await as(boss);
+    const doomed = (await one("insert into boards (module, name, position) values ('marketing', 'Temp', 9) returning id")).id;
+    const tempGroup = (await one("insert into board_groups (board_key, board_id, name) values ('marketing', $1, 'Now') returning id", [doomed])).id;
+    const tempTask = (await one("insert into items (board_key, board_id, group_id, name) values ('marketing', $1, $2, 'Short-lived') returning id",
+      [doomed, tempGroup])).id;
+    const goneTask = (await one("insert into items (board_key, board_id, group_id, name) values ('marketing', $1, $2, 'Gone soon') returning id",
+      [board['Posting schedule'], await groupOn(board['Posting schedule'])])).id;
+    await db.query('delete from items where id = $1', [goneTask]);
+    await db.query('delete from boards where id = $1', [doomed]);
+    await as(alice); // staff with Marketing edit
+    const gone = {
+      group: await codeOf("insert into board_groups (id, board_key, board_id, name) values ($1, 'marketing', $2, 'Late')", [tempGroup, doomed]),
+      task: await codeOf("insert into items (id, board_key, board_id, group_id, name) values ($1, 'marketing', $2, $3, 'Late')",
+        [tempTask, doomed, tempGroup]),
+      subtask: await codeOf("insert into subtasks (item_id, text) values ($1, 'Late')", [goneTask]),
+      update: await codeOf("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Late')", [goneTask, alice]),
+    };
+    // Still refused on boards that exist but can't be edited (Landing Page is view-only for alice, who has a Projects view override).
+    const viewOnly = await codeOf("insert into board_groups (board_key, board_id, name) values ('projects', $1, 'Nope')", [board['Landing Page']]);
+    check('41. writes under a board or task that was deleted elsewhere fail on the foreign key (23503), not RLS; '
+      + 'view-only boards still refuse (42501)',
+      Object.values(gone).every((c) => c === '23503') && viewOnly === '42501', { gone, viewOnly });
+
+    // Tasks and groups move only within their audience: team board ⇄ team board, or within one person's page.
+    await as(david);
+    const generalGroup = await groupOn(board.General);
+    const generalTask = (await one("insert into items (board_key, board_id, group_id, name) values ('projects', $1, $2, 'Mover') returning id",
+      [board.General, generalGroup])).id;
+    const tenderGroup2 = await groupOn(board['Tender Portal']);
+    const moves = {
+      teamToTeam: await codeOf('update items set board_id = $2, group_id = $3 where id = $1', [generalTask, board['Tender Portal'], tenderGroup2]),
+      teamToPage: await codeOf('update items set board_id = $2, group_id = $3 where id = $1', [generalTask, page[alice], pageGroup[alice]]),
+      // An old tab names only the group; place_on_board moves the board along and same_audience still refuses.
+      oldTabToPage: await codeOf('update items set group_id = $2 where id = $1', [generalTask, pageGroup[alice]]),
+      pageToPage: await codeOf('update items set board_id = $2, group_id = $3 where id = $1', [task[alice], page[hello], pageGroup[hello]]),
+      groupToPage: await codeOf('update board_groups set board_id = $2 where id = $1', [generalGroup, page[alice]]),
+    };
+    const landed = (await one('select board_id from items where id = $1', [generalTask])).board_id;
+    check('41. a task or group moves between team boards, but not onto, off or between personal pages (even for the SuperAdmin or an old tab)',
+      moves.teamToTeam === null && landed === board['Tender Portal'] && ['teamToPage', 'oldTabToPage', 'pageToPage', 'groupToPage']
+        .every((k) => moves[k] === '23514'), { moves, landed });
+    await db.query('delete from items where id = $1', [generalTask]);
+  }
 
   return { alice, boss, david, hello, carol, newcomer, early, late, board, page };
 }

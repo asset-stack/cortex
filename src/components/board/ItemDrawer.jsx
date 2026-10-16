@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Pencil, Trash2, X } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { useAccess } from '@/lib/access';
-import { boardHref, boardTitle, findBoard } from '@/lib/boards';
+import { boardHref, boardTitle, findBoard, sameAudience } from '@/lib/boards';
 import { Avatar, ConfirmModal, Drawer, InlineRename, LabelPicker, PeoplePicker, QuickAdd } from '@/components/ui';
 import { MessageText } from '@/lib/mentions';
 import { ago, shortDate } from '@/lib/format';
@@ -35,7 +35,7 @@ export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly 
   const item = group?.items.find((i) => i.id === itemId) || null;
   const title = item?.name.trim() || 'Untitled task';
   // Where it can move: this module's boards you can edit (this one first if, oddly, it isn't among them).
-  const boards = board ? state.boards.filter((b) => b.module === board.module && access.canEditBoard(b)) : [];
+  const boards = board ? state.boards.filter((b) => sameAudience(board, b) && access.canEditBoard(b)) : [];
   if (board && !boards.includes(board)) boards.unshift(board);
 
   const moveToBoard = (toId) => {

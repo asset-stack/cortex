@@ -1376,7 +1376,8 @@ const team = () => ({
 
 await check('access: modules, staff defaults and roles', () => {
   assert.deepEqual(access.MODULES, ['projects', 'marketing', 'outreach', 'pipeline', 'clients']);
-  assert.deepEqual(access.STAFF_DEFAULTS, { projects: 'view', marketing: 'edit', outreach: 'none', pipeline: 'view', clients: 'view' });
+  // 0006: staff edit Projects again (0003 had made it view).
+  assert.deepEqual(access.STAFF_DEFAULTS, { projects: 'edit', marketing: 'edit', outreach: 'none', pipeline: 'view', clients: 'view' });
   const st = team();
   assert.deepEqual(['sue', 'al', 'stu', 'mem', 'nobody'].map((u) => access.roleOf(st, u)), ['superadmin', 'admin', 'staff', 'staff', '']);
   assert.equal(access.roleOf(st), 'superadmin', 'defaults to me');
@@ -1391,8 +1392,8 @@ await check('access: effective module level (admins edit, staff override else de
   const levels = (u) => access.MODULES.map((m) => access.moduleLevel(st, m, u));
   assert.deepEqual(levels('sue'), ['edit', 'edit', 'edit', 'edit', 'edit']);
   assert.deepEqual(levels('al'), ['edit', 'edit', 'edit', 'edit', 'edit'], 'overrides never apply to admins');
-  assert.deepEqual(levels('mem'), ['view', 'edit', 'none', 'view', 'view'], 'phase 1 member gets the staff defaults');
-  assert.deepEqual(levels('stu'), ['view', 'edit', 'edit', 'none', 'view'], 'overrides; an invalid level is ignored');
+  assert.deepEqual(levels('mem'), ['edit', 'edit', 'none', 'view', 'view'], 'phase 1 member gets the staff defaults');
+  assert.deepEqual(levels('stu'), ['edit', 'edit', 'edit', 'none', 'view'], 'overrides; an invalid level is ignored');
   assert.deepEqual(levels('off'), ['none', 'none', 'none', 'none', 'none']);
   assert.deepEqual(levels('ex'), ['none', 'none', 'none', 'none', 'none']);
   assert.equal(access.moduleLevel(st, 'projects', 'nobody'), 'none');
@@ -1449,17 +1450,19 @@ await check('access: whose own Projects page each person may open (seesPerson �
 await check('access: board levels — team boards follow the module, own pages are edit for whoever may open them (boardLevel ⇄ board_level)', () => {
   const st = crew();
   const level = (board, u, s = st) => access.boardLevel(s, board, u);
-  // Team boards: the module's level (staff default: Projects view, Marketing edit); admins edit; inactive none.
+  // Team boards: the module's level (staff default: Projects and Marketing edit, 0006); admins edit; inactive none.
   assert.deepEqual(['sue', 'al', 'stu', 'off', 'nobody'].map((u) => [level(teamBoard('projects'), u), level(teamBoard('marketing'), u)]),
-    [['edit', 'edit'], ['edit', 'edit'], ['view', 'edit'], ['none', 'none'], ['none', 'none']]);
+    [['edit', 'edit'], ['edit', 'edit'], ['edit', 'edit'], ['none', 'none'], ['none', 'none']]);
   // Overrides are honoured for staff, never for admins.
   const over = crew([
-    { userId: 'stu', module: 'projects', level: 'edit' }, { userId: 'stu', module: 'marketing', level: 'none' },
+    { userId: 'stu', module: 'projects', level: 'view' }, { userId: 'stu', module: 'marketing', level: 'none' },
     { userId: 'sam', module: 'marketing', level: 'view' }, { userId: 'al', module: 'marketing', level: 'none' },
   ]);
   assert.deepEqual([['stu', 'projects'], ['stu', 'marketing'], ['sam', 'marketing'], ['al', 'marketing']].map(([u, m]) => level(teamBoard(m), u, over)),
-    ['edit', 'none', 'view', 'edit']);
-  // Own pages: edit for whoever may open them (staff too, though their Projects is view), else none.
+    ['view', 'none', 'view', 'edit']);
+  // … and their own page stays editable with Projects at view.
+  assert.equal(level(ownPage('stu'), 'stu', over), 'edit');
+  // Own pages: edit for whoever may open them, else none.
   assert.deepEqual(['sue', 'al', 'ann', 'stu', 'sam', 'off'].map((u) => level(ownPage('stu'), u)), ['edit', 'edit', 'edit', 'edit', 'none', 'none']);
   assert.deepEqual(['sue', 'al', 'ann', 'stu'].map((u) => level(ownPage('al'), u)), ['edit', 'edit', 'none', 'none']);
   assert.deepEqual(['sue', 'al', 'stu'].map((u) => level(ownPage('sue'), u)), ['edit', 'none', 'none']);
@@ -1473,7 +1476,7 @@ await check('access: board levels — team boards follow the module, own pages a
   // canViewBoard / canEditBoard, for me by default.
   const asStu = { ...st, me: 'stu' };
   assert.deepEqual([teamBoard('projects'), teamBoard('marketing'), ownPage('stu'), ownPage('sam')]
-    .map((b) => [access.canViewBoard(asStu, b), access.canEditBoard(asStu, b)]), [[true, false], [true, true], [true, true], [false, false]]);
+    .map((b) => [access.canViewBoard(asStu, b), access.canEditBoard(asStu, b)]), [[true, true], [true, true], [true, true], [false, false]]);
   assert.deepEqual([access.canViewBoard(st, ownPage('stu'), 'sam'), access.canEditBoard(st, teamBoard('projects'), 'al')], [false, true]);
 });
 
@@ -1504,6 +1507,17 @@ const boardSet = () => {
   return [b('own', 'projects', 'me', ['it-own']), b('stus', 'projects', 'stu', ['it-stu']), b('web', 'projects', '', ['it-web']), b('gen', 'projects'),
     b('daily', 'marketing', '', ['it-m']), b('post', 'marketing')];
 };
+
+await check('boards: a task or group moves only within its audience (sameAudience ⇄ same_audience in 0006)', () => {
+  const { sameAudience } = boardsLib;
+  const lp = teamBoard('projects');
+  const tp = { ...teamBoard('projects'), id: 'tp' };
+  const mk = teamBoard('marketing');
+  assert.deepEqual([
+    [lp, tp], [lp, lp], [ownPage('stu'), ownPage('stu')], // team ⇄ team, one board, one person's page
+    [lp, ownPage('stu')], [ownPage('stu'), lp], [ownPage('stu'), ownPage('sam')], [lp, mk], [lp, null], [null, lp],
+  ].map(([a, b]) => sameAudience(a, b)), [true, true, true, false, false, false, false, false, false]);
+});
 
 await check('boards: lookups (findBoard, personalBoard, teamBoards, boardOfItem, boardItems)', () => {
   const { findBoard, personalBoard, teamBoards, boardOfItem, boardItems } = boardsLib;
@@ -1894,7 +1908,7 @@ if (createSeed) {
     assert.deepEqual(['david', 'josh', 'hello'].map((me) => pagesFor(me).filter((b) => b.owner).map((b) => b.owner)),
       [['david', 'josh', 'hello'], ['josh', 'hello'], ['hello']]);
     assert.deepEqual(pagesFor('hello').filter((b) => !b.owner).map((b) => [b.name, access.canEditBoard({ ...s, me: 'hello' }, b)]),
-      [...STARTING_BOARDS.projects.map((n) => [n, false]), ...STARTING_BOARDS.marketing.map((n) => [n, true])]);
+      [...STARTING_BOARDS.projects, ...STARTING_BOARDS.marketing].map((n) => [n, true]), 'staff edit every team board by default (0006)');
   });
 }
 

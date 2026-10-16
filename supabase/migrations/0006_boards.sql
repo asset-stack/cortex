@@ -10,7 +10,12 @@
 --   profile from now on.
 -- - board_groups.board_id and items.board_id say which board a group or task is on; board_key stays the module. Groups,
 --   tasks, subtasks and updates now follow their board's access (public.board_level), the same rules as
---   boardLevel() in src/lib/access.js. Team boards keep the module's level (staff view Projects by default).
+--   boardLevel() in src/lib/access.js. Team boards keep the module's level.
+-- - Staff edit Projects by default again (0003 made it view): with their own page and team boards, staff add and edit
+--   tasks on Landing Page, Tender Portal… as they do on Marketing. Only admins add, rename, order or delete boards; an
+--   explicit per-person override (Settings → Team) still wins.
+-- - A task or group moves only within its audience: between team boards, or within one person's page (who can see it
+--   never changes on a move, so everyone's realtime view stays right). sameAudience() in src/lib/boards.js.
 
 begin;
 
@@ -146,7 +151,44 @@ drop trigger if exists add_personal_board on public.profiles;
 create trigger add_personal_board after insert on public.profiles
   for each row execute function public.add_personal_board();
 
+-- Moving a task or group to a board with other viewers (a team board ⇄ someone's page, or one page to another) would
+-- leave it on screen for people who can no longer see it. Runs after place_on_board (triggers fire by name), so an
+-- old tab's move to another group is checked on the board it lands on.
+create or replace function public.same_audience() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.board_id is distinct from old.board_id
+     and (select owner_id from public.boards where id = old.board_id)
+         is distinct from (select owner_id from public.boards where id = new.board_id) then
+    raise exception 'Tasks and groups move between team boards, or within one person''s page'
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists same_audience on public.board_groups;
+create trigger same_audience before update on public.board_groups
+  for each row execute function public.same_audience();
+drop trigger if exists same_audience on public.items;
+create trigger same_audience before update on public.items
+  for each row execute function public.same_audience();
+
 -- 3. Access ------------------------------------------------------------------------------------------------------
+
+-- Staff default for Projects is edit again (admins always edit; explicit overrides still win). Same rules as
+-- STAFF_DEFAULTS in src/lib/access.js.
+create or replace function public.module_level(p_module text) returns text
+language sql stable security definer set search_path = public as $$
+  select case
+    when not public.is_staff() then 'none'
+    when public.is_admin() then 'edit'
+    else coalesce(
+      (select level from public.module_access where user_id = auth.uid() and module = p_module),
+      case p_module when 'projects' then 'edit' when 'marketing' then 'edit' when 'pipeline' then 'view'
+        when 'clients' then 'view' else 'none' end)
+  end;
+$$;
 
 -- Whose personal page the signed-in user may open: their own; staff's for admins; everyone's for the SuperAdmin.
 create or replace function public.sees_person(p_user uuid) returns boolean
@@ -188,16 +230,42 @@ language sql stable security definer set search_path = public as $$
   select board_id from public.items where id = p_item;
 $$;
 
+-- For write checks only (never for reading): a board or task that no longer exists passes, so the foreign key reports
+-- the missing parent (23503), which the app's sync drops quietly as "deleted elsewhere", instead of an RLS refusal it
+-- would retry. The foreign keys still refuse the row.
+create or replace function public.can_write_board(p_board uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select not exists (select 1 from public.boards where id = p_board) or public.can_edit_board(p_board);
+$$;
+
+create or replace function public.can_write_item(p_item uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select not exists (select 1 from public.items where id = p_item) or public.can_edit_board(public.item_board_id(p_item));
+$$;
+
+-- Whether an update already exists: the sync saves edits as upserts, which Postgres checks against the insert policies
+-- too, so an admin re-saving someone else's update needs an insert policy that only an existing row passes.
+create or replace function public.update_exists(p_id uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.item_updates where id = p_id);
+$$;
+
 revoke all on function public.sees_person(uuid) from public, anon;
 revoke all on function public.board_level(uuid) from public, anon;
 revoke all on function public.can_view_board(uuid) from public, anon;
 revoke all on function public.can_edit_board(uuid) from public, anon;
 revoke all on function public.item_board_id(uuid) from public, anon;
+revoke all on function public.can_write_board(uuid) from public, anon;
+revoke all on function public.can_write_item(uuid) from public, anon;
+revoke all on function public.update_exists(uuid) from public, anon;
 grant execute on function public.sees_person(uuid) to authenticated;
 grant execute on function public.board_level(uuid) to authenticated;
 grant execute on function public.can_view_board(uuid) to authenticated;
 grant execute on function public.can_edit_board(uuid) to authenticated;
 grant execute on function public.item_board_id(uuid) to authenticated;
+grant execute on function public.can_write_board(uuid) to authenticated;
+grant execute on function public.can_write_item(uuid) to authenticated;
+grant execute on function public.update_exists(uuid) to authenticated;
 
 -- 4. RLS, touch(), grants and realtime for boards (as 0002 §7) ---------------------------------------------------
 
@@ -239,7 +307,7 @@ create policy boards_update on public.boards for update to authenticated
 create policy boards_delete on public.boards for delete to authenticated
   using (owner_id is null and public.is_admin());
 
--- Groups and tasks: view the board to read, edit it to write.
+-- Groups and tasks: view the board to read, edit it to write (can_write_board: see above).
 do $$
 declare t text;
 begin
@@ -247,9 +315,9 @@ begin
     execute format('create policy board_select on public.%I for select to authenticated
       using (public.can_view_board(board_id))', t);
     execute format('create policy board_insert on public.%I for insert to authenticated
-      with check (public.can_edit_board(board_id))', t);
+      with check (public.can_write_board(board_id))', t);
     execute format('create policy board_update on public.%I for update to authenticated
-      using (public.can_edit_board(board_id)) with check (public.can_edit_board(board_id))', t);
+      using (public.can_edit_board(board_id)) with check (public.can_write_board(board_id))', t);
     execute format('create policy board_delete on public.%I for delete to authenticated
       using (public.can_edit_board(board_id))', t);
   end loop;
@@ -258,21 +326,24 @@ end $$;
 create policy board_select on public.subtasks for select to authenticated
   using (public.can_view_board(public.item_board_id(item_id)));
 create policy board_insert on public.subtasks for insert to authenticated
-  with check (public.can_edit_board(public.item_board_id(item_id)));
+  with check (public.can_write_item(item_id));
 create policy board_update on public.subtasks for update to authenticated
   using (public.can_edit_board(public.item_board_id(item_id)))
-  with check (public.can_edit_board(public.item_board_id(item_id)));
+  with check (public.can_write_item(item_id));
 create policy board_delete on public.subtasks for delete to authenticated
   using (public.can_edit_board(public.item_board_id(item_id)));
 
--- Updates: their author (or an admin) edits and deletes them, on a board they can edit.
+-- Updates: their author (or an admin) edits and deletes them, on a board they can edit. New updates are always the
+-- signed-in user's own; admin_resave lets an admin's upsert of an existing update through to author_update.
 create policy board_select on public.item_updates for select to authenticated
   using (public.can_view_board(public.item_board_id(item_id)));
 create policy author_insert on public.item_updates for insert to authenticated
-  with check (user_id = auth.uid() and public.can_edit_board(public.item_board_id(item_id)));
+  with check (user_id = auth.uid() and public.can_write_item(item_id));
+create policy admin_resave on public.item_updates for insert to authenticated
+  with check (public.is_admin() and public.update_exists(id) and public.can_write_item(item_id));
 create policy author_update on public.item_updates for update to authenticated
   using ((user_id = auth.uid() or public.is_admin()) and public.can_edit_board(public.item_board_id(item_id)))
-  with check ((user_id = auth.uid() or public.is_admin()) and public.can_edit_board(public.item_board_id(item_id)));
+  with check ((user_id = auth.uid() or public.is_admin()) and public.can_write_item(item_id));
 create policy author_delete on public.item_updates for delete to authenticated
   using ((user_id = auth.uid() or public.is_admin()) and public.can_edit_board(public.item_board_id(item_id)));
 

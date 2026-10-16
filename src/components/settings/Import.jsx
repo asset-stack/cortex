@@ -35,7 +35,9 @@ export default function Import() {
   const access = useAccess();
   const targets = state.boards.filter((b) => access.canEditBoard(b)); // boards tasks can be imported into
   const [picked, setPicked] = useState('');
-  const board = (targets.find((b) => b.id === picked) || targets[0])?.id || '';
+  // Until one is picked: the first team board, else your own page (never someone else's page by accident).
+  const fallback = targets.find((b) => !b.owner) || targets.find((b) => b.owner === state.me) || targets[0];
+  const board = (targets.find((b) => b.id === picked) || fallback)?.id || '';
   const module = findBoard(state, board)?.module || 'projects'; // the board's columns are its module's
   const [group, setGroup] = useState('');
   const [groupName, setGroupName] = useState('');
