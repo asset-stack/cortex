@@ -195,6 +195,17 @@ const fixture = () => ({
     { id: 'wt-3', user: U1, name: 'Claude', url: 'https://claude.ai', username: '', how: '', notes: 'Team plan', createdBy: '' },
     { id: 'wt-2', user: U2, name: 'Apollo', url: 'app.apollo.io', username: 'ben@example.com', how: 'Invite from Ana', notes: '', createdBy: U1 },
   ],
+  // Outreach (0007): mailboxes in order, notes newest first, the sheet's link (only for someone who can read Outreach).
+  mailboxes: [
+    { id: 'mb-1', name: 'Ana', addresses: ['ana@example.com', 'ana@old.example.com'], owner: U1, active: true },
+    { id: 'mb-2', name: 'Shared', addresses: [], owner: '', active: false },
+  ],
+  outreachNotes: [
+    { id: 'on-2', mailbox: 'mb-1', pinned: false, body: 'Councils reply to v2', author: U2, createdAt: '2026-10-08T00:00:00.000Z' },
+    { id: 'on-1', mailbox: '', pinned: true, body: 'Lead with the tender', author: U1, createdAt: '2026-10-07T00:00:00.000Z' },
+    { id: 'on-0', mailbox: 'mb-2', pinned: false, body: 'Paused for now', author: '', createdAt: '' },
+  ],
+  outreachSheet: 'https://docs.google.com/spreadsheets/d/1ExampleSheetIdAbCdEfGhIjKlMnOp/edit#gid=0',
   payments: [
     { id: 'pay-1', invoiceId: 'i-1', clientId: 'c-1', amount: 2750.55, receivedOn: '2026-09-20', reference: 'EX-1001', statementId: 'bs-1' },
     { id: 'pay-0', invoiceId: '', clientId: 'c-0', amount: 100, receivedOn: '2026-09-02', reference: '', statementId: '' },
@@ -218,8 +229,9 @@ const fixture = () => ({
 
 let createSeed = null;
 let migrate = null;
+let outreachDemo = null;
 try {
-  ({ createSeed, migrate } = await import('../src/data/seed.js'));
+  ({ createSeed, migrate, outreachDemo } = await import('../src/data/seed.js'));
 } catch (e) {
   console.log(`SKIP createSeed round trip: seed.js is not importable in Node (${String(e?.message).split('\n')[0]})`);
 }
@@ -273,7 +285,7 @@ await check('assemble: order and state fields', () => {
   const back = assemble(flatten(s), { me: U1 });
   assert.deepEqual(Object.keys(back).sort(), ['approvals', 'boards', 'channels', 'clients', 'contacts', 'deals', 'emails', 'lastRead',
     'messages', 'org', 'sequences', 'users', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements',
-    'expenses', 'subscriptions', 'tools'].sort());
+    'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet'].sort());
   assert.deepEqual(back.boards.map((b) => b.id), ['b-ana', 'b-ben', 'b-web', 'b-gen', 'b-post', 'b-events']);
   const web = back.boards.find((b) => b.id === 'b-web');
   assert.deepEqual(web.groups.map((g) => g.id), ['g-1', 'g-2', 'g-3']);
@@ -296,7 +308,8 @@ await check('assemble: order and state fields', () => {
   assert.deepEqual(back.users, s.users);
   // Parts of the fixture already in canonical form come back exactly (no extra or missing fields).
   ['boards', 'contacts', 'emails', 'sequences', 'approvals', 'messages', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments',
-    'bankStatements', 'expenses', 'subscriptions', 'tools'].forEach((k) => assert.deepEqual(back[k], s[k], k));
+    'bankStatements', 'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet']
+    .forEach((k) => assert.deepEqual(back[k], s[k], k));
   assert.deepEqual(back.clients[1], s.clients[1]);
   assert.deepEqual(back.clients[0].plans, s.clients[0].plans);
   assert.deepEqual(back.clients[0].usage, s.clients[0].usage); // newest month first
@@ -318,8 +331,9 @@ await check('profiles: time zones round trip; a blank or missing one is Sydney (
 await check('assemble: empty rows give a usable state', () => {
   const back = assemble({}, { me: U1 });
   assert.deepEqual(back.boards, []);
-  ['moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'tools']
-    .forEach((k) => assert.deepEqual(back[k], [], k));
+  ['moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'tools', 'mailboxes',
+    'outreachNotes'].forEach((k) => assert.deepEqual(back[k], [], k));
+  assert.ok(!('outreachSheet' in back), 'no settings row (no Outreach access): no sheet link in state');
   assert.equal(back.org.paymentTermsDays, 30);
   assert.equal(back.org.invoicePrefix, 'INV-');
   assert.deepEqual(back.lastRead, { [U1]: {} });
@@ -471,6 +485,49 @@ await check('normalizeRow: Postgres time, int[] and numeric values come back in 
   assert.deepEqual(normalizeRow('routines', { weekdays: null }).weekdays, []);
   assert.equal(normalizeRow('billing_plans', { amount: '2400.50' }).amount, 2400.5);
   assert.equal(normalizeRow('expenses', { gst: '37.50' }).gst, 37.5);
+});
+
+await check('flatten / assemble: outreach mailboxes, notes and the sheet\'s link (0007)', () => {
+  const rows = flatten(fixture());
+  assert.deepEqual([...rows.outreach_mailboxes.values()], [
+    { id: 'mb-1', name: 'Ana', addresses: ['ana@example.com', 'ana@old.example.com'], owner_id: U1, active: true, position: 0 },
+    { id: 'mb-2', name: 'Shared', addresses: [], owner_id: null, active: false, position: 1 },
+  ], 'position is the array index; no owner is null');
+  assert.deepEqual(rows.outreach_notes.get('on-1'), {
+    id: 'on-1', mailbox_id: null, pinned: true, body: 'Lead with the tender', author_id: U1, created_at: '2026-10-07T00:00:00.000Z',
+  }, 'a note for every mailbox has no mailbox_id');
+  assert.deepEqual(rows.outreach_notes.get('on-0'), { id: 'on-0', mailbox_id: 'mb-2', pinned: false, body: 'Paused for now', author_id: null, created_at: null });
+  assert.deepEqual([...rows.outreach_settings.entries()], [['1', { id: 1, sheet_url: fixture().outreachSheet }]], 'one settings row: id 1, the link only');
+  // Addresses are kept lower-case and trimmed (as the database's text[] holds them, so a re-read is no change); blanks go.
+  const odd = fixture();
+  odd.mailboxes[0].addresses = [' Ana@Example.COM ', '', 'ANA@old.example.com'];
+  delete odd.mailboxes[1].active; // missing: active
+  assert.deepEqual(flatten(odd).outreach_mailboxes.get('mb-1').addresses, ['ana@example.com', 'ana@old.example.com']);
+  assert.equal(flatten(odd).outreach_mailboxes.get('mb-2').active, true);
+  assert.deepEqual(diff(rows, flatten({ ...odd, mailboxes: [{ ...odd.mailboxes[0] }, fixture().mailboxes[1]] })), [], 'normalised addresses are no change');
+  // The sheet's link: absent (someone without Outreach: no settings row loaded) → no row at all, so nothing is ever written
+  // for them; '' (an admin cleared it) → a row with ''.
+  const without = fixture();
+  delete without.outreachSheet;
+  assert.equal(flatten(without).outreach_settings.size, 0);
+  // diff() lists the row's disappearance as a delete, which the sync never sends for an update-only table ((c) below).
+  assert.deepEqual(diff(rows, flatten(without)).map((o) => `${o.op} ${o.table} ${o.key}`), ['delete outreach_settings 1']);
+  assert.equal(TABLES.find((t) => t.name === 'outreach_settings').update, true);
+  assert.deepEqual(flatten({ ...fixture(), outreachSheet: '' }).outreach_settings.get('1'), { id: 1, sheet_url: '' });
+  [undefined, null, 0].forEach((v) => assert.equal(flatten({ ...fixture(), outreachSheet: v }).outreach_settings.size, 0, String(v)));
+  // Assembled: mailboxes by position, notes newest first (undated last), the link only when its row was loaded.
+  const mixed = Object.fromEntries(Object.entries(rows).map(([t, m]) => [t, new Map([...m].reverse())]));
+  const back = assemble(mixed, { me: U1 });
+  assert.deepEqual(back.mailboxes.map((m) => m.id), ['mb-1', 'mb-2']);
+  assert.deepEqual(back.outreachNotes.map((n) => n.id), ['on-2', 'on-1', 'on-0']);
+  assert.equal(back.outreachSheet, fixture().outreachSheet);
+  const noSettings = { ...rows, outreach_settings: new Map() };
+  assert.ok(!('outreachSheet' in assemble(noSettings, { me: U1 })));
+  assert.equal(flatten({ ...assemble(noSettings, { me: U1 }), me: U1 }).outreach_settings.size, 0, 'round trip without access: still no row');
+  // A note on a mailbox that isn't loaded still shows (the page shows it under all mailboxes); assemble never drops one.
+  const orphan = structuredClone(rows);
+  orphan.outreach_mailboxes.delete('mb-2');
+  assert.deepEqual(assemble(orphan, { me: U1 }).outreachNotes.map((n) => [n.id, n.mailbox]), [['on-2', 'mb-1'], ['on-1', ''], ['on-0', 'mb-2']]);
 });
 
 // ── (b) diff ──────────────────────────────────────────────────────────────────
@@ -712,6 +769,41 @@ await check('diff: moving a task to another board writes that task with its new 
   const within = opsAfter((s) => moveTo(s, 'it-3', 'b-web', 'g-2'));
   assert.deepEqual(labels(within), ['upsert items it-3']);
   assert.deepEqual(['board_id', 'group_id', 'position'].map((k) => within[0].row[k]), ['b-web', 'g-2', 0]);
+});
+
+await check('diff: a new outreach note, an edited note or mailbox, a moved mailbox or a new sheet link writes only that row (0007)', () => {
+  const note = { id: 'on-new', mailbox: 'mb-1', pinned: false, body: 'Short subject lines', author: U1, createdAt: '2026-10-09T00:00:00.000Z' };
+  const added = opsAfter((s) => { s.outreachNotes.unshift(note); });
+  assert.deepEqual(labels(added), ['upsert outreach_notes on-new']);
+  assert.deepEqual(added[0].row, {
+    id: 'on-new', mailbox_id: 'mb-1', pinned: false, body: 'Short subject lines', author_id: U1, created_at: '2026-10-09T00:00:00.000Z',
+  });
+  assert.deepEqual(labels(opsAfter((s) => { s.outreachNotes[1].pinned = false; s.outreachNotes[1].body = 'Lead with the live tender'; })),
+    ['upsert outreach_notes on-1']);
+  const edited = opsAfter((s) => { s.mailboxes[0].addresses = ['ana@example.com', 'Ana@New.Example.com ']; });
+  assert.deepEqual(labels(edited), ['upsert outreach_mailboxes mb-1']);
+  assert.deepEqual(edited[0].row, { id: 'mb-1', name: 'Ana', addresses: ['ana@example.com', 'ana@new.example.com'], owner_id: U1, active: true, position: 0 });
+  const moved = opsAfter((s) => { s.mailboxes.reverse(); });
+  assert.deepEqual(moved.map((o) => [o.op, o.table, o.key, o.row.position]).sort(),
+    [['upsert', 'outreach_mailboxes', 'mb-1', 1], ['upsert', 'outreach_mailboxes', 'mb-2', 0]]);
+  const linked = opsAfter((s) => { s.outreachSheet = 'https://docs.google.com/spreadsheets/d/1AnotherExampleSheetId0123456/edit'; });
+  assert.deepEqual(linked.map((o) => [o.op, o.table, o.key, o.row]),
+    [['upsert', 'outreach_settings', '1', { id: 1, sheet_url: 'https://docs.google.com/spreadsheets/d/1AnotherExampleSheetId0123456/edit' }]]);
+});
+
+await check('diff: removing a mailbox deletes it and its notes (other notes stay); the mailboxes after it move up (0007)', () => {
+  const ops = opsAfter((s) => {
+    s.mailboxes = s.mailboxes.filter((m) => m.id !== 'mb-1');
+    s.outreachNotes = s.outreachNotes.filter((n) => n.mailbox !== 'mb-1');
+  });
+  assert.deepEqual(labels(ops), ['delete outreach_mailboxes mb-1', 'delete outreach_notes on-2', 'upsert outreach_mailboxes mb-2']);
+  assert.equal(ops.find((o) => o.key === 'mb-2').row.position, 0);
+  assert.equal(ops.find((o) => o.key === 'on-2').row.mailbox_id, 'mb-1', 'deletes carry the old row');
+  // The last one: only its own rows.
+  assert.deepEqual(labels(opsAfter((s) => {
+    s.mailboxes = s.mailboxes.filter((m) => m.id !== 'mb-2');
+    s.outreachNotes = s.outreachNotes.filter((n) => n.mailbox !== 'mb-2');
+  })), ['delete outreach_mailboxes mb-2', 'delete outreach_notes on-0']);
 });
 
 // ── (c) Sync queue against a fake Supabase ────────────────────────────────────
@@ -1343,7 +1435,7 @@ await check('sync: phase 2 tables are written parents first', async () => {
   [['deals', 'contacts'], ['invoices', 'billing_plans'], ['billing_plans', 'clients'], ['client_usage', 'clients'], ['payments', 'invoices'],
     ['payments', 'bank_statements'], ['expenses', 'clients'], ['todos', 'routines'], ['todos', 'profiles'], ['routines', 'profiles'],
     ['time_entries', 'profiles'], ['module_access', 'profiles'], ['contacts', 'profiles'], ['boards', 'profiles'], ['board_groups', 'boards'],
-    ['items', 'board_groups']]
+    ['items', 'board_groups'], ['outreach_mailboxes', 'profiles'], ['outreach_notes', 'outreach_mailboxes'], ['outreach_notes', 'profiles']]
     .forEach(([child, parent]) => assert.ok(order.indexOf(parent) < order.indexOf(child), `${parent} before ${child}`));
   const { sb, sync } = setup();
   const names = ['todos', 'routines', 'payments', 'bank_statements', 'invoices', 'billing_plans', 'deals', 'contacts', 'client_usage', 'clients'];
@@ -1352,6 +1444,35 @@ await check('sync: phase 2 tables are written parents first', async () => {
   assert.deepEqual(seq(sb), ['upsert clients', 'upsert contacts', 'upsert deals', 'upsert billing_plans', 'upsert invoices',
     'upsert client_usage', 'upsert bank_statements', 'upsert payments', 'upsert routines', 'upsert todos']);
   sync.dispose();
+});
+
+await check('sync: removing a mailbox sends its notes\' delete before the mailbox\'s; the sheet\'s link is an update of row 1, '
+  + 'and a settings row that vanished from state is never deleted (0007)', async () => {
+  const removed = structuredClone(base);
+  removed.mailboxes = removed.mailboxes.filter((m) => m.id !== 'mb-1');
+  removed.outreachNotes = removed.outreachNotes.filter((n) => n.mailbox !== 'mb-1');
+  const a = setup();
+  a.sync.queue(diff(rows0, flatten(removed)));
+  await a.sync.flush();
+  assert.deepEqual(seq(a.sb), ['upsert outreach_mailboxes', 'delete outreach_notes', 'delete outreach_mailboxes']);
+  assert.deepEqual(a.sb.calls.filter((c) => c.method === 'delete').map((c) => c.filters), [[['in', 'id', ['on-2']]], [['in', 'id', ['mb-1']]]]);
+  a.sync.dispose();
+
+  const b = setup();
+  b.sync.queue(diff(rows0, flatten({ ...structuredClone(base), outreachSheet: 'https://docs.google.com/spreadsheets/d/1AnotherExampleSheetId0123456/edit' })));
+  await b.sync.flush();
+  assert.deepEqual(b.sb.calls.map((c) => [c.method, c.table, c.patch, c.filters]), [
+    ['update', 'outreach_settings', { sheet_url: 'https://docs.google.com/spreadsheets/d/1AnotherExampleSheetId0123456/edit' }, [['eq', 'id', 1]]],
+  ]);
+  b.sync.dispose();
+
+  const c = setup();
+  const lost = structuredClone(base);
+  delete lost.outreachSheet;
+  c.sync.queue(diff(rows0, flatten(lost)));
+  await c.sync.flush();
+  assert.deepEqual(c.sb.calls, []);
+  c.sync.dispose();
 });
 
 globalThis.setTimeout = realTimers.setTimeout;
@@ -2072,6 +2193,363 @@ if (timesheet?.suggestBlocks) {
     const blocks = timesheet.suggestBlocks({ todosDone: [], emailsSent: [], itemsTouched: [], messagesSent: [] }, { start: '09:00', end: '17:00' });
     assert.deepEqual(blocks.map((b) => b.start), ['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00']);
     assert.ok(blocks.every((b) => b.category === 'Other'));
+  });
+}
+
+// ── Outreach (0007): src/lib/outreach.js, the demo seed and its migration ──────
+// The lib is what demo mode computes with and what outreach_daily() / outreach_breakdown() must equal in live mode
+// (scripts/test-db.mjs compares the two on the same rows); here, every export on its own.
+
+const outreach = await import('../src/lib/outreach.js');
+// An app-shape row: emailFromRow()'s defaults with the fields a case needs.
+const em = (id, mailbox, f = {}) => ({ ...outreach.emailFromRow({ id, row_key: `rk-${id}`, mailbox_id: mailbox }), ...f });
+const sortedRows = (list) => list.map((r) => JSON.stringify(r)).sort();
+
+await check('outreach: emailFromRow maps a database row to the app shape; defaults for a blank row; null mailbox is Unassigned', () => {
+  assert.deepEqual(outreach.emailFromRow(), {
+    id: '', rowKey: '', mailbox: '', sender: '', dateLogged: '', vertical: '', organisation: '', domain: '', location: '', contactName: '',
+    contactRole: '', contactEmail: '', tier: '', signal: '', subject: '', variant: '', status: '', sentOn: '', messageId: '', threadId: '',
+    sequenceStatus: '', followupStage: 0, nextFollowup: '', bounced: false, replyStatus: '', replyOn: '', replySummary: '', note: '',
+    meetingOn: '', inSheet: true,
+  });
+  const row = {
+    id: 'e-1', row_key: 'pat@example.com|2026-10-05', mailbox_id: null, sender: ' david@example.com ', date_logged: '2026-10-05',
+    vertical: 'Local government', organisation: ' Northbrook Shire Council ', domain: 'example.com', location: 'Northbrook VIC',
+    contact_name: 'Pat Example', contact_role: 'Asset Manager', contact_email: 'pat@example.com', tier: 'A', signal: 'Open tender',
+    subject: 'Asset data', variant: 'v2', status: 'sent', sent_on: '2026-10-06T03:00:00+00:00', message_id: '18c2f0a1b2c3d4e5',
+    thread_id: '18c2f0a1b2c3d4e5', sequence_status: 'replied-negative', followup_stage: '2', next_followup: null, bounced: true,
+    reply_status: 'negative', reply_on: '05/10/2026', reply_summary: 'Not now.', note: '', meeting_on: '2026-10-09', in_sheet: false,
+    raw: { kdm_name: 'Pat Example' }, synced_at: '2026-10-18T00:00:00+00:00', updated_at: '2026-10-18T00:00:00+00:00', updated_by: null,
+  };
+  const e = outreach.emailFromRow(row);
+  assert.deepEqual(e, {
+    id: 'e-1', rowKey: 'pat@example.com|2026-10-05', mailbox: '', sender: 'david@example.com', dateLogged: '2026-10-05',
+    vertical: 'Local government', organisation: 'Northbrook Shire Council', domain: 'example.com', location: 'Northbrook VIC',
+    contactName: 'Pat Example', contactRole: 'Asset Manager', contactEmail: 'pat@example.com', tier: 'A', signal: 'Open tender',
+    subject: 'Asset data', variant: 'v2', status: 'sent', sentOn: '2026-10-06', messageId: '18c2f0a1b2c3d4e5', threadId: '18c2f0a1b2c3d4e5',
+    sequenceStatus: 'replied-negative', followupStage: 2, nextFollowup: '', bounced: true, replyStatus: 'negative', replyOn: '',
+    replySummary: 'Not now.', note: '', meetingOn: '2026-10-09', inSheet: false,
+  }, 'dates cut to the day (an unreadable one is blank), text trimmed, extra columns dropped');
+  assert.equal(outreach.emailFromRow({ ...row, mailbox_id: 'mb-1', in_sheet: null, followup_stage: 'x' }).mailbox, 'mb-1');
+  assert.equal(outreach.emailFromRow({ ...row, in_sheet: null }).inSheet, true, 'only false means out of the sheet');
+  assert.equal(outreach.emailFromRow({ ...row, followup_stage: 'x' }).followupStage, 0);
+});
+
+await check('outreach: emailKey is the Gmail message id, else the row key, else the id', () => {
+  assert.equal(outreach.emailKey(em('1', 'mb-a', { messageId: 'm1' })), 'm1');
+  assert.equal(outreach.emailKey(em('1', 'mb-a')), 'rk-1');
+  assert.equal(outreach.emailKey({ ...em('1', 'mb-a'), rowKey: '' }), '1');
+});
+
+// Per-day fixture for the week 2026-10-05 … 2026-10-11.
+const DAILY_ROWS = () => [
+  em('1', 'mb-a', { sentOn: '2026-10-04' }), // the day before
+  em('2', 'mb-a', { sentOn: '2026-10-05' }), // the first day
+  em('3', 'mb-b', { sentOn: '2026-10-05', bounced: true }),
+  em('4', '', { sentOn: '2026-10-05' }), // Unassigned: last in its day
+  em('5', 'mb-a', { sentOn: '2026-10-11' }), // the last day
+  em('6', 'mb-a', { sentOn: '2026-10-12' }), // the day after
+  em('7', 'mb-a', { dateLogged: '2026-10-06', bounced: true }), // bounced but never sent: nothing
+  em('8', 'mb-a', { sentOn: '2026-10-01', bounced: true, replyStatus: 'negative', replyOn: '2026-10-06' }), // only its reply is in the week
+  em('9', 'mb-a', { sentOn: '2026-10-06', replyOn: '2026-10-07' }), // a reply day without a kind: no reply
+  em('10', 'mb-a', { sentOn: '2026-10-06', replyStatus: 'neutral' }), // a kind without a day: no reply
+  em('11', 'mb-b', { sentOn: '2026-10-07', replyStatus: 'positive', replyOn: '2026-10-08', meetingOn: '2026-10-10' }),
+  // One email to two contacts: once, bounced when either bounced, its first reply and first meeting.
+  em('12a', 'mb-a', { messageId: 'm12', sentOn: '2026-10-08', bounced: true, replyStatus: 'positive', replyOn: '2026-10-10', meetingOn: '2026-10-11' }),
+  em('12b', 'mb-a', { messageId: 'm12', sentOn: '2026-10-08', replyStatus: 'negative', replyOn: '2026-10-09', meetingOn: '2026-10-12' }),
+  // ...sent on two days: the first.
+  em('13a', 'mb-a', { messageId: 'm13', sentOn: '2026-10-09' }),
+  em('13b', 'mb-a', { messageId: 'm13', sentOn: '2026-10-08' }),
+  // One message id in two mailboxes: an email each.
+  em('14a', 'mb-a', { messageId: 'm14', sentOn: '2026-10-09' }),
+  em('14b', 'mb-b', { messageId: 'm14', sentOn: '2026-10-09' }),
+  // Out of the sheet: nothing, not even as an email's earlier row.
+  em('15a', 'mb-a', { messageId: 'm15', sentOn: '2026-10-05', bounced: true, replyStatus: 'positive', replyOn: '2026-10-06', meetingOn: '2026-10-07', inSheet: false }),
+  em('15b', 'mb-a', { messageId: 'm15', sentOn: '2026-10-10' }),
+  em('16', '', { sentOn: '2026-10-10', inSheet: false }),
+];
+const day = (d, mailbox, sent, replies, bounces, meetings) => ({ day: `2026-10-${d}`, mailbox, sent, replies, bounces, meetings });
+const DAILY_WEEK = [
+  day('05', 'mb-a', 1, 0, 0, 0), day('05', 'mb-b', 1, 0, 1, 0), day('05', '', 1, 0, 0, 0),
+  day('06', 'mb-a', 2, 1, 0, 0),
+  day('07', 'mb-b', 1, 0, 0, 0),
+  day('08', 'mb-a', 2, 0, 1, 0), day('08', 'mb-b', 0, 1, 0, 0),
+  day('09', 'mb-a', 1, 1, 0, 0), day('09', 'mb-b', 1, 0, 0, 0),
+  day('10', 'mb-a', 1, 0, 0, 0), day('10', 'mb-b', 0, 0, 0, 1),
+  day('11', 'mb-a', 1, 0, 0, 1),
+];
+
+await check('outreach: outreachDaily counts emails per day and mailbox (inclusive days; bounces only on sent; replies need a kind; '
+  + 'two contacts on one message once; out-of-sheet rows never), by day then mailbox, Unassigned last', () => {
+  assert.deepEqual(outreach.outreachDaily(DAILY_ROWS(), '2026-10-05', '2026-10-11'), DAILY_WEEK);
+  assert.deepEqual(outreach.outreachDaily(DAILY_ROWS().reverse(), '2026-10-05', '2026-10-11'), DAILY_WEEK, 'whatever the rows\' order');
+  assert.deepEqual(outreach.outreachDaily(DAILY_ROWS(), '2026-10-05', '2026-10-05'), DAILY_WEEK.slice(0, 3), 'one day');
+  assert.deepEqual(outreach.outreachDaily(DAILY_ROWS(), '2026-10-04', '2026-10-04'), [day('04', 'mb-a', 1, 0, 0, 0)]);
+  assert.deepEqual(outreach.outreachDaily(DAILY_ROWS(), '2026-10-01', '2026-10-01'), [day('01', 'mb-a', 1, 0, 1, 0)], 'bounced on its sent day');
+  assert.deepEqual(outreach.outreachDaily(DAILY_ROWS(), '2026-10-12', '2026-10-12'), [day('12', 'mb-a', 1, 0, 0, 0)],
+    'the later meeting of an email that already met counts for nothing');
+  assert.deepEqual(outreach.outreachDaily(DAILY_ROWS(), '2026-10-11', '2026-10-05'), [], 'a reversed range');
+  [null, undefined, []].forEach((rows) => assert.deepEqual(outreach.outreachDaily(rows, '2026-10-05', '2026-10-11'), []));
+  // Unassigned is last in its day whatever the mailbox ids; rows without a message id are each their own email.
+  const order = outreach.outreachDaily([em('x', '', { sentOn: '2026-10-05' }), em('y', 'zz', { sentOn: '2026-10-05' }),
+    em('z', '0a', { sentOn: '2026-10-05' }), em('w', '', { sentOn: '2026-10-04' })], '2026-10-01', '2026-10-31');
+  assert.deepEqual(order.map((d) => `${d.day} ${d.mailbox || '-'} ${d.sent}`), ['2026-10-04 - 1', '2026-10-05 0a 1', '2026-10-05 zz 1', '2026-10-05 - 1']);
+  assert.equal(outreach.outreachDaily([em('p', 'mb-a', { sentOn: '2026-10-05' }), em('q', 'mb-a', { sentOn: '2026-10-05' })], '2026-10-05', '2026-10-05')[0].sent, 2);
+});
+
+await check('outreach: outreachBreakdown counts contacts logged per row by status, and emails by their first reply\'s kind '
+  + '(a same-day tie: the smaller kind, byte order)', () => {
+  const rows = [
+    em('1', 'mb-a', { dateLogged: '2026-10-04', status: 'sent' }), // before
+    em('2', 'mb-a', { dateLogged: '2026-10-05', status: 'sent' }),
+    em('3', 'mb-a', { dateLogged: '2026-10-11', status: 'sent' }),
+    em('4', 'mb-a', { dateLogged: '2026-10-06', status: 'draft-saved' }),
+    em('5', '', { dateLogged: '2026-10-06', status: '' }),
+    em('6', 'mb-a', { dateLogged: '2026-10-07', status: 'sent', inSheet: false }),
+    em('7a', 'mb-b', { messageId: 'm7', dateLogged: '2026-10-07', status: 'sent', replyStatus: 'referral', replyOn: '2026-10-08' }),
+    em('7b', 'mb-b', { messageId: 'm7', dateLogged: '2026-10-07', status: 'sent', replyStatus: 'negative', replyOn: '2026-10-08' }),
+    em('8a', 'mb-b', { messageId: 'm8', dateLogged: '2026-10-01', status: 'sent', replyStatus: 'positive', replyOn: '2026-10-09' }),
+    em('8b', 'mb-b', { messageId: 'm8', dateLogged: '2026-10-01', status: 'sent', replyStatus: 'negative', replyOn: '2026-10-12' }),
+    em('9a', '', { messageId: 'm9', replyStatus: 'negative', replyOn: '2026-10-10' }),
+    em('9b', '', { messageId: 'm9', replyStatus: 'Positive', replyOn: '2026-10-10' }), // 'P' < 'n'
+    em('10', 'mb-a', { replyStatus: 'neutral', replyOn: '2026-10-12' }), // after
+    em('11', 'mb-a', { replyStatus: 'neutral' }), // no day
+    em('12', 'mb-a', { replyOn: '2026-10-06' }), // no kind
+    em('13a', 'mb-a', { messageId: 'm13', replyStatus: 'positive', replyOn: '2026-10-04' }), // first reply before the week…
+    em('13b', 'mb-a', { messageId: 'm13', replyStatus: 'negative', replyOn: '2026-10-06' }), // …so a later one in it doesn't count
+    em('14', 'mb-a', { replyStatus: 'negative', replyOn: '2026-10-07', inSheet: false }),
+  ];
+  const want = [
+    { mailbox: 'mb-a', kind: 'status', value: 'sent', n: 2 }, { mailbox: 'mb-a', kind: 'status', value: 'draft-saved', n: 1 },
+    { mailbox: '', kind: 'status', value: '', n: 1 }, { mailbox: 'mb-b', kind: 'status', value: 'sent', n: 2 },
+    { mailbox: 'mb-b', kind: 'reply', value: 'negative', n: 1 }, { mailbox: 'mb-b', kind: 'reply', value: 'positive', n: 1 },
+    { mailbox: '', kind: 'reply', value: 'Positive', n: 1 },
+  ];
+  assert.deepEqual(sortedRows(outreach.outreachBreakdown(rows, '2026-10-05', '2026-10-11')), sortedRows(want));
+  assert.deepEqual(sortedRows(outreach.outreachBreakdown([...rows].reverse(), '2026-10-05', '2026-10-11')), sortedRows(want), 'whatever the order');
+  assert.deepEqual(sortedRows(outreach.outreachBreakdown(rows, '2026-10-04', '2026-10-04')),
+    sortedRows([{ mailbox: 'mb-a', kind: 'status', value: 'sent', n: 1 }, { mailbox: 'mb-a', kind: 'reply', value: 'positive', n: 1 }]));
+  [null, undefined, []].forEach((x) => assert.deepEqual(outreach.outreachBreakdown(x, '2026-10-05', '2026-10-11'), []));
+  // The reply in the breakdown is the one the daily counts: same email, same day.
+  const replies = outreach.outreachDaily(rows, '2026-10-05', '2026-10-11').reduce((t, d) => t + d.replies, 0);
+  assert.equal(replies, want.filter((x) => x.kind === 'reply').reduce((t, x) => t + x.n, 0));
+});
+
+await check('outreach: outreachTotals sums days for all mailboxes or one (\'\' = Unassigned), with reply and bounce rates', () => {
+  const r = (sent, replies, bounces, meetings) => ({ sent, replies, bounces, meetings, replyRate: sent ? replies / sent : 0, bounceRate: sent ? bounces / sent : 0 });
+  assert.deepEqual(outreach.outreachTotals(DAILY_WEEK), r(12, 3, 2, 2));
+  assert.deepEqual(outreach.outreachTotals(DAILY_WEEK, null), r(12, 3, 2, 2));
+  assert.deepEqual(outreach.outreachTotals(DAILY_WEEK, 'mb-a'), r(8, 2, 1, 1));
+  assert.deepEqual(outreach.outreachTotals(DAILY_WEEK, 'mb-b'), r(3, 1, 1, 1));
+  assert.deepEqual(outreach.outreachTotals(DAILY_WEEK, ''), r(1, 0, 0, 0), 'Unassigned only');
+  assert.deepEqual(outreach.outreachTotals(DAILY_WEEK, 'mb-x'), r(0, 0, 0, 0), 'no sends: rates 0, not NaN');
+  assert.deepEqual(outreach.outreachTotals(null), r(0, 0, 0, 0));
+  assert.deepEqual(outreach.outreachTotals([day('05', 'mb-a', 0, 2, 0, 1)]), r(0, 2, 0, 1), 'replies without sends in the period: rate 0');
+});
+
+await check('outreach: filterEmails lists contacts in the sheet by mode, mailbox and search, newest first, a page at a time', () => {
+  const rows = [
+    em('a', 'mb-a', { sentOn: '2026-10-06', dateLogged: '2026-10-05', organisation: 'Northbrook Shire', contactName: 'Alex Morgan', subject: 'Asset data' }),
+    em('b', 'mb-a', { sentOn: '2026-10-08', dateLogged: '2026-10-08', organisation: 'Riverbend Water', contactRole: 'Asset Manager',
+      replyStatus: 'negative', replyOn: '2026-10-09' }),
+    em('c', 'mb-b', { sentOn: '2026-10-08', dateLogged: '2026-10-07', contactEmail: 'casey@example.com', replyOn: '2026-10-09' }), // no kind
+    em('d', '', { sentOn: '2026-10-07', sender: 'Unknown@Example.com' }),
+    em('e', 'mb-a', { dateLogged: '2026-10-09', status: 'draft-saved', vertical: 'Water utility', location: 'Riverbend QLD' }),
+    em('f', 'mb-a', { sentOn: '2026-10-09', dateLogged: '2026-10-09', organisation: 'Gone Council', inSheet: false }),
+    em('g', 'mb-b', { sentOn: '2026-10-12', replyStatus: 'positive', replyOn: '2026-10-11' }),
+  ];
+  const wk = { from: '2026-10-05', to: '2026-10-11' };
+  const ids = (opts) => outreach.filterEmails(rows, { ...wk, ...opts }).rows.map((e) => e.id);
+  assert.deepEqual(ids({}), ['b', 'c', 'd', 'a'], 'sent in the period (the default), newest first, then id; out-of-sheet rows never');
+  assert.deepEqual(ids({ only: 'replies' }), ['g', 'b'], 'replied in the period, with a kind');
+  assert.deepEqual(ids({ only: 'logged' }), ['e', 'b', 'c', 'a']);
+  assert.deepEqual([ids({ mailbox: 'mb-a' }), ids({ mailbox: 'mb-b' }), ids({ mailbox: '' }), ids({ mailbox: null })],
+    [['b', 'a'], ['c'], ['d'], ['b', 'c', 'd', 'a']], "a mailbox, Unassigned (''), all (null)");
+  assert.deepEqual([ids({ search: 'riverbend' }), ids({ search: ' RIVERBEND ' }), ids({ search: 'asset manager' }), ids({ search: 'casey@' }),
+    ids({ search: 'unknown@example' }), ids({ search: 'alex' }), ids({ search: 'asset data' }), ids({ search: '   ' })],
+  [['b'], ['b'], ['b'], ['c'], ['d'], ['a'], ['a'], ['b', 'c', 'd', 'a']], 'organisation, role, email, sender, contact, subject; any case');
+  assert.deepEqual([ids({ only: 'logged', search: 'water' }), ids({ only: 'logged', search: 'qld' })], [['b'], []],
+    'vertical and location aren\'t searched');
+  const page = (limit, offset) => { const r = outreach.filterEmails(rows, { ...wk, limit, offset }); return [r.rows.map((e) => e.id), r.more]; };
+  assert.deepEqual([page(2, 0), page(2, 2), page(2, 4), page(3, 1), page(4, 0)],
+    [[['b', 'c'], true], [['d', 'a'], false], [[], false], [['c', 'd', 'a'], false], [['b', 'c', 'd', 'a'], false]]);
+  assert.equal(outreach.filterEmails(rows, wk).rows.length, 4, 'limit 50, offset 0 by default');
+  assert.deepEqual(outreach.filterEmails(null, wk), { rows: [], more: false });
+});
+
+await check('outreach: periodRange (n days ending today, across months, years and a leap day) and daysBetween', () => {
+  assert.deepEqual(outreach.periodRange(7, '2026-10-18'), { from: '2026-10-12', to: '2026-10-18' });
+  [1, 0, -3].forEach((n) => assert.deepEqual(outreach.periodRange(n, '2026-10-18'), { from: '2026-10-18', to: '2026-10-18' }, String(n)));
+  assert.equal(outreach.periodRange(7, '2026-03-03').from, '2026-02-25');
+  assert.equal(outreach.periodRange(3, '2026-03-01').from, '2026-02-27');
+  assert.equal(outreach.periodRange(3, '2028-03-01').from, '2028-02-28', 'leap year');
+  assert.equal(outreach.periodRange(30, '2027-01-15').from, '2026-12-17');
+  assert.equal(outreach.periodRange(14, '2026-10-05').from, '2026-09-22', 'a daylight-saving change in between moves nothing');
+  [1, 7, 14, 30, 90].forEach((n) => {
+    const { from, to } = outreach.periodRange(n, '2026-10-18');
+    assert.equal(outreach.daysBetween(from, to).length, n, String(n));
+  });
+  assert.deepEqual(outreach.daysBetween('2026-10-30', '2026-11-02'), ['2026-10-30', '2026-10-31', '2026-11-01', '2026-11-02']);
+  assert.deepEqual(outreach.daysBetween('2026-12-31', '2027-01-01'), ['2026-12-31', '2027-01-01']);
+  assert.deepEqual(outreach.daysBetween('2028-02-28', '2028-03-01'), ['2028-02-28', '2028-02-29', '2028-03-01']);
+  assert.deepEqual(outreach.daysBetween('2026-10-18', '2026-10-18'), ['2026-10-18']);
+  assert.deepEqual(outreach.daysBetween('2026-10-18', '2026-10-17'), []);
+});
+
+await check('outreach: parseAddresses and mailboxFor (a sender\'s mailbox, any case; \'\' when none lists it)', () => {
+  assert.deepEqual(outreach.parseAddresses('A@x.com, b@y.com; c@z.com\nd@w.com  e@v.com'), ['a@x.com', 'b@y.com', 'c@z.com', 'd@w.com', 'e@v.com']);
+  assert.deepEqual(outreach.parseAddresses('a@x.com A@X.COM a@x.com'), ['a@x.com'], 'distinct, lower-case');
+  assert.deepEqual(outreach.parseAddresses('nope, a@b, @x.com, two@@example.com, good@example.com'), ['good@example.com'], 'invalid ones dropped');
+  assert.deepEqual(outreach.parseAddresses([' A@Example.com ', 'b@example.com', '', 'b@example.com']), ['a@example.com', 'b@example.com']);
+  [null, undefined, '', '  , ;'].forEach((x) => assert.deepEqual(outreach.parseAddresses(x), [], String(x)));
+  const boxes = [
+    { id: 'mb-a', addresses: outreach.parseAddresses('Ana@Example.com, ana@old.example.com') },
+    { id: 'mb-b', addresses: ['ben@example.com'] },
+    { id: 'mb-c' }, // no addresses yet
+  ];
+  assert.deepEqual([' Ana@Old.Example.com ', 'ana@example.com', 'BEN@example.com', 'someone@example.com', '', null].map((s) => outreach.mailboxFor(boxes, s)),
+    ['mb-a', 'mb-a', 'mb-b', '', '', '']);
+  assert.equal(outreach.mailboxFor(undefined, 'ana@example.com'), '');
+});
+
+await check('outreach: gmailThreadUrl (the sending mailbox\'s Gmail, encoded) and sheetFromUrl (id and tab; \'\' for other links)', () => {
+  assert.equal(outreach.gmailThreadUrl('ana@example.com', '18c2f0a1b2c3d4e5'), 'https://mail.google.com/mail/u/ana%40example.com/#all/18c2f0a1b2c3d4e5');
+  assert.equal(outreach.gmailThreadUrl(' ana@example.com ', ' 18c2f0a1b2c3d4e5 '), 'https://mail.google.com/mail/u/ana%40example.com/#all/18c2f0a1b2c3d4e5');
+  assert.equal(outreach.gmailThreadUrl('a+b@example.com', 'x/y z'), 'https://mail.google.com/mail/u/a%2Bb%40example.com/#all/x%2Fy%20z');
+  assert.equal(outreach.gmailThreadUrl('', 'abc'), 'https://mail.google.com/mail/u/0/#all/abc', 'no sender: the first signed-in account');
+  [['ana@example.com', ''], ['ana@example.com', null], ['', '  ']].forEach(([s, t]) => assert.equal(outreach.gmailThreadUrl(s, t), ''));
+  const id = '1AbCdEfGhIjKlMnOpQrStUvWxYz_0123-456';
+  const base = `https://docs.google.com/spreadsheets/d/${id}`;
+  assert.deepEqual(outreach.sheetFromUrl(`${base}/edit#gid=123`), { id, gid: '123' });
+  assert.deepEqual(outreach.sheetFromUrl(`${base}/edit?gid=0#gid=0`), { id, gid: '0' });
+  assert.deepEqual(outreach.sheetFromUrl(`${base}/edit?usp=sharing&gid=55`), { id, gid: '55' });
+  assert.deepEqual(outreach.sheetFromUrl(`${base}/edit`), { id, gid: '' });
+  assert.deepEqual(outreach.sheetFromUrl(` ${base} `), { id, gid: '' });
+  [`https://docs.google.com/document/d/${id}/edit`, `https://example.com/spreadsheets/d/${id}`, 'https://docs.google.com/spreadsheets/d/short/edit',
+    'https://docs.google.com/spreadsheets/d/e/2PACX-1vExample/pubhtml', '', null, undefined]
+    .forEach((url) => assert.deepEqual(outreach.sheetFromUrl(url), { id: '', gid: '' }, String(url)));
+});
+
+if (outreachDemo) {
+  // Ids replaced by their order of appearance, so two runs (random ids) compare.
+  const withoutIds = (demo) => {
+    const ids = [...demo.mailboxes, ...demo.outreachEmails, ...demo.outreachNotes].map((x) => x.id).sort((a, b) => b.length - a.length);
+    let json = JSON.stringify(demo);
+    ids.forEach((x, i) => { json = json.split(x).join(`#${i}`); });
+    return JSON.parse(json);
+  };
+  const counter = () => { let k = 0; return (p) => `${p}_${++k}`; };
+
+  await check('seed: outreach demo data is the same every time for a given day (only the ids differ)', () => {
+    assert.deepEqual(outreachDemo('2026-10-18', counter()), outreachDemo('2026-10-18', counter()));
+    assert.deepEqual(withoutIds(outreachDemo('2026-10-18')), withoutIds(outreachDemo('2026-10-18')));
+    assert.notDeepEqual(withoutIds(outreachDemo('2026-10-18')), withoutIds(outreachDemo('2026-10-25')), 'it follows the day');
+  });
+
+  await check('seed: outreach demo — three mailboxes, every row in one, placeholder addresses, twelve working days, emails to '
+    + 'two contacts, and every number on the page has something to show', () => {
+    const today = '2026-10-18';
+    const d = outreachDemo(today, counter());
+    assert.deepEqual(d.mailboxes.map((m) => [m.name, m.addresses, m.owner, m.active]), [
+      ['David', ['david@example.com'], 'david', true], ['Josh', ['josh@example.com'], 'josh', true], ['Sarah', ['sarah@example.com'], '', true],
+    ]);
+    assert.equal(d.outreachSheet, '');
+    const boxes = new Set(d.mailboxes.map((m) => m.id));
+    const rows = d.outreachEmails;
+    assert.ok(rows.length > 100, String(rows.length));
+    rows.forEach((e) => {
+      assert.ok(boxes.has(e.mailbox), `${e.id}: mailbox ${e.mailbox}`);
+      assert.equal(outreach.mailboxFor(d.mailboxes, e.sender), e.mailbox, `${e.id}: its sender is its mailbox's`);
+      assert.deepEqual(Object.keys(e).sort(), Object.keys(outreach.emailFromRow()).sort(), `${e.id}: the app shape`);
+      assert.equal(e.rowKey, `${e.contactEmail}|${e.dateLogged}`);
+      assert.ok(e.inSheet && e.dateLogged <= today && auto.isoDow(e.dateLogged) <= 5, e.id);
+      [e.sentOn, e.replyOn, e.meetingOn].filter(Boolean).forEach((x) => assert.ok(x <= today, `${e.id}: ${x} after today`));
+      if (e.sentOn) assert.ok(e.messageId && e.threadId && e.sentOn === e.dateLogged, e.id);
+      else assert.ok(!e.messageId && !e.bounced && !e.replyStatus, e.id);
+    });
+    assert.equal(new Set(rows.map((e) => e.dateLogged)).size, 12, 'twelve working days');
+    const emails = JSON.stringify(d).match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g) || [];
+    assert.ok(emails.length && emails.every((x) => x.endsWith('@example.com')), emails.filter((x) => !x.endsWith('@example.com')).join(', '));
+    // Twins: one message to two contacts (same mailbox, send, thread and reply; the second never bounced).
+    const byMessage = new Map();
+    rows.filter((e) => e.messageId).forEach((e) => byMessage.set(e.messageId, [...(byMessage.get(e.messageId) || []), e]));
+    const twins = [...byMessage.values()].filter((list) => list.length > 1);
+    assert.ok(twins.length > 0, 'some emails go to two contacts');
+    twins.forEach(([a, b, ...more]) => {
+      assert.equal(more.length, 0);
+      ['mailbox', 'sentOn', 'threadId', 'replyStatus', 'replyOn', 'meetingOn'].forEach((k) => assert.equal(b[k], a[k], `${a.messageId} ${k}`));
+      assert.ok(a.contactEmail !== b.contactEmail && !b.bounced, a.messageId);
+    });
+    // The numbers, by the lib, against a plain count: one per message sent, bounced, replied to or met.
+    const t = outreach.outreachTotals(outreach.outreachDaily(rows, '2000-01-01', today));
+    const groups = [...byMessage.values()];
+    assert.deepEqual([t.sent, t.bounces, t.replies, t.meetings], [
+      groups.length, groups.filter((g) => g.some((e) => e.bounced)).length, groups.filter((g) => g.some((e) => e.replyStatus && e.replyOn)).length,
+      groups.filter((g) => g.some((e) => e.meetingOn)).length,
+    ]);
+    assert.ok(t.sent < rows.filter((e) => e.sentOn).length, 'emails, not contacts');
+    assert.ok(t.replies > 0 && t.bounces > 0 && t.meetings > 0, JSON.stringify(t));
+    assert.ok(outreach.outreachBreakdown(rows, '2000-01-01', today).some((x) => x.kind === 'status' && x.value.startsWith('skipped-')));
+    // Whatever the day, at least one meeting.
+    for (let k = 0; k < 35; k++) {
+      const day = auto.addDays('2026-10-01', k);
+      assert.ok(outreachDemo(day, counter()).outreachEmails.some((e) => e.meetingOn && e.meetingOn <= day), day);
+    }
+    // Notes: one pinned for every mailbox, one on Josh's.
+    assert.deepEqual(sortedRows(d.outreachNotes.map((n) => [n.mailbox, n.pinned, n.author])),
+      sortedRows([['', true, 'david'], [d.mailboxes[1].id, false, 'josh']]));
+  });
+
+  await check('seed: every outreach demo row has its own rowKey (row_key is unique in outreach_emails; the sheet sync keeps one row '
+    + 'per key)', () => {
+    const rows = outreachDemo('2026-10-18', counter()).outreachEmails;
+    const seen = new Map();
+    rows.forEach((e) => seen.set(e.rowKey, (seen.get(e.rowKey) || 0) + 1));
+    const repeated = [...seen].filter(([, n]) => n > 1);
+    assert.deepEqual(repeated.slice(0, 3), [], `${repeated.length} keys repeat (of ${rows.length} rows), e.g. ${repeated.slice(0, 3).map(([k, n]) => `${k} ×${n}`).join(', ')}`);
+  });
+
+  await check('seed: outreach notes are newest first, as assemble() and addOutreachNote keep them', () => {
+    const d = outreachDemo('2026-10-18', counter());
+    const live = assemble(flatten({ users: [], org: {}, ...d }), { me: 'david' }).outreachNotes.map((n) => n.id);
+    assert.deepEqual(d.outreachNotes.map((n) => n.id), live, `seed order ${d.outreachNotes.map((n) => `${n.author} ${n.createdAt}`).join(', ')}`);
+  });
+}
+
+if (createSeed && migrate) {
+  await check('seed: createSeed has the outreach demo, and its synced part round-trips (the emails stay out of synced state)', () => {
+    const s = createSeed();
+    assert.deepEqual(s.mailboxes.map((m) => m.name), ['David', 'Josh', 'Sarah']);
+    assert.ok(s.outreachEmails.length && s.outreachNotes.length === 2 && s.outreachSheet === '');
+    const rows = flatten(s);
+    assert.deepEqual([rows.outreach_mailboxes.size, rows.outreach_notes.size, rows.outreach_settings.size], [3, 2, 1]);
+    assert.ok(!Object.keys(rows).some((t) => t === 'outreach_emails'), 'no emails table in TABLES');
+    s.outreachNotes.forEach((n) => assert.ok(s.users.some((u) => u.id === n.author), n.author));
+    s.mailboxes.filter((m) => m.owner).forEach((m) => assert.ok(s.users.some((u) => u.id === m.owner), m.owner));
+  });
+
+  await check('migrate: older demo data gets the outreach demo once; outreach data already there is left as it is', () => {
+    const old = createSeed();
+    ['mailboxes', 'outreachNotes', 'outreachEmails', 'outreachSheet'].forEach((k) => { delete old[k]; });
+    const m = migrate(structuredClone(old));
+    assert.deepEqual(m.mailboxes.map((x) => x.name), ['David', 'Josh', 'Sarah']);
+    assert.ok(m.outreachEmails.length > 100 && m.outreachEmails.every((e) => m.mailboxes.some((x) => x.id === e.mailbox)));
+    assert.deepEqual([m.outreachNotes.length, m.outreachSheet], [2, '']);
+    assert.deepEqual(migrate(structuredClone(m)), m, 'running it again adds nothing');
+    // Someone's own outreach data (or none: every mailbox removed) is kept.
+    const own = structuredClone(old);
+    Object.assign(own, {
+      mailboxes: [{ id: 'mb-own', name: 'Mine', addresses: ['me@example.com'], owner: 'david', active: false }],
+      outreachNotes: [{ id: 'on-own', mailbox: 'mb-own', pinned: false, body: 'Mine', author: 'david', createdAt: '2026-10-01T00:00:00.000Z' }],
+      outreachEmails: [em('e-own', 'mb-own', { sentOn: '2026-10-01' })],
+      outreachSheet: 'https://docs.google.com/spreadsheets/d/1ExampleSheetIdAbCdEfGhIjKlMnOp/edit',
+    });
+    const kept = migrate(structuredClone(own));
+    ['mailboxes', 'outreachNotes', 'outreachEmails', 'outreachSheet'].forEach((k) => assert.deepEqual(kept[k], own[k], k));
+    const emptied = migrate({ ...structuredClone(old), mailboxes: [], outreachNotes: [], outreachEmails: [], outreachSheet: '' });
+    assert.deepEqual([emptied.mailboxes, emptied.outreachNotes, emptied.outreachEmails, emptied.outreachSheet], [[], [], [], '']);
+    const partial = migrate({ ...structuredClone(old), mailboxes: own.mailboxes });
+    assert.deepEqual([partial.mailboxes, partial.outreachNotes, partial.outreachEmails, partial.outreachSheet], [own.mailboxes, [], [], '']);
   });
 }
 

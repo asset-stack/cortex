@@ -2500,6 +2500,45 @@ async function phase7(ctx) {
   check('44. ...and a fresh database ends with the same tables, policies, functions, grants and settings row as the used one',
     !shapeDiff(wholeShape, shape).length, shapeDiff(wholeShape, shape));
 
+  // Supabase's own defaults, which the stub leaves out: every new function and table in public is granted to anon,
+  // authenticated and service_role, so 0007 has to take anon's away itself; and the database's collation need not be
+  // byte order (here the reply_status column gets a linguistic one, 'negative' < 'Positive'), so a same-day reply tie
+  // must be decided with collate "C" to match the lib's `<`.
+  const supa = new PGlite({ extensions: { pgcrypto } });
+  await supa.exec(SUPABASE_STUB);
+  await supa.exec(`alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+    alter default privileges in schema public grant all on tables to service_role`);
+  for (const m of [migration, migration2, migration3, migration4, migration5, migration6]) await supa.exec(m);
+  const supaRun = await supa.exec(migration7).then(() => null, (e) => e.message);
+  const supaAnon = supaRun ?? (await supa.query(`select f, has_function_privilege('anon', f, 'execute') as anon,
+      has_function_privilege('authenticated', f, 'execute') as signed_in
+    from unnest(array['public.outreach_daily(date, date)', 'public.outreach_breakdown(date, date)', 'public.outreach_access()']) f`)).rows;
+  const supaTables = supaRun ?? (await supa.query(`select t from unnest($1::text[]) t
+    where has_table_privilege('anon', 'public.' || t, 'select') or has_table_privilege('anon', 'public.' || t, 'insert')
+      or has_table_privilege('anon', 'public.' || t, 'update') or has_table_privilege('anon', 'public.' || t, 'delete')`, [OUTREACH_TABLES])).rows;
+  let supaTie = supaRun;
+  if (!supaRun) {
+    await supa.exec(`alter table public.outreach_emails alter column reply_status type text collate "unicode";
+      insert into public.outreach_emails (row_key, message_id, sent_on, reply_status, reply_on) values
+        ('x1', 'm-tie-1', '2026-10-05', 'negative', '2026-10-06'), ('x2', 'm-tie-1', '2026-10-05', 'Positive', '2026-10-06'),
+        ('x3', 'm-tie-2', '2026-10-05', 'referral', '2026-10-06'), ('x4', 'm-tie-2', '2026-10-05', 'negative', '2026-10-06')`);
+    const lib = await outreachLib();
+    const sqlRows = (await supa.query("select to_json(x) as r from public.outreach_breakdown('2026-10-01', '2026-10-31') x where x.kind = 'reply'"))
+      .rows.map(({ r }) => `${r.value} ${r.n}`).sort();
+    const app = (await supa.query("select to_json(e) as r from public.outreach_emails e")).rows.map(({ r }) => lib.emailFromRow(r));
+    const jsRows = lib.outreachBreakdown(app, '2026-10-01', '2026-10-31').filter((x) => x.kind === 'reply').map((x) => `${x.value} ${x.n}`).sort();
+    const linguistic = (await supa.query(`select (array_agg(reply_status order by reply_status))[1] as first from public.outreach_emails
+      where message_id = 'm-tie-1'`)).rows[0].first;
+    supaTie = { sqlRows, jsRows, linguistic };
+  }
+  await supa.close();
+  check('44. with Supabase\'s defaults (new functions and tables granted to anon; a linguistic collation), anon still can\'t call '
+    + 'the RPCs or reach the tables, and a same-day reply tie is still decided in byte order, as the lib does',
+    supaRun === null && supaAnon.every((r) => !r.anon && r.signed_in) && supaTables.length === 0
+      && supaTie.linguistic === 'negative' && stable(supaTie.sqlRows) === stable(['Positive 1', 'negative 1'])
+      && stable(supaTie.jsRows) === stable(supaTie.sqlRows),
+    { supaRun, supaAnon, supaTables, supaTie });
+
   // 45. Tables, grants and realtime ---------------------------------------------------------------------------------
 
   const tableInfo = await rows(`select t,

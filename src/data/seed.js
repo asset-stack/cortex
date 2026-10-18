@@ -297,20 +297,33 @@ export function outreachDemo(today, idf = (p) => `${p}_${uid()}`) {
   // The last 12 working days: David sends throughout, Josh for the last 6, Sarah for the last 3.
   const days = [];
   for (let d = today; days.length < 12; d = addDays(d, -1)) if (isoDow(d) <= 5) days.unshift(d);
+  // A contact is logged once a day (the sheet's row key is the contact's email and the day): first and last names
+  // mixed, never the same person twice in a day.
+  const FIRST = OUTREACH_PEOPLE.map((x) => x.split(' ')[0]);
+  const LAST = OUTREACH_PEOPLE.map((x) => x.split(' ')[1]);
+  let taken = new Set();
+  const person = () => {
+    for (;;) {
+      const name = `${FIRST[rnd(FIRST.length)]} ${LAST[rnd(LAST.length)]}`;
+      const email = `${name.toLowerCase().replace(/[^a-z]+/g, '.')}@example.com`;
+      if (!taken.has(email)) { taken.add(email); return { name, email }; }
+    }
+  };
   days.forEach((day, di) => {
+    taken = new Set();
     mailboxes.forEach((m, mi) => {
       if ((mi === 1 && di < 6) || (mi === 2 && di < 9)) return;
       const logged = [9, 7, 6][mi] + rnd(5);
       for (let k = 0; k < logged; k++) {
         const [organisation, vertical, location] = OUTREACH_ORGS[rnd(OUTREACH_ORGS.length)];
-        const name = OUTREACH_PEOPLE[rnd(OUTREACH_PEOPLE.length)];
+        const { name, email } = person();
         const sent = rnd(10) < 7;
         const status = sent ? 'sent' : OUTREACH_SKIPS[rnd(OUTREACH_SKIPS.length)];
         const id = idf('oe');
         const e = {
           id, rowKey: '', mailbox: m.id, sender: m.addresses[0], dateLogged: day, vertical, organisation, domain: 'example.com', location,
           contactName: name, contactRole: OUTREACH_ROLES[rnd(OUTREACH_ROLES.length)],
-          contactEmail: `${name.toLowerCase().replace(/[^a-z]+/g, '.')}@example.com`, tier: ['A', 'B', 'C'][rnd(3)],
+          contactEmail: email, tier: ['A', 'B', 'C'][rnd(3)],
           signal: OUTREACH_SIGNALS[rnd(OUTREACH_SIGNALS.length)], subject: sent ? `${organisation}: asset condition data` : '',
           variant: sent ? ['v1', 'v2'][rnd(2)] : '', status, sentOn: sent ? day : '', messageId: sent ? `msg-${id}` : '',
           threadId: sent ? `thr-${id}` : '', sequenceStatus: sent ? 'active' : '', followupStage: 0,
@@ -330,12 +343,9 @@ export function outreachDemo(today, idf = (p) => `${p}_${uid()}`) {
         emails.push(e);
         // Some emails go to two people at the organisation (one Gmail message, a row each, as the agent logs them).
         if (sent && rnd(10) < 2) {
-          const other = OUTREACH_PEOPLE[rnd(OUTREACH_PEOPLE.length)];
-          const contactEmail = `${other.toLowerCase().replace(/[^a-z]+/g, '.')}@example.com`;
-          if (contactEmail !== e.contactEmail) {
-            emails.push({ ...e, id: idf('oe'), rowKey: `${contactEmail}|${day}`, contactName: other, contactEmail,
-              contactRole: OUTREACH_ROLES[rnd(OUTREACH_ROLES.length)], bounced: false, sequenceStatus: e.bounced ? 'active' : e.sequenceStatus });
-          }
+          const other = person();
+          emails.push({ ...e, id: idf('oe'), rowKey: `${other.email}|${day}`, contactName: other.name, contactEmail: other.email,
+            contactRole: OUTREACH_ROLES[rnd(OUTREACH_ROLES.length)], bounced: false, sequenceStatus: e.bounced ? 'active' : e.sequenceStatus });
         }
       }
     });
@@ -346,11 +356,11 @@ export function outreachDemo(today, idf = (p) => `${p}_${uid()}`) {
     if (e) Object.assign(e, { replyStatus: 'positive', replyOn: addDays(e.sentOn, 1), replySummary: OUTREACH_REPLIES[2][1],
       sequenceStatus: 'replied-positive', meetingOn: addDays(e.sentOn, 3) });
   }
-  const notes = [
-    { id: idf('on'), mailbox: '', pinned: true, author: 'david', createdAt: `${addDays(today, -2)}T09:15:00.000Z`,
-      body: 'What works now: open with the live tender or capital works item in the first line, keep it under 90 words, one ask (a 15-minute call).' },
+  const notes = [ // newest first, as in state
     { id: idf('on'), mailbox: mailboxes[1].id, pinned: false, author: 'josh', createdAt: `${addDays(today, -1)}T03:40:00.000Z`,
       body: 'Water utilities reply more to the v2 subject line. Keep v1 for councils.' },
+    { id: idf('on'), mailbox: '', pinned: true, author: 'david', createdAt: `${addDays(today, -2)}T09:15:00.000Z`,
+      body: 'What works now: open with the live tender or capital works item in the first line, keep it under 90 words, one ask (a 15-minute call).' },
   ];
   return { mailboxes, outreachNotes: notes, outreachEmails: emails, outreachSheet: '' };
 }
