@@ -266,6 +266,85 @@ const routines = () => [
   { id: id('r'), title: 'Pipeline review', category: 'Meetings', minutes: 30, assignee: 'david', weekdays: [1], start: '08:30', active: true },
 ];
 
+// Outreach (docs/PHASE2.md §12): three outreach mailboxes, two weeks of what the outreach agent logs in its sheet
+// (fictional organisations and people), and the team's notes. Deterministic for a given day. `idf(prefix)` makes ids.
+const OUTREACH_ORGS = [
+  ['Northbrook Shire Council', 'Local government', 'Northbrook VIC'], ['Eastvale City Council', 'Local government', 'Eastvale NSW'],
+  ['Riverbend Water', 'Water utility', 'Riverbend QLD'], ['Pinecrest Regional Council', 'Local government', 'Pinecrest WA'],
+  ['Harbourside Ports', 'Ports', 'Harbourside SA'], ['Glenmore Shire Council', 'Local government', 'Glenmore TAS'],
+  ['Westfield Health District', 'Health', 'Westfield NSW'], ['Lakeside Education Trust', 'Education', 'Lakeside VIC'],
+  ['Sunridge City Council', 'Local government', 'Sunridge QLD'], ['Coastline Housing', 'Community housing', 'Coastline NSW'],
+  ['Redgum Shire Council', 'Local government', 'Redgum SA'], ['Bayport Transit', 'Transport', 'Bayport VIC'],
+];
+const OUTREACH_PEOPLE = ['Alex Morgan', 'Sam Rivera', 'Jordan Blake', 'Casey Nguyen', 'Taylor Brooks', 'Morgan Ellis', 'Riley Chen',
+  'Jamie Patel', 'Avery Quinn', 'Drew Hartley', 'Robin Shaw', 'Cameron Lee'];
+const OUTREACH_ROLES = ['Manager Facilities', 'Asset Manager', 'Director Infrastructure', 'Manager Property', 'Chief Financial Officer'];
+const OUTREACH_SIGNALS = ['Open tender: building condition audit', 'Asset management plan due for review', 'Capital works program published',
+  'New facilities manager started', 'Council budget names an asset register refresh'];
+const OUTREACH_SKIPS = ['skipped-unverified', 'skipped-colleague', 'skipped-held', 'draft-saved'];
+const OUTREACH_REPLIES = [['negative', 'Not a priority this year.'], ['referral', 'Pointed us to their asset team lead.'],
+  ['positive', 'Keen to see a short demo.'], ['neutral', 'Asked for a one-page overview.']];
+
+export function outreachDemo(today, idf = (p) => `${p}_${uid()}`) {
+  const mailboxes = [
+    { id: idf('mb'), name: 'David', addresses: ['david@example.com'], owner: 'david', active: true },
+    { id: idf('mb'), name: 'Josh', addresses: ['josh@example.com'], owner: 'josh', active: true },
+    { id: idf('mb'), name: 'Sarah', addresses: ['sarah@example.com'], owner: '', active: true },
+  ];
+  let r = 7; // a small fixed pseudo-random sequence, so the demo is the same every time
+  const rnd = (k) => { r = (r * 1103515245 + 12345) % 2147483648; return Math.floor(r / 65536) % k; };
+  const emails = [];
+  // The last 12 working days: David sends throughout, Josh for the last 6, Sarah for the last 3.
+  const days = [];
+  for (let d = today; days.length < 12; d = addDays(d, -1)) if (isoDow(d) <= 5) days.unshift(d);
+  days.forEach((day, di) => {
+    mailboxes.forEach((m, mi) => {
+      if ((mi === 1 && di < 6) || (mi === 2 && di < 9)) return;
+      const logged = [9, 7, 6][mi] + rnd(5);
+      for (let k = 0; k < logged; k++) {
+        const [organisation, vertical, location] = OUTREACH_ORGS[rnd(OUTREACH_ORGS.length)];
+        const name = OUTREACH_PEOPLE[rnd(OUTREACH_PEOPLE.length)];
+        const sent = rnd(10) < 7;
+        const status = sent ? 'sent' : OUTREACH_SKIPS[rnd(OUTREACH_SKIPS.length)];
+        const id = idf('oe');
+        const e = {
+          id, mailbox: m.id, sender: m.addresses[0], dateLogged: day, vertical, organisation, domain: 'example.com', location,
+          contactName: name, contactRole: OUTREACH_ROLES[rnd(OUTREACH_ROLES.length)],
+          contactEmail: `${name.toLowerCase().replace(/[^a-z]+/g, '.')}@example.com`, tier: ['A', 'B', 'C'][rnd(3)],
+          signal: OUTREACH_SIGNALS[rnd(OUTREACH_SIGNALS.length)], subject: sent ? `${organisation}: asset condition data` : '',
+          variant: sent ? ['v1', 'v2'][rnd(2)] : '', status, sentOn: sent ? day : '', messageId: sent ? `msg-${id}` : '',
+          threadId: sent ? `thr-${id}` : '', sequenceStatus: sent ? 'active' : '', followupStage: 0,
+          nextFollowup: sent ? addDays(day, 4) : '', bounced: false, replyStatus: '', replyOn: '', replySummary: '', note: '',
+          meetingOn: '', inSheet: true,
+        };
+        if (sent && rnd(100) < 2) { e.bounced = true; e.sequenceStatus = 'bounced'; }
+        else if (sent && rnd(100) < 7) {
+          const replyOn = addDays(day, 1 + rnd(3));
+          if (replyOn <= today) {
+            const [kind, summary] = OUTREACH_REPLIES[rnd(OUTREACH_REPLIES.length)];
+            Object.assign(e, { replyStatus: kind, replyOn, replySummary: summary, sequenceStatus: `replied-${kind}` });
+            if (kind === 'positive') e.meetingOn = addDays(replyOn, 2) <= today ? addDays(replyOn, 2) : '';
+          }
+        }
+        emails.push(e);
+      }
+    });
+  });
+  // At least one meeting booked, so every number on the page has something to show.
+  if (!emails.some((e) => e.meetingOn)) {
+    const e = emails.find((x) => x.sentOn && x.sentOn <= addDays(today, -4) && !x.bounced);
+    if (e) Object.assign(e, { replyStatus: 'positive', replyOn: addDays(e.sentOn, 1), replySummary: OUTREACH_REPLIES[2][1],
+      sequenceStatus: 'replied-positive', meetingOn: addDays(e.sentOn, 3) });
+  }
+  const notes = [
+    { id: idf('on'), mailbox: '', pinned: true, author: 'david', createdAt: `${addDays(today, -2)}T09:15:00.000Z`,
+      body: 'What works now: open with the live tender or capital works item in the first line, keep it under 90 words, one ask (a 15-minute call).' },
+    { id: idf('on'), mailbox: mailboxes[1].id, pinned: false, author: 'josh', createdAt: `${addDays(today, -1)}T03:40:00.000Z`,
+      body: 'Water utilities reply more to the v2 subject line. Keep v1 for councils.' },
+  ];
+  return { mailboxes, outreachNotes: notes, outreachEmails: emails, outreachSheet: '' };
+}
+
 const previousWeekday = (day) => { let d = addDays(day, -1); while (isoDow(d) > 5) d = addDays(d, -1); return d; };
 
 // Hello's last working day, as saved from the 16:30 prompt.
@@ -369,6 +448,7 @@ export function createSeed() {
       { id: id('sub'), name: 'Project boards', vendor: 'Boards app', category: 'Software', amount: 48, cycle: 'monthly', renewsOn: '', active: false, notes: 'Replaced by Cortex' },
     ],
     timeEntries: timesheet(lastWorkday),
+    ...outreachDemo(today, id),
     // Hello's logins and links in My Work (set up by an admin).
     tools: ['Gmail', 'Google Drive', 'Apollo', 'Claude'].map((name) => {
       const preset = TOOL_PRESETS.find((x) => x.name === name);
@@ -481,6 +561,11 @@ export function migrate(data) {
     c.contracts ??= [];
   });
   COLLECTIONS.forEach((k) => { data[k] ??= []; });
+  // Outreach (0007): demo data saved before it gets the demo mailboxes, emails and notes.
+  if (!Array.isArray(data.mailboxes)) Object.assign(data, outreachDemo(localYmd()));
+  data.outreachNotes ??= [];
+  data.outreachEmails ??= [];
+  if (typeof data.outreachSheet !== 'string') data.outreachSheet = '';
   // Demo only: which routine runs ensureTodosLocal has made (the database's routine_runs), from the to-dos older
   // builds made, so a deleted one doesn't come back.
   data.routineRuns ??= data.todos.filter((t) => t.routineId).map((t) => `${t.day}|${t.routineId}|${t.assignee}`);

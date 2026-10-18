@@ -10,7 +10,7 @@ import { LIVE, supabase } from '@/data/backend/client';
 import { TABLES, assemble, diff, flatten, normalizeRow, stable } from '@/data/backend/schema';
 import { createSync } from '@/data/backend/sync';
 import { GateScreen, Spinner } from '@/components/auth/AuthGate';
-import { LEVELS, MODULES, ROLES, STAFF_DEFAULTS, canEdit, canEditBoard, isAdmin, isSuperadmin } from '@/lib/access';
+import { LEVELS, MODULES, ROLES, STAFF_DEFAULTS, canEdit, canEditBoard, canView, isAdmin, isSuperadmin } from '@/lib/access';
 import { BOARD_MODULES, FIRST_GROUP, FIRST_GROUP_COLOR, GROUP_COLORS, findBoard, sameAudience } from '@/lib/boards';
 import {
   PLAN_MONTHS, addDays, addMonths, clientCreatedLocal, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isPlanDate,
@@ -19,6 +19,7 @@ import {
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, emailSnippet, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
 import { mentionedUserIds } from '@/lib/mentions';
 import { cleanTool } from '@/lib/tools';
+import { emailFromRow, filterEmails, outreachBreakdown, outreachDaily, parseAddresses } from '@/lib/outreach';
 import { createContractDoc, googleConnectUrl, sendGoogleEmail, sendInvoiceEmail } from '@/integrations/google';
 
 const KEY = 'assetstack-ops:v1';
@@ -594,6 +595,64 @@ function createActions(mutate, mode) {
       return true;
     }),
 
+    // ── Outreach (0007): mailboxes and the sheet are the admins'; notes need Outreach edit (author or admin to change) ──
+
+    // → id
+    addMailbox: (fields = {}) => admin((d) => {
+      const name = textOf(fields.name).trim();
+      if (!name) return false;
+      const m = { id: uid(), name, addresses: parseAddresses(fields.addresses), owner: userExists(d, fields.owner) ? fields.owner : '', active: true };
+      (d.mailboxes ||= []).push(m);
+      return m.id;
+    }),
+    updateMailbox: (id, patch = {}) => admin((d) => {
+      const m = (d.mailboxes || []).find((x) => x.id === id);
+      if (!m) return false;
+      if ('name' in patch) { const name = textOf(patch.name).trim(); if (!name) return false; m.name = name; }
+      if ('addresses' in patch) m.addresses = parseAddresses(patch.addresses);
+      if ('owner' in patch) m.owner = userExists(d, patch.owner) ? patch.owner : '';
+      if ('active' in patch) m.active = patch.active !== false;
+      return true;
+    }),
+    // With its notes (as the database does: on delete cascade). Its emails stay, as Unassigned.
+    removeMailbox: (id) => admin((d) => {
+      if (!(d.mailboxes || []).some((x) => x.id === id)) return false;
+      d.mailboxes = d.mailboxes.filter((x) => x.id !== id);
+      d.outreachNotes = (d.outreachNotes || []).filter((x) => x.mailbox !== id);
+      return true;
+    }),
+    moveMailbox: (id, dir) => admin((d) => step(d.mailboxes || [], (d.mailboxes || []).findIndex((x) => x.id === id), dir)),
+    setOutreachSheet: (url) => admin((d) => {
+      if (typeof d.outreachSheet !== 'string') return false; // not loaded: no Outreach access
+      d.outreachSheet = textOf(url).trim();
+      return true;
+    }),
+    // → id. `mailbox` '' is a note for all mailboxes.
+    addOutreachNote: ({ body, mailbox = '', pinned = false } = {}) => editing('outreach', (d) => {
+      const text = textOf(body).trim();
+      if (!text || (mailbox && !(d.mailboxes || []).some((m) => m.id === mailbox))) return false;
+      const n = { id: uid(), mailbox, pinned: Boolean(pinned), body: text, author: d.me, createdAt: nowIso() };
+      (d.outreachNotes ||= []).unshift(n);
+      return n.id;
+    }),
+    updateOutreachNote: (id, patch = {}) => editing('outreach', (d) => {
+      const n = (d.outreachNotes || []).find((x) => x.id === id);
+      if (!n || !(n.author === d.me || isAdmin(d))) return false;
+      if ('body' in patch) { const text = textOf(patch.body).trim(); if (!text) return false; n.body = text; }
+      if ('pinned' in patch) n.pinned = Boolean(patch.pinned);
+      if ('mailbox' in patch) {
+        if (patch.mailbox && !(d.mailboxes || []).some((m) => m.id === patch.mailbox)) return false;
+        n.mailbox = patch.mailbox || '';
+      }
+      return true;
+    }),
+    removeOutreachNote: (id) => editing('outreach', (d) => {
+      const n = (d.outreachNotes || []).find((x) => x.id === id);
+      if (!n || !(n.author === d.me || isAdmin(d))) return false;
+      d.outreachNotes = d.outreachNotes.filter((x) => x !== n);
+      return true;
+    }),
+
     // ── Timesheet ──
 
     // Replaces the signed-in user's entries for `day` with `blocks` ({ start, minutes, category, note, source }).
@@ -936,6 +995,12 @@ function createActions(mutate, mode) {
 
     // → Promise<{ ok: true, url } | { ok: false, error }>: the browser goes to `url` (Google) and comes back to Settings.
     connectGoogle: () => googleConnectUrl(mode.invoke, window.location.origin),
+    // Outreach: read the agent's sheet into the database now (anyone who can see Outreach). → { ok, stats } | { ok: false, error }
+    syncOutreach: async () => {
+      const allowed = mode.read((st) => canView(st, 'outreach'));
+      if (!allowed) return { ok: false, error: 'You don’t have access to Outreach.' };
+      return mode.invoke('google/outreach-sync', {});
+    },
     disconnectGoogle: async () => {
       const ok = await mode.googleDisconnect();
       await mode.refreshGoogle();
@@ -1186,12 +1251,80 @@ function DemoProvider({ children }) {
     refreshGoogle: async () => {},
   }), [mutate, commit]);
 
-  const value = useMemo(() => ({ state, actions, sync: SAVED, google: DEMO_GOOGLE }), [state, actions]);
+  const outreach = useMemo(() => demoOutreach(state), [state]);
+  const value = useMemo(() => ({ state, actions, sync: SAVED, google: DEMO_GOOGLE, outreach }), [state, actions, outreach]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
 
 // The signed-in admin's own Google account (Settings → Business): not synced state, read from google_me().
 const DEMO_GOOGLE = { ready: true, demo: true, connected: false, email: '' };
+
+// Outreach's emails (docs/PHASE2.md §12) are read on demand, not kept in state: they grow by the hundred a day. Both
+// modes answer the same calls; every call resolves (never throws) to { ok, … } or { ok: false, error }.
+//   daily(from, to) → { rows: [{ day, mailbox, sent, replies, bounces, meetings }] }   (src/lib/outreach.js)
+//   breakdown(from, to) → { rows: [{ mailbox, kind: 'status' | 'reply', value, n }] }
+//   emails({ mailbox, from, to, search, only, limit, offset }) → { rows, more }        (mailbox null = all, '' = Unassigned)
+//   status() → { sheetUrl, syncedAt, error, stats }   sync() → { stats } (live only: the google function)
+function demoOutreach(state) {
+  const rows = state?.outreachEmails || [];
+  return {
+    live: false,
+    daily: async (from, to) => ({ ok: true, rows: outreachDaily(rows, from, to) }),
+    breakdown: async (from, to) => ({ ok: true, rows: outreachBreakdown(rows, from, to) }),
+    emails: async (opts = {}) => ({ ok: true, ...filterEmails(rows, opts) }),
+    status: async () => ({ ok: true, sheetUrl: state?.outreachSheet || '', syncedAt: '', error: '', stats: {} }),
+    sync: async () => ({ ok: false, error: 'Syncing the sheet works in live mode only.' }),
+  };
+}
+
+const OUTREACH_DAY = { sent: 'sent_on', replies: 'reply_on', logged: 'date_logged' };
+function liveOutreach(syncOutreach) {
+  const failed = (error) => ({ ok: false, error: error?.message || String(error || 'Request failed') });
+  return {
+    live: true,
+    daily: async (from, to) => {
+      try {
+        const { data, error } = await supabase.rpc('outreach_daily', { p_from: from, p_to: to });
+        if (error) return failed(error);
+        return { ok: true, rows: (data || []).map((r) => ({
+          day: String(r.day).slice(0, 10), mailbox: r.mailbox_id || '', sent: r.sent, replies: r.replies, bounces: r.bounces, meetings: r.meetings,
+        })) };
+      } catch (e) { return failed(e); }
+    },
+    breakdown: async (from, to) => {
+      try {
+        const { data, error } = await supabase.rpc('outreach_breakdown', { p_from: from, p_to: to });
+        if (error) return failed(error);
+        return { ok: true, rows: (data || []).map((r) => ({ mailbox: r.mailbox_id || '', kind: r.kind, value: r.value || '', n: r.n })) };
+      } catch (e) { return failed(e); }
+    },
+    emails: async ({ mailbox = null, from, to, search = '', only = 'sent', limit = 50, offset = 0 } = {}) => {
+      try {
+        const col = OUTREACH_DAY[only] || OUTREACH_DAY.sent;
+        let q = supabase.from('outreach_emails').select('*').gte(col, from).lte(col, to);
+        if (only === 'replies') q = q.neq('reply_status', '');
+        if (mailbox !== null) q = mailbox ? q.eq('mailbox_id', mailbox) : q.is('mailbox_id', null);
+        const term = String(search ?? '').replace(/[,()*%\\]/g, ' ').trim(); // PostgREST or() syntax characters
+        if (term) {
+          q = q.or(['organisation', 'contact_name', 'contact_role', 'contact_email', 'subject', 'sender']
+            .map((c) => `${c}.ilike.*${term}*`).join(','));
+        }
+        const { data, error } = await q.order(col, { ascending: false }).order('id').range(offset, offset + limit);
+        if (error) return failed(error);
+        const list = (data || []).map(emailFromRow);
+        return { ok: true, rows: list.slice(0, limit), more: list.length > limit };
+      } catch (e) { return failed(e); }
+    },
+    status: async () => {
+      try {
+        const { data, error } = await supabase.from('outreach_settings').select('sheet_url, synced_at, sync_error, sync_stats').eq('id', 1).maybeSingle();
+        if (error) return failed(error);
+        return { ok: true, sheetUrl: data?.sheet_url || '', syncedAt: data?.synced_at || '', error: data?.sync_error || '', stats: data?.sync_stats || {} };
+      } catch (e) { return failed(e); }
+    },
+    sync: async () => syncOutreach(),
+  };
+}
 const googleFrom = (me) => ({
   ready: true, demo: false, connected: Boolean(me?.google_email), email: me?.google_email || '', connectedAt: me?.connected_at || '',
 });
@@ -1211,6 +1344,7 @@ const MODULE_OF = {
   deals: 'pipeline', contacts: 'outreach', emails: 'outreach', sequences: 'outreach', approvals: 'outreach',
   clients: 'clients', client_notes: 'clients', client_tasks: 'clients', invoices: 'clients', invoice_lines: 'clients',
   client_access: 'clients', billing_plans: 'clients', client_usage: 'clients', client_contacts: 'clients', client_contracts: 'clients',
+  outreach_notes: 'outreach',
 };
 // Whether the signed-in user may write a row (the RLS rules in 0002, 0004 and 0006); null for tables outside the
 // modules and boards. Boards' groups, tasks, subtasks and updates follow their board (0006).
@@ -1221,7 +1355,7 @@ function mayWrite(d, table, row, rows) {
     const it = rows.items?.get(String(row.item_id));
     return it ? canEditBoard(d, findBoard(d, String(it.board_id))) : null;
   }
-  if (table === 'client_contracts') return isAdmin(d);
+  if (table === 'client_contracts' || table === 'outreach_mailboxes' || table === 'outreach_settings') return isAdmin(d);
   return MODULE_OF[table] ? canEdit(d, MODULE_OF[table]) : null;
 }
 // Only `position` differs: flatten() renumbering an order the database holds with a gap or two rows on one position.
@@ -1608,7 +1742,8 @@ function LiveProvider({ userId, children }) {
     });
   }, [mutate, refreshGoogle]);
 
-  const value = useMemo(() => ({ state, actions, sync, google }), [state, actions, sync, google]);
+  const outreach = useMemo(() => liveOutreach(actions.syncOutreach), [actions]);
+  const value = useMemo(() => ({ state, actions, sync, google, outreach }), [state, actions, sync, google, outreach]);
 
   if (phase.status === 'error') {
     return (

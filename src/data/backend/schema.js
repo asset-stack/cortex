@@ -29,6 +29,7 @@ const CONVERT = {
   bool: (v) => Boolean(v),
   json: (v) => JSON.parse(JSON.stringify(v ?? {})),
   uuids: (v) => (Array.isArray(v) ? v.filter(Boolean).map(String) : []),
+  texts: (v) => (Array.isArray(v) ? v.filter(Boolean).map((x) => String(x).trim().toLowerCase()).filter(Boolean) : []),
   // int[] (routine weekdays), kept sorted and unique. Accepts a Postgres array literal ('{1,2}') too.
   ints: (v) => {
     const list = Array.isArray(v) ? v : typeof v === 'string' ? v.replace(/[{}\s]/g, '').split(',') : [];
@@ -114,6 +115,11 @@ const COLUMNS = {
     id: 'id', user_id: 'id', day: 'date', start_time: 'time', minutes: 'int', category: t, note: t, source: t, position: 'int',
   },
   work_tools: { id: 'id', user_id: 'id', position: 'int', name: t, url: t, username: t, how: t, notes: t, created_by: 'fk' },
+  // Outreach (0007). outreach_emails is not here: the app reads it on demand (store.outreach) and never writes it.
+  outreach_mailboxes: { id: 'id', name: t, addresses: 'texts', owner_id: 'fk', active: 'bool', position: 'int' },
+  outreach_notes: { id: 'id', mailbox_id: 'fk', pinned: 'bool', body: t, author_id: 'fk', created_at: 'ts' },
+  // Only the sheet's link: the sync's time, error and counts are written by the google function (store.outreach.status).
+  outreach_settings: { id: 'int', sheet_url: t },
 };
 
 const byId = (r) => String(r.id);
@@ -168,6 +174,10 @@ export const TABLES = [
   { name: 'todos', key: byId, setNull: { routine_id: 'routines' } }, // after routines (todos.routine_id)
   { name: 'time_entries', key: byId },
   { name: 'work_tools', key: byId, setNull: { created_by: 'profiles' } },
+  { name: 'outreach_settings', key: byId, update: true },
+  { name: 'outreach_mailboxes', key: byId, setNull: { owner_id: 'profiles' } },
+  // After mailboxes; a mailbox's notes go with it (on delete cascade), all-mailbox notes have none.
+  { name: 'outreach_notes', key: byId, setNull: { author_id: 'profiles' } },
 ];
 
 const TABLE = Object.fromEntries(TABLES.map((x) => [x.name, x]));
@@ -345,6 +355,16 @@ export function flatten(state) {
     notes: x.notes, created_by: x.createdBy,
   }));
 
+  // Outreach (0007): mailboxes in order, notes, and the sheet's link. The settings row is only sent when state holds it
+  // (someone without Outreach can't read it, and must never write one).
+  (state.mailboxes || []).forEach((m, i) => put('outreach_mailboxes', {
+    id: m.id, name: m.name, addresses: m.addresses, owner_id: m.owner || null, active: m.active !== false, position: i,
+  }));
+  (state.outreachNotes || []).forEach((x) => put('outreach_notes', {
+    id: x.id, mailbox_id: x.mailbox || null, pinned: x.pinned, body: x.body, author_id: x.author || null, created_at: x.createdAt,
+  }));
+  if (typeof state.outreachSheet === 'string') put('outreach_settings', { id: 1, sheet_url: state.outreachSheet });
+
   return rows;
 }
 
@@ -494,6 +514,15 @@ export function assemble(rowsByTable, { me } = {}) {
     tools: all('work_tools').sort((a, b) => cmp(a.user_id, b.user_id) || byPos(a, b)).map((x) => ({
       id: x.id, user: x.user_id, name: x.name, url: x.url, username: x.username, how: x.how, notes: x.notes, createdBy: x.created_by ?? '',
     })),
+    mailboxes: all('outreach_mailboxes').sort(byPos).map((m) => ({
+      id: m.id, name: m.name, addresses: [...m.addresses], owner: m.owner_id ?? '', active: m.active,
+    })),
+    // Newest first (the page puts pinned ones on top).
+    outreachNotes: all('outreach_notes').sort(newest('created_at')).map((x) => ({
+      id: x.id, mailbox: x.mailbox_id ?? '', pinned: x.pinned, body: x.body, author: x.author_id ?? '', createdAt: x.created_at ?? '',
+    })),
+    // undefined when this user can't read Outreach (flatten then sends no settings row).
+    ...(all('outreach_settings')[0] ? { outreachSheet: all('outreach_settings')[0].sheet_url } : {}),
     // Newest first.
     payments: all('payments').sort(newest('received_on')).map((p) => ({
       id: p.id, invoiceId: p.invoice_id ?? '', clientId: p.client_id, amount: p.amount, receivedOn: p.received_on ?? '',
