@@ -7,7 +7,7 @@ import { cn } from '@/lib/cn';
 
 const STALE = 10 * 60e3;
 const NO_TAB = { 'agent tab': 'same name as the agent’s tab', reserved: 'Summary and Notes are the sync’s own tabs', duplicate: 'another mailbox has this name', 'no name': 'it has no name' };
-let autoSyncedAt = 0; // this page load's last automatic sync, so switching views doesn't repeat it
+let autoSynced = { url: '', at: 0 }; // this page load's last automatic sync (of which link), so switching views doesn't repeat it
 
 /**
  * When the sheet was last read into Cortex, and Sync now. `autoSync` (the Outreach page, live mode): sync once on
@@ -60,10 +60,11 @@ export default function SyncStatus({ autoSync = false, onSynced, reader = false,
   }, [load]);
 
   useEffect(() => {
-    if (!autoSync || !outreach.live || !status?.ok || !status.sheetUrl || Date.now() - autoSyncedAt < STALE) return;
+    if (!autoSync || !outreach.live || !status?.ok || !status.sheetUrl) return;
+    if (autoSynced.url === status.sheetUrl && Date.now() - autoSynced.at < STALE) return; // a new link syncs at once
     const last = Date.parse(status.syncedAt || '');
     if (Number.isFinite(last) && Date.now() - last < STALE) return;
-    autoSyncedAt = Date.now();
+    autoSynced = { url: status.sheetUrl, at: Date.now() };
     sync();
   }, [autoSync, outreach.live, status, sync]);
 
@@ -101,7 +102,7 @@ export default function SyncStatus({ autoSync = false, onSynced, reader = false,
   return (
     <div className={cn('flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px]', className)}>
       <span role="status" className={cn('min-w-0 break-words', warn ? 'text-amber-200' : 'dimmer')}>{line}</span>
-      <button type="button" onClick={sync} disabled={busy}
+      <button type="button" onClick={sync} disabled={busy || taking}
         className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full chip px-3.5 font-semibold disabled:cursor-not-allowed disabled:opacity-60">
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />}Sync now
       </button>

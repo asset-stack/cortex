@@ -1733,14 +1733,18 @@ function LiveProvider({ userId, children }) {
         }
       },
       flush: flushSoon,
-      // Saving the same link again makes this admin the sheet's reader (0007's protect_outreach_settings).
+      // Saving the same link again makes this admin the sheet's reader (0007's protect_outreach_settings). The link is
+      // the database's, saved only if nobody changed it meanwhile, so this never puts back an older one.
       takeOutreachSheet: async () => {
         await flushSoon();
-        const url = engine.current?.read((st) => st.outreachSheet) || '';
         try {
-          const { data, error } = await supabase.from('outreach_settings').update({ sheet_url: url }).eq('id', 1).select('id');
+          const read = await supabase.from('outreach_settings').select('sheet_url').eq('id', 1).maybeSingle();
+          if (read.error) return { ok: false, error: read.error.message };
+          const url = read.data?.sheet_url || '';
+          if (!url) return { ok: false, error: 'Add the sheet first.' };
+          const { data, error } = await supabase.from('outreach_settings').update({ sheet_url: url }).eq('id', 1).eq('sheet_url', url).select('id');
           if (error) return { ok: false, error: error.message };
-          return data?.length ? { ok: true } : { ok: false, error: 'Only an admin can do this.' };
+          return data?.length ? { ok: true } : { ok: false, error: 'The sheet link just changed. Try again.' };
         } catch (e) {
           return { ok: false, error: e?.message || 'Request failed' };
         }

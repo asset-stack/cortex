@@ -59,7 +59,7 @@ function CommitInput({ value, onCommit, hintFor, format = (t) => t, className, w
         }}
         aria-invalid={shown ? true : undefined} aria-describedby={shown ? hintId : undefined}
         className={cn('field', shown && '!border-amber-300', className)} />
-      {shown && <span id={hintId} className="text-[12px] text-amber-200">{hint}</span>}
+      <span id={hintId} aria-live="polite" className="text-[12px] text-amber-200 empty:hidden">{shown ? hint : ''}</span>
     </div>
   );
 }
@@ -71,7 +71,8 @@ function SheetLink() {
   return (
     <div className="mt-3 flex items-start gap-2">
       <CommitInput value={saved} aria-label="Google Sheet link" placeholder="https://docs.google.com/spreadsheets/d/…" wrapClass="flex-1"
-        hintFor={(t) => (t.trim() && !sheetFromUrl(t).id ? 'Not a Google Sheets link' : '')}
+        hintFor={(t) => (!t.trim() ? '' : !sheetFromUrl(t).id ? 'Not a Google Sheets link'
+          : !sheetFromUrl(t).gid ? 'Open the agent’s tab and copy its link (it ends in #gid=…)' : '')}
         onCommit={(t) => actions.setOutreachSheet(t)} />
       {href && (
         <a href={href} target="_blank" rel="noopener noreferrer" aria-label="Open the sheet" title="Open the sheet"
@@ -154,8 +155,8 @@ function AddMailbox() {
           aria-invalid={shown ? true : undefined} aria-describedby={shown ? hintId : undefined} className={cn('field', shown && '!border-amber-300')} />
         <button type="submit" disabled={!name.trim() || Boolean(nameProblem)} className="btn-primary h-10 rounded-full px-4 font-semibold">Add mailbox</button>
       </div>
-      {nameProblem && <p id={nameId} className="mt-1 text-[12px] text-amber-200">{nameProblem}</p>}
-      {shown && <p id={hintId} className="mt-1 text-[12px] text-amber-200">{hint}</p>}
+      <p id={nameId} aria-live="polite" className="mt-1 text-[12px] text-amber-200 empty:hidden">{nameProblem}</p>
+      <p id={hintId} aria-live="polite" className="mt-1 text-[12px] text-amber-200 empty:hidden">{shown ? hint : ''}</p>
     </form>
   );
 }

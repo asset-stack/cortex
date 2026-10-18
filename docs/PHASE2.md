@@ -472,9 +472,10 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
      → `google/outreach-sync`. The function checks the caller with their own JWT (`outreach_access()`: view is
      enough), reads `outreach_settings` with the secret key, and reads the sheet **as the admin who set its link**
      (`sheet_by`: their token from `private.google_accounts` through `google_token()`, only while they are an active
-     admin; otherwise the sync stops and asks another admin to set the link again), with the Sheets API (the
-     `drive` scope of §9 covers it). It reads the tab the link opens (`#gid=…`, `sheetFromUrl()`) unless that is Summary
-     or Notes, else the first tab that isn't Summary, Notes or named like a mailbox (those are Cortex's).
+     admin; otherwise the sync stops and asks another admin to click **Use my Google**), with the Sheets API (the
+     `drive` scope of §9 covers it). It reads exactly the tab the link opens (`#gid=…`, `sheetFromUrl()`; Settings
+     only takes a link with one), never a guess, so it can never mistake the agent's tab for one of its own: a link
+     with no tab, a tab that's gone, or Summary / Notes is refused (saved as `sync_error`), with nothing written.
   3. Each sheet row becomes an `outreach_emails` row, upserted with the secret key in batches. Headers are matched by
      name in any case, so column order doesn't matter:
 
@@ -504,7 +505,9 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
      all), **Notes** (`Created, Mailbox, Pinned, Author, Note`, times in Sydney; pinned first, then newest) and **one tab
      per mailbox**, titled with its name, in mailbox order: the agent's header row, then the rows Cortex saved for that
      mailbox (one per `row_key`), in the agent's order and exactly as the agent wrote them (a mailbox with none: the
-     header only; Unassigned rows are in no mailbox tab). It never writes the agent's tab, and never deletes a tab: a
+     header only; Unassigned rows are in no mailbox tab). New tabs are made big enough, and a tab too small for what it
+     holds is grown (never shrunk): the values API doesn't grow a grid. It never writes the agent's tab, and never
+     deletes a tab: a
      mailbox named like the agent's tab, Summary or Notes, or like an earlier mailbox, gets no tab (listed in
      `sync_stats.noTab`; the app refuses such names anyway), and a renamed or removed mailbox's old tab stays until
      someone deletes it.
@@ -519,7 +522,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   6. There is no lock: two syncs can overlap (two people open Outreach at once). Each stamps its rows with its start
      time and then flags the rows it didn't write as gone, so 0007's `keep_newer_sync` trigger skips an older sync's
      writes over a newer one's rows (the newer one read the sheet later): neither flags rows the other read. If both
-     add the Summary and Notes tabs, the second finds them again and carries on.
+     add Cortex's tabs, the second finds them again and carries on.
 - **When the sheet is read**: when someone opens Outreach and the last sync is more than 10 minutes old, and on **Sync
   now**. There is no cron: when nobody is looking nothing needs to be fresh, and the sheet stays the record in between
   (its Summary, Notes and mailbox tabs are as of the last sync).
