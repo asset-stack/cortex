@@ -9,7 +9,8 @@
 //   POST send     {to, subject, text, attachment?}       → {id, from}: sent from the caller's own Gmail
 //   POST contract {template, folder, name, replacements} → {id, name, url}: the template copied into the folder, filled in
 //   POST outreach-sync {}                                → {ok, stats}: the outreach agent's sheet into outreach_emails,
-//                                                          then its Summary and Notes tabs written back (docs/PHASE2.md §12)
+//                                                          then its Summary, Notes and mailbox tabs written back
+//                                                          (docs/PHASE2.md §12)
 //
 // JWT verification is OFF for this function (Google's callback carries no JWT), so it checks callers itself: the
 // caller's JWT goes to rpc google_me (admins only), or rpc outreach_access for outreach-sync (anyone who can see
@@ -59,6 +60,9 @@ const NOT_FOUND = 'Template or folder not found, or not shared with your Google 
 const NO_OUTREACH = 'You don’t have access to Outreach.';
 const NO_SHEET = 'Add the outreach sheet in Settings → Outreach.';
 const NO_SHEET_BY = 'Ask an admin to click Use my Google in Settings → Outreach.';
+const NO_GID = 'Paste the link of the agent’s tab in Settings → Outreach (open the tab, then copy the address: it ends in #gid=…).';
+const GID_GONE = 'The tab in the outreach sheet link isn’t in the sheet any more. Paste the agent’s tab link in Settings → Outreach.';
+const gidOurs = (title) => `The outreach sheet link opens Cortex’s ${title} tab. Paste the agent’s tab link in Settings → Outreach.`;
 const SYNC_FAILED = 'Something went wrong with Google. Try again.';
 
 const str = (v) => String(v ?? '').trim();
@@ -629,7 +633,7 @@ const KNOWN_HEADERS = new Set([
   ...Object.keys(SHEET_TEXT), ...Object.keys(SHEET_DATES), ...SENDER_HEADERS, ...ID_HEADERS, 'followup_stage', 'bounced',
 ]);
 const YES = new Set(['yes', 'y', 'true', '1']);
-const OWN_TABS = ['Summary', 'Notes']; // written by the sync, never read as the agent's rows
+const OWN_TABS = ['Summary', 'Notes']; // written by the sync (as are the mailbox tabs), never read as the agent's rows
 const SUMMARY_HEAD = ['Date', 'Mailbox', 'Sent', 'Replies', 'Reply rate', 'Bounces', 'Meetings'];
 const NOTES_HEAD = ['Created', 'Mailbox', 'Pinned', 'Author', 'Note'];
 const TEAM_TIMEZONE = 'Australia/Sydney'; // as src/lib/format.js
@@ -679,7 +683,8 @@ const followupStage = (value) => {
  * (lower case, the date as YYYY-MM-DD or '' when it can't be read). Not the Gmail ids: one email often goes to two
  * contacts at an organisation (two rows, the same ids), and the ids only appear as a row goes from logged to drafted to
  * sent. Rows with no email, organisation or name are skipped; of two rows with the same key the later one wins.
- * → { rows, duplicates, skipped, known (row 1 has at least one of the agent's columns) }
+ * → { rows, duplicates, skipped, known (row 1 has at least one of the agent's columns), head (row 1 as read), cells
+ * (each kept row's cells as read, untrimmed: cells[i] is rows[i]'s, for the mailbox tabs) }
  */
 export function sheetRows(values) {
   const [head, ...body] = Array.isArray(values) && values.length ? values : [[]];
@@ -689,11 +694,12 @@ export function sheetRows(values) {
     const k = h.toLowerCase();
     if (k && !col.has(k)) col.set(k, i);
   });
-  const byKey = new Map();
+  const byKey = new Map(); // row_key → [row, its cells as read]
   let duplicates = 0;
   let skipped = 0;
   for (const line of body) {
-    const cells = (Array.isArray(line) ? line : []).map(str);
+    const read = Array.isArray(line) ? line : [];
+    const cells = read.map(str);
     if (!cells.some(Boolean)) continue;
     const get = (h) => (col.has(h) ? cells[col.get(h)] || '' : '');
     const row = { row_key: '', sender: senderAddress(SENDER_HEADERS.map(get).find(Boolean)) };
@@ -718,9 +724,54 @@ export function sheetRows(values) {
       duplicates++;
       byKey.delete(row.row_key);
     }
-    byKey.set(row.row_key, row);
+    byKey.set(row.row_key, [row, read]);
   }
-  return { rows: [...byKey.values()], duplicates, skipped, known: headers.some((h) => KNOWN_HEADERS.has(h.toLowerCase())) };
+  const kept = [...byKey.values()];
+  return {
+    rows: kept.map(([row]) => row), duplicates, skipped, known: headers.some((h) => KNOWN_HEADERS.has(h.toLowerCase())),
+    head: Array.isArray(head) ? head : [], cells: kept.map(([, read]) => read),
+  };
+}
+
+// A tab title as Google compares them (it refuses "summary" next to "Summary"); trimmed, as the mailbox names are.
+const tabKey = (title) => str(title).toLowerCase();
+
+/**
+ * The mailbox tabs: one per mailbox (all of them, active or not, in their order), titled with its trimmed name: the
+ * agent's row 1 as read, then the rows Cortex saved for that mailbox (one per row_key), in the agent's order and
+ * exactly as the agent wrote them (padded with '' to row 1's width). `parsed` is sheetRows()'s result and `rows` its
+ * rows with mailbox_id (mailboxIdFor()), so Unassigned rows are in no tab. A mailbox named like the agent's tab
+ * (`agentTab`), like Summary or Notes, or like an earlier mailbox, or with no name, gets no tab, so the sync never
+ * writes over the agent's tab or over another of its own.
+ * → { tabs: [{ title, values }], noTab: [{ mailbox (its name), why: 'agent tab' | 'reserved' | 'duplicate' | 'no name' }] }
+ */
+export function mailboxTabs(parsed, rows, mailboxes, agentTab) {
+  const head = Array.isArray(parsed?.head) ? parsed.head : [];
+  const lines = new Map(); // mailbox id → its rows' cells, padded
+  (rows || []).forEach((r, i) => {
+    if (!r?.mailbox_id) return;
+    const read = parsed?.cells?.[i] || [];
+    if (!lines.has(r.mailbox_id)) lines.set(r.mailbox_id, []);
+    lines.get(r.mailbox_id).push(Array.from({ length: Math.max(head.length, read.length) }, (_, j) => read[j] ?? ''));
+  });
+  const tabs = [];
+  const noTab = [];
+  const taken = new Set();
+  for (const m of mailboxes || []) {
+    const title = str(m?.name);
+    const key = tabKey(title);
+    const why = !title ? 'no name'
+      : key === tabKey(agentTab) ? 'agent tab'
+        : OWN_TABS.some((t) => tabKey(t) === key) ? 'reserved'
+          : taken.has(key) ? 'duplicate' : '';
+    if (why) {
+      noTab.push({ mailbox: title, why });
+      continue;
+    }
+    taken.add(key);
+    tabs.push({ title, values: [[...head], ...((m.id && lines.get(m.id)) || [])] });
+  }
+  return { tabs, noTab };
 }
 
 /** The mailbox that sends as `sender` (its id), or null (Unassigned). As mailboxFor() in src/lib/outreach.js. */
@@ -830,8 +881,11 @@ async function rest(cfg, fetch, path, { method = 'GET', body, prefer = '' } = {}
   return data;
 }
 
-// The sheet → outreach_emails (rows no longer in it keep their data, with in_sheet false) → the Summary and Notes tabs
-// → outreach_settings (synced_at, sync_stats). A failure once a link and its admin are set is saved as sync_error.
+// The sheet → outreach_emails (rows no longer in it keep their data, with in_sheet false) → Cortex's tabs in the same
+// spreadsheet: Summary, Notes and one tab per mailbox (titled with its name: the agent's header row and that mailbox's
+// rows as saved, see mailboxTabs()) → outreach_settings (synced_at, sync_stats). The agents keep writing their one
+// shared tab; the sync never writes it (a mailbox named like it gets no tab) and never deletes a tab (a renamed or
+// removed mailbox's old tab stays). A failure once a link and its admin are set is saved as sync_error.
 // There is no lock: two syncs can overlap (two people open Outreach at once). 0007's keep_newer_sync trigger skips an
 // older sync's writes over a newer one's rows, so neither flags rows the other read as gone; the results are saved
 // only when no newer sync has saved its own; and tabs the other one just added are found again.
@@ -847,6 +901,7 @@ async function outreachSync(cfg, fetch) {
   try {
     const sheet = sheetFromUrl(set.sheet_url);
     if (!sheet.id) throw new HttpError(400, 'The outreach sheet isn’t a Google Sheets link. Check it in Settings → Outreach.');
+    if (!sheet.gid) throw new HttpError(400, NO_GID); // the agent's tab is the link's tab, never a guess (below)
 
     // The admin who set the link: the sheet is read and written with their Google account, while they are an active admin.
     const found = await db(`profiles?id=eq.${encodeURIComponent(set.sheet_by)}&select=name,active,role`, {},
@@ -880,13 +935,21 @@ async function outreachSync(cfg, fetch) {
     const unshared = `The outreach sheet wasn’t found or isn’t shared with ${whom}.`;
     const readOnly = `${Who} can’t edit the outreach sheet.`;
 
-    // The agent's tab: the one in the link, else the first that isn't Summary or Notes.
-    const meta = await sheets(`${base}?fields=sheets.properties`, { method: 'GET' }, { notFound: unshared, forbidden: unshared });
-    const tabs = (Array.isArray(meta.sheets) ? meta.sheets : []).map((s) => s?.properties).filter((p) => p && typeof p.title === 'string');
-    const tabNamed = (title) => tabs.find((p) => p.title.trim().toLowerCase() === title.toLowerCase());
-    const own = (p) => OWN_TABS.some((t) => tabNamed(t) === p);
-    const tab = (sheet.gid && tabs.find((p) => String(p.sheetId) === sheet.gid && !own(p))) || tabs.find((p) => !own(p));
-    if (!tab) throw new HttpError(400, 'The outreach sheet has no tab to read.');
+    const readTabs = async () => {
+      const meta = await sheets(`${base}?fields=sheets.properties`, { method: 'GET' }, { notFound: unshared, forbidden: unshared });
+      return (Array.isArray(meta?.sheets) ? meta.sheets : []).map((s) => s?.properties).filter((p) => p && typeof p.title === 'string');
+    };
+    let tabs = await readTabs(); // { sheetId, title, gridProperties: { rowCount, columnCount }, … }
+    const tabNamed = (title) => tabs.find((p) => tabKey(p.title) === tabKey(title));
+
+    // The agent's tab is the link's tab (its gid), never a guess: the sync rewrites Summary, Notes and every tab titled
+    // like a mailbox, so "the first other tab" could take one of Cortex's tabs for the agent's, or the agent's tab for
+    // one of Cortex's (a mailbox named like it) and write over it. No gid → refused above; a gid that is gone, or that
+    // is Summary or Notes → refused here. A gid on a mailbox-named tab is fine: that tab is read, and that mailbox gets
+    // no tab (mailboxTabs()), so it is never written.
+    const tab = tabs.find((p) => String(p.sheetId) === sheet.gid);
+    if (!tab) throw new HttpError(400, GID_GONE);
+    if (OWN_TABS.some((t) => tabKey(t) === tabKey(tab.title))) throw new HttpError(400, gidOurs(str(tab.title)));
     const read = await sheets(`${base}/values/${encodeURIComponent(`${quoteTab(tab.title)}!A1:AZ`)}`, { method: 'GET' },
       { notFound: unshared, forbidden: unshared });
     const parsed = sheetRows(read.values);
@@ -905,20 +968,12 @@ async function outreachSync(cfg, fetch) {
       method: 'PATCH', body: { in_sheet: false }, prefer: 'return=representation',
     }, 'Could not update the outreach emails.');
 
-    // Write back: Summary and Notes (added when missing), cleared and rewritten as plain values.
-    const missingTabs = OWN_TABS.filter((t) => !tabNamed(t));
-    if (missingTabs.length) {
-      try {
-        await sheets(`${base}:batchUpdate`, {
-          method: 'POST', body: JSON.stringify({ requests: missingTabs.map((title) => ({ addSheet: { properties: { title } } })) }),
-        }, { forbidden: readOnly });
-      } catch (e) {
-        // Another sync running at the same time may have just added them: carry on if they're there now.
-        const again = await sheets(`${base}?fields=sheets.properties`, { method: 'GET' }, { notFound: unshared, forbidden: unshared });
-        const titles = (Array.isArray(again.sheets) ? again.sheets : []).map((x) => str(x?.properties?.title).trim().toLowerCase());
-        if (!missingTabs.every((t) => titles.includes(t.toLowerCase()))) throw e;
-      }
-    }
+    // Write back: Summary, Notes and the mailbox tabs, in three requests however many mailboxes there are. First one
+    // batchUpdate (only when needed) adds the missing tabs and grows the ones too small: Google never grows a grid on a
+    // values write ("exceeds grid limits"), and a mailbox tab is as wide as the agent's (~35 columns, a new tab has
+    // 26) while Summary passes 1,000 rows within a year. Then all of them are cleared in one request and rewritten in
+    // one, as plain values (RAW: a cell starting with "=" stays text). An existing tab keeps its own title (any case).
+    const boxTabs = mailboxTabs(parsed, rows, boxes, tab.title);
     const notes = await db('outreach_notes?select=mailbox_id,pinned,body,author_id,created_at', {}, 'Could not read the outreach notes.');
     const noteList = Array.isArray(notes) ? notes : [];
     const authors = [...new Set(noteList.map((n) => str(n.author_id)).filter(Boolean))];
@@ -926,13 +981,36 @@ async function outreachSync(cfg, fetch) {
       ? await db(`profiles?select=id,name&id=in.(${authors.map(encodeURIComponent).join(',')})`, {}, 'Could not read the note authors.')
       : [];
     const names = Object.fromEntries((Array.isArray(people) ? people : []).map((p) => [p.id, str(p.name)]));
-    for (const [title, values] of [['Summary', summaryValues(rows, boxes)], ['Notes', notesValues(noteList, boxes, names)]]) {
-      const range = quoteTab(tabNamed(title)?.title ?? title);
-      await sheets(`${base}/values/${encodeURIComponent(range)}:clear`, { method: 'POST', body: '{}' }, { forbidden: readOnly });
-      await sheets(`${base}/values/${encodeURIComponent(`${range}!A1`)}?valueInputOption=RAW`, {
-        method: 'PUT', body: JSON.stringify({ majorDimension: 'ROWS', values }),
-      }, { forbidden: readOnly });
+    const writes = [
+      ['Summary', summaryValues(rows, boxes)], ['Notes', notesValues(noteList, boxes, names)], ...boxTabs.tabs.map((t) => [t.title, t.values]),
+    ].map(([title, values]) => ({ title, values, ...gridNeeded(values) }));
+    const sizeRequests = () => writes.flatMap((w) => {
+      const p = tabNamed(w.title);
+      if (!p) return [{ addSheet: { properties: { title: w.title, gridProperties: grownGrid(NEW_TAB_GRID, w) } } }];
+      if (gridFits(p, w)) return [];
+      return [{ updateSheetProperties: { properties: { sheetId: p.sheetId, gridProperties: grownGrid(p.gridProperties, w) }, fields: GRID_FIELDS } }];
+    });
+    const requests = sizeRequests();
+    if (requests.length) {
+      try {
+        await sheets(`${base}:batchUpdate`, { method: 'POST', body: JSON.stringify({ requests }) }, { forbidden: readOnly });
+      } catch (e) {
+        // Another sync running at the same time may have just added or grown them: carry on if they all are now.
+        tabs = await readTabs();
+        if (sizeRequests().length) throw e;
+      }
     }
+    const targets = writes.map((w) => ({ ...w, title: tabNamed(w.title)?.title ?? w.title }));
+    await sheets(`${base}/values:batchClear`, {
+      method: 'POST', body: JSON.stringify({ ranges: targets.map((w) => quoteTab(w.title)) }),
+    }, { forbidden: readOnly });
+    await sheets(`${base}/values:batchUpdate`, {
+      method: 'POST',
+      body: JSON.stringify({
+        valueInputOption: 'RAW',
+        data: targets.map((w) => ({ range: `${quoteTab(w.title)}!A1`, majorDimension: 'ROWS', values: w.values })),
+      }),
+    }, { forbidden: readOnly });
 
     // Stats: sent, replies, bounced and meetings are emails, as on the Summary (all time); contacts = rows sent to.
     const emails = outreachEmailGroups(rows);
@@ -948,6 +1026,8 @@ async function outreachSync(cfg, fetch) {
       skipped: parsed.skipped,
       missing: Array.isArray(gone) ? gone.length : 0,
       tab: tab.title,
+      tabs: targets.slice(OWN_TABS.length).map((w) => w.title), // the mailbox tabs written, in mailbox order
+      noTab: boxTabs.noTab, // [{ mailbox, why }]: the mailboxes that got no tab
     };
     // Unless a newer sync has already saved its results.
     await db(`outreach_settings?id=eq.1&or=(synced_at.is.null,synced_at.lt.${encodeURIComponent(start)})`, {
