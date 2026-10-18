@@ -582,8 +582,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
     or `{ ok: false, error }`. Pure helpers in `src/lib/outreach.js` (also `parseAddresses`, `mailboxFor`,
     `gmailThreadUrl`, `sheetFromUrl`, `periodRange`, `daysBetween`, `filterEmails`).
   - Demo seed: mailboxes David, Josh and Sarah (`david@` / `josh@` / `sarah@example.com`; Sarah has no Cortex user),
-    about 215 rows over the last 12 working days and two notes (one pinned); `migrate()` adds them to older saved demo
-    data.
+    about 240 contact rows over the last 12 working days (some emails to two contacts; a contact at most once a day)
+    and two notes (one pinned); `migrate()` adds them to older saved demo data.
 - **Screens**: **Outreach** has two views, **Emails** and **Contacts**. Emails: a mailbox picker (All, each mailbox,
   and Unassigned when there are such rows) and a period (7, 30 or 90 days); emails sent per day, then Sent, Replies,
   Reply rate, Bounces, Meetings and Opens (*Not tracked*), the breakdown, the emails (each links to its Gmail thread in
