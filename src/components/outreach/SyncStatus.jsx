@@ -6,6 +6,7 @@ import { ago } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
 const STALE = 10 * 60e3;
+const NO_TAB = { 'agent tab': 'same name as the agent’s tab', reserved: 'Summary and Notes are the sync’s own tabs', duplicate: 'another mailbox has this name', 'no name': 'it has no name' };
 let autoSyncedAt = 0; // this page load's last automatic sync, so switching views doesn't repeat it
 
 /**
@@ -79,6 +80,8 @@ export default function SyncStatus({ autoSync = false, onSynced, reader = false,
     sync();
   };
   const readerName = status?.sheetBy ? state.users.find((u) => u.id === status.sheetBy)?.name || '' : '';
+  // Mailboxes the last sync couldn't give a tab in the sheet (sync_stats.noTab), and why.
+  const noTab = reader && Array.isArray(status?.stats?.noTab) ? status.stats.noTab : [];
   const showReader = reader && outreach.live && isAdmin && status?.ok && Boolean(status.sheetUrl);
 
   let line;
@@ -102,6 +105,11 @@ export default function SyncStatus({ autoSync = false, onSynced, reader = false,
         className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full chip px-3.5 font-semibold disabled:cursor-not-allowed disabled:opacity-60">
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />}Sync now
       </button>
+      {noTab.length > 0 && (
+        <span className="basis-full text-amber-200">
+          {noTab.map((x) => `No tab for ${x.mailbox || 'a mailbox without a name'}: ${NO_TAB[x.why] || 'name not usable'}`).join(' · ')}
+        </span>
+      )}
       {showReader && (
         <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           {readerName && <span className="dimmer">Reads as {readerName}</span>}

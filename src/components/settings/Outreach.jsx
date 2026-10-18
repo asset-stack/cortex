@@ -15,6 +15,13 @@ function badAddress(text) {
   return String(text || '').split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean).find((x) => !parseAddresses(x).length) || '';
 }
 const addressHint = (text) => (badAddress(text) ? `Not an email address: ${badAddress(text)}` : '');
+// A mailbox's name is its tab in the sheet: unique, and not the sync's Summary or Notes (the store refuses those too).
+const nameHint = (mailboxes, id = '') => (text) => {
+  const n = String(text || '').trim().toLowerCase();
+  if (n === 'summary' || n === 'notes') return 'The sheet’s Summary and Notes tabs use this name';
+  if (n && mailboxes.some((m) => m.id !== id && String(m.name).trim().toLowerCase() === n)) return 'Another mailbox has this name';
+  return '';
+};
 
 /**
  * A text input that saves when you leave it or press Enter (Escape puts the saved value back). Only what you typed is
@@ -95,7 +102,7 @@ function MailboxRow({ mailbox: m, index, count, mailboxes }) {
       <div className="flex items-start gap-2">
         <span aria-hidden="true" className="mt-[15px] h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: mailboxColor(mailboxes, m.id) }} />
         <CommitInput value={m.name} aria-label={`Name of ${name}`} wrapClass="flex-1" className={cn('font-semibold', !active && 'opacity-60')}
-          onCommit={(t) => (t ? actions.updateMailbox(m.id, { name: t }) : false)} />
+          hintFor={nameHint(mailboxes, m.id)} onCommit={(t) => (t ? actions.updateMailbox(m.id, { name: t }) : false)} />
         <span className="flex shrink-0 items-center pt-1">
           <button type="button" onClick={() => actions.moveMailbox(m.id, -1)} disabled={index === 0} aria-label={`Move ${name} up`} title="Move up" className={SMALL_BUTTON}><ArrowUp className="h-4 w-4" /></button>
           <button type="button" onClick={() => actions.moveMailbox(m.id, 1)} disabled={index === count - 1} aria-label={`Move ${name} down`} title="Move down" className={SMALL_BUTTON}><ArrowDown className="h-4 w-4" /></button>
@@ -118,17 +125,19 @@ function MailboxRow({ mailbox: m, index, count, mailboxes }) {
 }
 
 function AddMailbox() {
-  const { actions } = useStore();
+  const { state, actions } = useStore();
   const [name, setName] = useState('');
   const [addresses, setAddresses] = useState('');
   const [touched, setTouched] = useState(false); // the addresses' hint shows once you leave the field
   const hintId = useId();
+  const nameId = useId();
+  const nameProblem = nameHint(state.mailboxes || [])(name);
   const hint = addressHint(addresses);
   const shown = touched && hint;
   const submit = (e) => {
     e.preventDefault();
     if (hint) setTouched(true);
-    if (!name.trim() || hint) return;
+    if (!name.trim() || nameProblem || hint) return;
     if (actions.addMailbox({ name: name.trim(), addresses: parseAddresses(addresses) }) === false) return;
     setName('');
     setAddresses('');
@@ -137,12 +146,15 @@ function AddMailbox() {
   return (
     <form onSubmit={submit} className="border-t rowline px-3 py-3 sm:px-4">
       <div className="grid gap-2 sm:grid-cols-[180px_minmax(0,1fr)_auto]">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" aria-label="New mailbox name" autoComplete="off" className="field" />
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" aria-label="New mailbox name" autoComplete="off"
+          aria-invalid={nameProblem ? true : undefined} aria-describedby={nameProblem ? nameId : undefined}
+          className={cn('field', nameProblem && '!border-amber-300')} />
         <input value={addresses} onChange={(e) => setAddresses(e.target.value)} onBlur={() => setTouched(true)} placeholder="Addresses"
           aria-label="New mailbox addresses" autoComplete="off" inputMode="email" spellCheck={false}
           aria-invalid={shown ? true : undefined} aria-describedby={shown ? hintId : undefined} className={cn('field', shown && '!border-amber-300')} />
-        <button type="submit" disabled={!name.trim()} className="btn-primary h-10 rounded-full px-4 font-semibold">Add mailbox</button>
+        <button type="submit" disabled={!name.trim() || Boolean(nameProblem)} className="btn-primary h-10 rounded-full px-4 font-semibold">Add mailbox</button>
       </div>
+      {nameProblem && <p id={nameId} className="mt-1 text-[12px] text-amber-200">{nameProblem}</p>}
       {shown && <p id={hintId} className="mt-1 text-[12px] text-amber-200">{hint}</p>}
     </form>
   );

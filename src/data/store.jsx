@@ -96,6 +96,12 @@ const readDataUrl = (file) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
+// A mailbox name the sheet can't have as a tab: empty, Summary / Notes (the sync's own tabs), or another mailbox's.
+function mailboxNameTaken(d, name, id = '') {
+  const n = String(name ?? '').trim().toLowerCase();
+  return !n || n === 'summary' || n === 'notes' || (d.mailboxes || []).some((m) => m.id !== id && String(m.name).trim().toLowerCase() === n);
+}
+
 // Another channel, one this user can't see, has the name: the next -2, -3 … instead.
 function nextChannelName(d, name) {
   const m = String(name).match(/^(.*)-(\d{1,2})$/);
@@ -588,10 +594,11 @@ function createActions(mutate, mode) {
 
     // ── Outreach (0007): mailboxes and the sheet are the admins'; notes need Outreach edit (author or admin to change) ──
 
-    // → id
+    // → id. A mailbox's name is also its tab in the sheet (the sync writes one per mailbox): unique, and not the sheet's
+    // Summary or Notes.
     addMailbox: (fields = {}) => admin((d) => {
       const name = textOf(fields.name).trim();
-      if (!name) return false;
+      if (mailboxNameTaken(d, name)) return false;
       const m = { id: uid(), name, addresses: parseAddresses(fields.addresses), owner: userExists(d, fields.owner) ? fields.owner : '', active: true };
       (d.mailboxes ||= []).push(m);
       return m.id;
@@ -599,7 +606,7 @@ function createActions(mutate, mode) {
     updateMailbox: (id, patch = {}) => admin((d) => {
       const m = (d.mailboxes || []).find((x) => x.id === id);
       if (!m) return false;
-      if ('name' in patch) { const name = textOf(patch.name).trim(); if (!name) return false; m.name = name; }
+      if ('name' in patch) { const name = textOf(patch.name).trim(); if (mailboxNameTaken(d, name, id)) return false; m.name = name; }
       if ('addresses' in patch) m.addresses = parseAddresses(patch.addresses);
       if ('owner' in patch) m.owner = userExists(d, patch.owner) ? patch.owner : '';
       if ('active' in patch) m.active = patch.active !== false;

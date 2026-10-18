@@ -455,8 +455,9 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   outreach mailboxes, one person each (today only David's sends). Each mailbox is its own data set; *All* adds them
   up. The top line is emails sent per day; then sent, replies, reply rate, opens (*Not tracked* for now, see *Opens*),
   bounces and meetings, and notes for what the team knows (the outreach strategy that works). Everything also stays in
-  the agent's Google Sheet for hard reference, where Cortex keeps a **Summary** and a **Notes** tab. Cortex never sends
-  outreach email and never changes the agent's rows.
+  the agent's Google Sheet for hard reference, where Cortex keeps a **Summary** and a **Notes** tab and a tab per mailbox
+  (David, Josh, Sarah: that mailbox's rows). The agents keep writing one shared tab, so they dedupe prospects across
+  mailboxes. Cortex never sends outreach email and never changes the agent's rows.
 - **Data flow**:
   1. The agent keeps its own sheet (*Email Outbound Tracker*): **one tab** shared by every mailbox (so the agent's
      checks dedupe prospects across mailboxes), one row per prospect, headers in row 1: `date_logged, vertical,
@@ -472,8 +473,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
      enough), reads `outreach_settings` with the secret key, and reads the sheet **as the admin who set its link**
      (`sheet_by`: their token from `private.google_accounts` through `google_token()`, only while they are an active
      admin; otherwise the sync stops and asks another admin to set the link again), with the Sheets API (the
-     `drive` scope of §9 covers it). It reads the tab the link opens (`#gid=…`, `sheetFromUrl()`), else the first tab
-     that isn't Summary or Notes.
+     `drive` scope of §9 covers it). It reads the tab the link opens (`#gid=…`, `sheetFromUrl()`) unless that is Summary
+     or Notes, else the first tab that isn't Summary, Notes or named like a mailbox (those are Cortex's).
   3. Each sheet row becomes an `outreach_emails` row, upserted with the secret key in batches. Headers are matched by
      name in any case, so column order doesn't matter:
 
@@ -497,13 +498,19 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
      Every sync works it out again, so adding an address to a mailbox moves its rows at the next sync. A row this sync
      didn't write (gone from the sheet) keeps its data, with `in_sheet` false. A tab whose row 1 has none of these
      headers is refused.
-  4. It writes two tabs back into the same spreadsheet, found by name (any case) and added when missing, each cleared
+  4. It writes its tabs back into the same spreadsheet, found by name (any case) and added when missing, each cleared
      and rewritten as plain values: **Summary** (`Date, Mailbox, Sent, Replies, Reply rate, Bounces, Meetings`, one row
      per day and mailbox, newest day first, by the rules under *Numbers*; then the all-time totals per mailbox and for
-     all) and **Notes** (`Created, Mailbox, Pinned, Author, Note`, times in Sydney; pinned first, then newest). It never
-     writes the agent's tab.
+     all), **Notes** (`Created, Mailbox, Pinned, Author, Note`, times in Sydney; pinned first, then newest) and **one tab
+     per mailbox**, titled with its name, in mailbox order: the agent's header row, then the rows Cortex saved for that
+     mailbox (one per `row_key`), in the agent's order and exactly as the agent wrote them (a mailbox with none: the
+     header only; Unassigned rows are in no mailbox tab). It never writes the agent's tab, and never deletes a tab: a
+     mailbox named like the agent's tab, Summary or Notes, or like an earlier mailbox, gets no tab (listed in
+     `sync_stats.noTab`; the app refuses such names anyway), and a renamed or removed mailbox's old tab stays until
+     someone deletes it.
   5. It records `synced_at`, `sync_error` (cleared when it works) and `sync_stats` (`{ rows, contacts, sent, replies,
-     bounced, meetings, unassigned, duplicates, skipped, missing, tab }`, all time; `contacts` = rows with a sent date,
+     bounced, meetings, unassigned, duplicates, skipped, missing, tab, tabs, noTab }`, all time; `tab` = the agent's tab,
+     `tabs` = the mailbox tabs written, `noTab` = `[{ mailbox, why }]`; `contacts` = rows with a sent date,
      the rest counted as under *Numbers*) in `outreach_settings` and returns
      `{ ok, stats }`, unless a newer sync has saved its results meanwhile. A failure once a link and its admin are set
      (that admin no longer an active admin, their Google not connected or without access to the sheet, the Sheets API
@@ -515,7 +522,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
      add the Summary and Notes tabs, the second finds them again and carries on.
 - **When the sheet is read**: when someone opens Outreach and the last sync is more than 10 minutes old, and on **Sync
   now**. There is no cron: when nobody is looking nothing needs to be fresh, and the sheet stays the record in between
-  (its Summary and Notes tabs are as of the last sync).
+  (its Summary, Notes and mailbox tabs are as of the last sync).
 - **Numbers** (one rule set: SQL `outreach_daily()` / `outreach_breakdown()` ⇄ JS `outreachDaily()` /
   `outreachBreakdown()` / `outreachTotals()` in `src/lib/outreach.js`, and the Summary tab's `summaryValues()` in the
   function; change them together). They count **emails, not people**: rows are grouped by their Gmail message

@@ -404,8 +404,8 @@ revoke it at Google too: <https://myaccount.google.com/connections>. When someon
 
 **Outreach** shows the cold email the outreach agent (a separate Claude agent, outside Cortex) sends from each outreach
 mailbox. The agent logs every prospect in its own Google Sheet. Cortex reads that sheet into the database through the
-`google` Edge Function, **with the Google account of the admin who linked it**, and writes a **Summary** and a **Notes**
-tab back into it. Cortex never sends outreach email and never changes the agent's rows. This needs section 11 steps
+`google` Edge Function, **with the Google account of the admin who linked it**, and writes a **Summary** tab, a
+**Notes** tab and **a tab per mailbox** (named after it: that mailbox's rows) back into it. Cortex never sends outreach email and never changes the agent's rows. This needs section 11 steps
 1–3 done and that admin's Google connected (11.5). Contract: `docs/PHASE2.md` §12.
 
 1. **Database**: run `0007_outreach.sql` (section 2, *0007 on an existing database*).
@@ -424,30 +424,33 @@ tab back into it. Cortex never sends outreach email and never changes the agent'
    - Fill `sender` for the existing rows with the address each row was sent from, for example
      `name@your-outreach-domain`, or `name@your-old-domain` for rows from before a domain change. Rows left blank show
      as **Unassigned**.
-   - Share the sheet as **Editor** with the admin who will link it in step 6 (Cortex writes the Summary and Notes
-     tabs), or keep it in a shared drive they belong to.
+   - Share the sheet as **Editor** with the admin who will link it in step 6 (Cortex writes the Summary, Notes and
+     mailbox tabs), or keep it in a shared drive they belong to.
 6. **Cortex** → **Settings** → **Outreach** (admins):
    - **Sheet**: open the agent's tab, copy the link from the address bar (it ends in `#gid=…`, which picks the tab)
      and paste it. Whoever pastes it must have connected Google (**Settings** → **Business**) with an account that can
      edit the sheet: every sync reads it as them, whoever clicks **Sync now**.
    - **Mailboxes**: add the three mailboxes, each with a name, its person (if they use Cortex) and **every address it
      has sent from**, for example both `name@your-old-domain` and `name@your-outreach-domain`. Each mailbox is its own
-     data set; an address belongs to one mailbox.
-   - Open **Outreach** → **Sync now**. The numbers should match the sheet, and the sheet gains **Summary** and **Notes**
-     tabs.
+     data set; an address belongs to one mailbox. The name is also its tab in the sheet (David, Josh, Sarah), so it
+     can't be Summary, Notes or another mailbox's name, and shouldn't be the agent's tab's name (that one gets no tab).
+   - Open **Outreach** → **Sync now**. The numbers should match the sheet, and the sheet gains **Summary**, **Notes**
+     and one tab per mailbox.
 7. **The agent's instructions** (wherever the outreach agent's prompt or skill lives):
    - Fill `sender` on **every** row it logs (sent, draft or skipped) with the address of the mailbox it is working
      for, exactly as listed in **Settings** → **Outreach**.
    - Keep **one tab shared by all mailboxes**, so its checks dedupe prospects across mailboxes (nobody is emailed from
      two), and keep the header names.
-   - Don't edit, rename or delete the **Summary** and **Notes** tabs: Cortex rewrites them on every sync. Notes are
-     written in Cortex.
+   - Don't write in the **Summary**, **Notes** or mailbox tabs (David, Josh, Sarah): Cortex rewrites them on every
+     sync. Log only in the shared tab. Notes are written in Cortex.
 8. **Access**: admins see Outreach. Staff start with None; the SuperAdmin gives someone **View** (the dashboard, the
    emails and the notes, and **Sync now**) or **Edit** (also writing notes) in **Settings** → **Team**.
 
 **Using it**
 - Outreach reads the sheet when someone opens it and the last sync is more than 10 minutes old, and on **Sync now**.
-  There is no schedule, so the sheet's **Summary** and **Notes** tabs are as of the last time someone did.
+  There is no schedule, so the sheet's **Summary**, **Notes** and mailbox tabs are as of the last time someone did.
+- Renaming a mailbox in Cortex gives it a new tab at the next sync; the old one stays (Cortex never deletes tabs):
+  delete it.
 - Each email links to its Gmail thread in the mailbox it was sent from; you need to be signed in to that mailbox in the
   browser to open it.
 - Opens show *Not tracked*: the agent's emails carry no tracking image, which would hurt deliverability on the new
@@ -502,7 +505,8 @@ tab back into it. Cortex never sends outreach email and never changes the agent'
 | "… needs to connect Google in Settings → Business." or "… needs to reconnect Google …" | The named admin (who linked the sheet) has no working Google connection. They connect it in **Settings** → **Business**, or another admin clicks **Use my Google** in **Settings** → **Outreach**. |
 | **Use my Google**: "Connect Google in Settings → Business first." | Connect your own Google account there, then click it again. |
 | "The outreach sheet wasn't found or isn't shared with …" | The named admin's Google account can't open the sheet, or the link is wrong. Share the sheet with them as **Editor** (12.5), or paste the right link. |
-| "… can't edit the outreach sheet." | The named admin can read the sheet but not write the Summary and Notes tabs. Make them **Editor** on it. |
+| "… can't edit the outreach sheet." | The named admin can read the sheet but not write Cortex's tabs (Summary, Notes, mailbox tabs). Make them **Editor** on it. |
+| A mailbox has no tab in the sheet | Its name is the agent's tab's name (or Summary, Notes, or another mailbox's). Rename the mailbox in **Settings** → **Outreach**, then **Sync now**. |
 | "The outreach sheet isn't a Google Sheets link." | Paste the sheet's own link (`docs.google.com/spreadsheets/d/…`) in **Settings** → **Outreach**. |
 | "The "…" tab has no outreach columns in row 1." | The link opens another tab, or the agent's headers were renamed. Paste the link of the agent's tab, or put the headers back (`docs/PHASE2.md` §12). |
 | **Sync now** fails mentioning the Google Sheets API | It isn't enabled in the Google Cloud project (section 12.2). Enable it, wait a few minutes and sync again. |
@@ -510,6 +514,6 @@ tab back into it. Cortex never sends outreach email and never changes the agent'
 | Rows show under **Unassigned** | Their `sender` is blank or an address no mailbox lists. Add the address to its mailbox in **Settings** → **Outreach** (or fill `sender` in the sheet), then **Sync now**. |
 | Outreach's numbers differ from the sheet | Cortex shows the last sync (its time is on the page): **Sync now**. Then check the rules: Cortex counts **emails, not rows**: rows with the same `sent_message_id` (one email to two people at an organisation) count once. An email counts as sent on its first `sent_date`, a reply on its first `reply_date` (with a `reply_status`), a meeting on its first `meeting_booked_date`; a row with no `sent_date` isn't sent. Dates must be `YYYY-MM-DD` (or `D/M/YYYY`). |
 | One field is blank on every email (no sent dates, no replies, …) | A header in row 1 of the agent's tab was renamed. Put back the name Cortex expects (`docs/PHASE2.md` §12), then **Sync now**. |
-| A sync reads the wrong tab after the agent's tab was re-created | Cortex reads the tab the link opens (`#gid=…`; renaming or moving it is fine), else the first tab that isn't Summary or Notes. A re-created tab is a new one: open it, copy its link and paste it in **Settings** → **Outreach**. |
-| The sheet's **Summary** or **Notes** is out of date, or a renamed copy stopped updating | They change only when someone opens Outreach or clicks **Sync now**. Cortex writes the tabs named **Summary** and **Notes** and adds them when missing, so a renamed copy is left behind: delete it. |
+| A sync reads the wrong tab after the agent's tab was re-created | Cortex reads the tab the link opens (`#gid=…`; renaming or moving it is fine), else the first tab that isn't Summary, Notes or a mailbox's. A re-created tab is a new one: open it, copy its link and paste it in **Settings** → **Outreach**. |
+| The sheet's **Summary**, **Notes** or a mailbox tab is out of date, or a renamed copy stopped updating | They change only when someone opens Outreach or clicks **Sync now**. Cortex writes the tabs named **Summary**, **Notes** and after each mailbox, and adds them when missing, so a renamed copy (or a renamed mailbox's old tab) is left behind: delete it. |
 | A Gmail link on an email opens the wrong account or "conversation not found" | The thread is in the mailbox that sent it. Sign in to that mailbox in the same browser (Gmail's account switcher). |

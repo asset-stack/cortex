@@ -38,8 +38,9 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
 - **Outreach (0007)**: `outreach_emails` is written only by the `google` function's sheet sync (route `outreach-sync`,
   secret key); the app reads it through `useStore().outreach`, never in synced state, and never writes it. A row is a
   contact; its numbers count emails (rows grouped by Gmail message) and follow one rule set: `outreach_daily()` /
-  `outreach_breakdown()` ⇄ `src/lib/outreach.js` ⇄ the function's Summary tab. Mailbox addresses and the sheet link are data (Settings → Outreach), never code. Cortex never sends outreach
-  email (the agent does).
+  `outreach_breakdown()` ⇄ `src/lib/outreach.js` ⇄ the function's Summary tab. The sync never writes the agent's tab
+  and never deletes tabs (it writes Summary, Notes and one tab per mailbox). Mailbox addresses and the sheet link are
+  data (Settings → Outreach), never code. Cortex never sends outreach email (the agent does).
 - Automations run in the database in live mode (`contact_pipeline` trigger, `ensure_todos` and
   `generate_due_invoices` RPCs) and in `src/lib/automations.js` in demo mode. Change both together; live mode
   never creates those rows client-side.
