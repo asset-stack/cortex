@@ -2905,48 +2905,107 @@ async function phase7(ctx) {
       ? out.map((r) => ({ day: String(r.day).slice(0, 10), mailbox: r.mailbox_id || '', sent: r.sent, replies: r.replies, bounces: r.bounces, meetings: r.meetings }))
       : out.map((r) => ({ mailbox: r.mailbox_id || '', kind: r.kind, value: r.value || '', n: r.n }));
   };
-  // Same rows, whatever the order (SQL sorts an Unassigned row last within its day, the lib first; neither order is relied on).
+  // outreach_daily()'s order is the lib's (day, then mailbox, Unassigned last); outreach_breakdown()'s isn't specified,
+  // so its rows compare as a set.
   const canon = (list) => (Array.isArray(list) ? list.map((r) => stable(r)).sort() : list);
-  const RANGES = [['2026-10-05', '2026-10-11'], ['2026-10-06', '2026-10-06'], ['2026-10-12', '2026-10-15'], ['2026-01-01', '2026-12-31'],
-    ['2026-10-11', '2026-10-05'], ['2027-01-01', '2027-01-31']];
+  const same = (fn, sql, js) => (fn === 'outreach_daily' ? stable(sql) === stable(js) : stable(canon(sql)) === stable(canon(js)));
+  const RANGES = [['2026-10-05', '2026-10-11'], ['2026-10-04', '2026-10-04'], ['2026-10-06', '2026-10-06'], ['2026-10-10', '2026-10-10'],
+    ['2026-10-12', '2026-10-15'], ['2026-01-01', '2026-12-31'], ['2026-10-11', '2026-10-05'], ['2027-01-01', '2027-01-31']];
   const app = await appRows();
   const compare = async (user) => {
     const out = [];
     for (const [from, to] of RANGES) {
-      const pairs = [['outreach_daily', lib.outreachDaily], ['outreach_breakdown', lib.outreachBreakdown]];
-      for (const [fn, js] of pairs) {
+      for (const [fn, js] of [['outreach_daily', lib.outreachDaily], ['outreach_breakdown', lib.outreachBreakdown]]) {
         const sql = await rpc(user, fn, from, to);
         const mine = js(app, from, to);
-        if (stable(canon(sql)) !== stable(canon(mine))) out.push({ fn, from, to, sql, js: mine });
+        if (!same(fn, sql, mine)) out.push({ fn, from, to, sql, js: mine });
       }
     }
     return out;
   };
   const mismatches = await compare(david);
+  check('54. outreach_daily() and outreach_breakdown() give exactly what outreachDaily() / outreachBreakdown() in src/lib/outreach.js '
+    + 'give on the same rows (via emailFromRow), daily in the same order, for every range (inclusive; reversed or empty: none)',
+    app.length === PROSPECTS.length && app.every((e) => e.rowKey) && !mismatches.length,
+    mismatches);
+
+  // The week by hand (mailboxes A, B, C; U = Unassigned): each email once (two contacts, one message id), on its first
+  // sent day, bounced when either row bounced; replies on the first reply's day (a status needed), its kind the first
+  // reply's (a same-day tie: the smaller kind, byte order); rows out of the sheet count for nothing; a row without a
+  // message id is its own email. Contacts logged ('status') are still counted per row.
   const week = await rpc(david, 'outreach_daily', '2026-10-05', '2026-10-11');
   const weekBreakdown = await rpc(david, 'outreach_breakdown', '2026-10-05', '2026-10-11');
+  const nameOf = { [A]: 'A', [B]: 'B', [C]: 'C', '': 'U' };
+  const weekNamed = Array.isArray(week)
+    ? week.map((r) => `${r.day} ${nameOf[r.mailbox]} ${r.sent}/${r.replies}/${r.bounces}/${r.meetings}`).sort() : week;
+  const unassignedLast = Array.isArray(week) && week.every((r, i) => r.mailbox || i === week.length - 1 || week[i + 1].day !== r.day);
   const totals = Array.isArray(week) ? lib.outreachTotals(week) : week;
-  const per = Array.isArray(week) ? Object.fromEntries([['A', A], ['B', B], ['C', C], ['U', '']].map(([k, m]) => {
+  const per = Array.isArray(week) ? Object.fromEntries(Object.entries(nameOf).map(([m, k]) => {
     const t = lib.outreachTotals(week, m);
     return [k, [t.sent, t.replies, t.bounces, t.meetings]];
   })) : week;
-  const nameOf = { [A]: 'A', [B]: 'B', [C]: 'C', '': 'U' };
   const breakdownNamed = Array.isArray(weekBreakdown)
     ? weekBreakdown.map((r) => `${nameOf[r.mailbox]} ${r.kind} ${r.value || '(none)'} ${r.n}`).sort() : weekBreakdown;
-  check('54. outreach_daily() and outreach_breakdown() give exactly the rows outreachDaily() / outreachBreakdown() in '
-    + 'src/lib/outreach.js give on the same rows (via emailFromRow), for every range (inclusive; reversed or empty ranges: none)',
-    app.length === PROSPECTS.length && !mismatches.length, mismatches);
-  check('54. ...the week\'s numbers by hand: sent by sent day (bounces only on sent rows), replies by reply day and only with a reply '
-    + 'status, meetings by meeting day; Unassigned rows count on their own',
-    stable(totals) === stable({ sent: 13, replies: 5, bounces: 3, meetings: 2, replyRate: 5 / 13, bounceRate: 3 / 13 })
-      && stable(per) === stable({ A: [7, 2, 1, 1], B: [3, 2, 1, 1], C: [1, 0, 0, 0], U: [2, 1, 1, 0] })
-      && stable(breakdownNamed) === stable([
-        'A reply negative 1', 'A reply positive 1', 'A status draft-lost 1', 'A status draft-saved 1', 'A status sent 6', 'A status skipped-unverified 1',
-        'B reply negative 1', 'B reply positive 1', 'B status sent 3', 'B status skipped-colleague 1',
-        'C status sent 1',
-        'U reply neutral 1', 'U status (none) 1', 'U status sent 2',
-      ].sort()),
-    { totals, per, breakdownNamed });
+  check('54. ...the week\'s numbers by hand: emails, not contacts (one message id to two people counts once, bounced if either '
+    + 'bounced, its first reply and meeting); out-of-sheet rows ignored; no message id: the row is the email; Unassigned last in a day',
+    unassignedLast && stable(weekNamed) === stable([
+      '2026-10-05 A 2/0/1/0', '2026-10-06 A 2/1/0/0', '2026-10-07 A 2/1/0/0', '2026-10-08 A 4/0/1/0', '2026-10-09 A 2/2/0/1',
+      '2026-10-10 A 2/2/0/0', '2026-10-11 A 1/0/0/1',
+      '2026-10-07 B 2/0/1/0', '2026-10-08 B 0/1/0/0', '2026-10-10 B 1/0/0/1', '2026-10-11 B 1/1/0/0',
+      '2026-10-09 C 1/0/0/0',
+      '2026-10-08 U 2/0/1/0', '2026-10-09 U 0/1/0/0', '2026-10-10 U 1/0/0/0', '2026-10-11 U 0/1/0/0',
+    ].sort())
+      && stable(totals) === stable({ sent: 23, replies: 10, bounces: 4, meetings: 3, replyRate: 10 / 23, bounceRate: 4 / 23 })
+      && stable(per) === stable({ A: [15, 6, 2, 2], B: [4, 2, 1, 1], C: [1, 0, 0, 0], U: [3, 2, 1, 0] }),
+    { unassignedLast, weekNamed, totals, per });
+  check('54. ...and the breakdown: contacts logged per row by status (in the sheet only), emails replied to by the first reply\'s '
+    + 'kind (a same-day tie: \'negative\' over \'referral\', \'Positive\' over \'negative\')',
+    stable(breakdownNamed) === stable([
+      'A reply Positive 1', 'A reply negative 3', 'A reply neutral 1', 'A reply positive 1',
+      'A status draft-lost 1', 'A status draft-saved 1', 'A status sent 19', 'A status skipped-unverified 1',
+      'B reply negative 1', 'B reply positive 1', 'B status sent 4', 'B status skipped-colleague 1',
+      'C status sent 1',
+      'U reply neutral 1', 'U reply referral 1', 'U status (none) 1', 'U status sent 4',
+    ].sort()),
+    breakdownNamed);
+
+  // The emails list as liveOutreach().emails in src/data/store.jsx asks PostgREST for it (keep the two in step): rows
+  // in the sheet, the period on the mode's day column, replies with a status, the mailbox or Unassigned, the search
+  // over six columns, newest first then id, one row more than the page for `more`. Same rows as filterEmails().
+  const liveList = async (user, { mailbox = null, from, to, search = '', only = 'sent', limit = 50, offset = 0 }) => {
+    const col = { sent: 'sent_on', replies: 'reply_on', logged: 'date_logged' }[only] || 'sent_on';
+    const params = [from, to];
+    const where = ['in_sheet', `${col} >= $1`, `${col} <= $2`];
+    if (only === 'replies') where.push("reply_status <> ''");
+    if (mailbox) { params.push(mailbox); where.push(`mailbox_id = $${params.length}`); } else if (mailbox === '') where.push('mailbox_id is null');
+    const term = String(search ?? '').replace(/[,()*%\\]/g, ' ').trim();
+    if (term) {
+      params.push(`%${term}%`);
+      where.push(`(${['organisation', 'contact_name', 'contact_role', 'contact_email', 'subject', 'sender'].map((c) => `${c} ilike $${params.length}`).join(' or ')})`);
+    }
+    params.push(limit + 1, offset);
+    await as(user);
+    const got = await one(`select coalesce(json_agg(e), '[]') as r from (select * from public.outreach_emails where ${where.join(' and ')}
+      order by ${col} desc, id limit $${params.length - 1} offset $${params.length}) e`, params).then((r) => r.r.map(lib.emailFromRow), (e) => e.message);
+    await as(null);
+    return typeof got === 'string' ? got : { rows: got.slice(0, limit), more: got.length > limit };
+  };
+  const wk = { from: '2026-10-05', to: '2026-10-11' };
+  const LISTS = [{ ...wk }, { ...wk, only: 'replies' }, { ...wk, only: 'logged' }, { ...wk, mailbox: A }, { ...wk, mailbox: '' },
+    { ...wk, mailbox: B, only: 'logged' }, { ...wk, search: 'COUNCIL T2' }, { ...wk, search: ' josh@ ' }, { ...wk, search: 'pat.n1@' },
+    { ...wk, limit: 5 }, { ...wk, limit: 5, offset: 5 }, { ...wk, limit: 5, offset: 20 }, { from: '2026-01-01', to: '2026-12-31', only: 'logged', limit: 100 }];
+  const listMismatches = [];
+  for (const opts of LISTS) {
+    const sql = await liveList(newcomer, opts);
+    const mine = lib.filterEmails(app, opts);
+    const ids = (x) => (typeof x === 'string' ? x : { ids: x.rows.map((e) => e.rowKey), more: x.more });
+    if (stable(ids(sql)) !== stable(ids(mine))) listMismatches.push({ opts, sql: ids(sql), js: ids(mine) });
+  }
+  const outOfSheet = lib.filterEmails(app, { from: '2026-01-01', to: '2026-12-31', only: 'logged', limit: 100 }).rows
+    .filter((e) => ['t7a', 'g1'].includes(e.rowKey)).length;
+  check('54. the emails list as live mode queries it (in the sheet only) gives the rows and `more` filterEmails() gives, for each '
+    + 'mode, mailbox, Unassigned, search and page',
+    !listMismatches.length && outOfSheet === 0, { listMismatches, outOfSheet });
 
   // 55. The RPCs read through RLS ----------------------------------------------------------------------------------------
 
@@ -2971,8 +3030,8 @@ async function phase7(ctx) {
   const unassignedAfter = Array.isArray(weekAfter) ? lib.outreachTotals(weekAfter, '').sent : weekAfter;
   check('56. removing a mailbox removes its notes (on delete cascade, as removeMailbox does in the app) and leaves its emails, '
     + 'as Unassigned, where the RPCs and the lib still agree',
-    removed === 1 && leftover.note === 0 && leftover.unassigned === 1 && unassignedAfter === 3
-      && stable(canon(weekAfter)) === stable(canon(lib.outreachDaily(appAfter, '2026-10-05', '2026-10-11'))),
+    removed === 1 && leftover.note === 0 && leftover.unassigned === 1 && unassignedAfter === 4
+      && stable(weekAfter) === stable(lib.outreachDaily(appAfter, '2026-10-05', '2026-10-11')),
     { removed, leftover, unassignedAfter, weekAfter });
 
   await as(null);
