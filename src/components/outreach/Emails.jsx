@@ -1,0 +1,167 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useStore } from '@/data/store';
+import { Avatar, Segmented } from '@/components/ui';
+import { daysBetween, outreachTotals, periodRange } from '@/lib/outreach';
+import { localYmd, shortDate } from '@/lib/format';
+import { cn } from '@/lib/cn';
+import SyncStatus from './SyncStatus';
+import SentChart from './SentChart';
+import Notes from './Notes';
+import EmailList from './EmailList';
+import Breakdown from './Breakdown';
+import { ALL, NONE, knownMailbox, mailboxArg, mailboxColor, pct } from './shared';
+
+const PERIODS = [{ id: '7', label: '7 days' }, { id: '30', label: '30 days' }, { id: '90', label: '90 days' }];
+
+function Kpis({ items }) {
+  return (
+    <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
+      {items.map(({ value, label, tint, muted }) => (
+        <div key={label} className="glass glass-rim rounded-[22px] p-4" style={{ background: `linear-gradient(155deg, ${tint}99, ${tint}33)` }}>
+          <div className={cn('font-black leading-none tracking-[-0.03em] tnum', muted ? 'text-[15px] leading-[26px] dim' : 'text-[26px]')}>{value}</div>
+          <div className="mt-2 text-[12.5px] dim">{label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Stat({ label, value }) {
+  return (
+    <div className="min-w-0">
+      <div className="font-bold tnum truncate">{value}</div>
+      <div className="text-[11.5px] dimmer truncate">{label}</div>
+    </div>
+  );
+}
+
+/** One mailbox's period at a glance; picks it in the filter when it is one of the filter's options. */
+function MailboxCard({ card, onPick }) {
+  const body = (
+    <>
+      <div className="flex items-center gap-2">
+        <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: card.color }} />
+        <span className="min-w-0 flex-1 truncate font-extrabold text-[15px]">{card.name}</span>
+        {card.owner && <Avatar userId={card.owner} size={24} ring={false} />}
+      </div>
+      <div className="mt-3 grid grid-cols-4 gap-2 text-[14px]">
+        <Stat label="Sent" value={card.totals.sent} />
+        <Stat label="Replies" value={card.totals.replies} />
+        <Stat label="Reply rate" value={pct(card.totals.replyRate)} />
+        <Stat label="Last sent" value={card.last ? shortDate(card.last) : '—'} />
+      </div>
+    </>
+  );
+  const cls = 'block w-full min-w-0 rounded-[22px] glass glass-rim p-4 text-left';
+  return onPick
+    ? <button type="button" onClick={onPick} aria-label={`Show ${card.name}`} className={cn(cls, 'float')}>{body}</button>
+    : <div className={cls}>{body}</div>;
+}
+
+/** The Emails view: what the outreach agent sent, per mailbox and period, the team's notes and every contact logged. Counts
+ *  are emails (an email to two people counts once); the list has a row per contact. */
+export default function Emails() {
+  const { state, outreach } = useStore();
+  const mailboxes = useMemo(() => state.mailboxes || [], [state.mailboxes]);
+  const [filter, setFilter] = useState(ALL);
+  const [period, setPeriod] = useState('30');
+  const [reload, setReload] = useState(0);
+  const today = localYmd();
+  const { from, to } = useMemo(() => periodRange(Number(period), today), [period, today]);
+  const days = useMemo(() => daysBetween(from, to), [from, to]);
+
+  // Demo data only changes with a reset; live data with a sync. Other state changes don't re-query.
+  const rowsInDemo = state.outreachEmails;
+  const source = outreach.live ? 'live' : `${rowsInDemo?.length || 0}|${rowsInDemo?.[0]?.id || ''}`;
+  const version = `${source}|${reload}`;
+  const api = useRef(outreach);
+  api.current = outreach;
+
+  const [data, setData] = useState({ period: '', daily: [], breakdown: [], error: '', loading: true });
+  const seq = useRef(0); // a later request wins
+  useEffect(() => {
+    const n = ++seq.current;
+    setData((d) => ({ ...d, loading: true }));
+    Promise.all([api.current.daily(from, to), api.current.breakdown(from, to)]).then(([a, b]) => {
+      if (n !== seq.current) return;
+      setData({
+        period: `${from}|${to}`, daily: a?.ok ? a.rows : [], breakdown: b?.ok ? b.rows : [], loading: false,
+        error: !a?.ok ? a?.error || 'Couldn’t load the numbers' : !b?.ok ? b?.error || 'Couldn’t load the numbers' : '',
+      });
+    });
+  }, [from, to, version]);
+
+  const daily = useMemo(() => knownMailbox(data.daily, mailboxes), [data.daily, mailboxes]);
+  const breakdown = useMemo(() => knownMailbox(data.breakdown, mailboxes), [data.breakdown, mailboxes]);
+  const hasUnassigned = daily.some((r) => !r.mailbox) || breakdown.some((r) => !r.mailbox);
+
+  const options = [
+    { id: ALL, label: 'All' },
+    ...mailboxes.filter((m) => m.active !== false).map((m) => ({ id: m.id, label: m.name })),
+    ...(hasUnassigned ? [{ id: NONE, label: 'Unassigned' }] : []),
+  ];
+  const current = options.some((o) => o.id === filter) ? filter : ALL;
+  const settled = !data.loading && data.period === `${from}|${to}`;
+  useEffect(() => { if (settled && current !== filter) setFilter(ALL); }, [settled, current, filter]);
+  const mb = mailboxArg(current);
+
+  const totals = outreachTotals(daily, mb);
+  const sentToday = daily.filter((r) => r.day === today && (mb === null || r.mailbox === mb)).reduce((t, r) => t + r.sent, 0);
+
+  // Every mailbox's card when showing all: the active ones, any other that has numbers in the period, and Unassigned.
+  const cards = current === ALL ? [
+    ...mailboxes.filter((m) => m.active !== false || daily.some((r) => r.mailbox === m.id)).map((m) => ({ id: m.id, name: m.name, owner: m.owner })),
+    ...(hasUnassigned ? [{ id: '', name: 'Unassigned', owner: '' }] : []),
+  ].map((c) => ({
+    ...c,
+    color: mailboxColor(mailboxes, c.id),
+    totals: outreachTotals(daily, c.id),
+    last: daily.filter((r) => r.mailbox === c.id && r.sent).reduce((m, r) => (r.day > m ? r.day : m), ''),
+    pick: c.id ? options.some((o) => o.id === c.id) && c.id : NONE,
+  })) : [];
+
+  const onSynced = useCallback(() => setReload((n) => n + 1), []);
+
+  return (
+    <div>
+      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="max-w-full overflow-x-auto scroll-thin rounded-full">
+          <Segmented label="Mailbox" value={current} onChange={setFilter} options={options} />
+        </div>
+        <Segmented label="Period" value={period} onChange={setPeriod} options={PERIODS} />
+        <SyncStatus autoSync onSynced={onSynced} className="lg:ml-auto" />
+      </div>
+      {data.error && <p role="alert" className="mt-3 text-[13px] text-amber-200">{data.error}</p>}
+
+      <Kpis items={[
+        { value: totals.sent, label: 'Sent', tint: '#334155' },
+        { value: sentToday, label: 'Sent today', tint: '#2f6f86' },
+        { value: totals.replies, label: 'Replies', tint: '#0f9f6f' },
+        { value: pct(totals.replyRate), label: 'Reply rate', tint: '#0f766e' },
+        { value: totals.bounces, label: 'Bounces', tint: '#9f1239' },
+        { value: totals.meetings, label: 'Meetings', tint: '#7c3aed' },
+        { value: 'Not tracked', label: 'Opens', tint: '#475569', muted: true },
+      ]} />
+
+      <section className={cn('mt-6 min-w-0 rounded-[26px] glass glass-rim p-5 transition-opacity', data.loading && 'opacity-80')}>
+        <h2 className="mb-3 font-extrabold text-[16px]">Sent per day</h2>
+        <SentChart daily={daily} days={days} mailbox={mb} mailboxes={mailboxes} />
+      </section>
+
+      {cards.length > 0 && (
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {cards.map((c) => <MailboxCard key={c.id || 'none'} card={c} onPick={c.pick ? () => setFilter(c.pick) : undefined} />)}
+        </div>
+      )}
+
+      <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
+        <Notes filter={current} mailboxes={mailboxes} />
+        <Breakdown rows={breakdown} mailbox={mb} />
+      </div>
+
+      <div className="mt-6">
+        <EmailList mailbox={mb} from={from} to={to} mailboxes={mailboxes} version={version} />
+      </div>
+    </div>
+  );
+}

@@ -5,8 +5,10 @@
 // 0003_timezones_projects_view.sql (Sydney business day, per-person time zones, Projects view-only for staff); then
 // 0004_clients_google.sql (client contacts and contracts, credits, approve / contract to-dos, Google accounts); then
 // 0005_work_tools.sql (each person's Tools in My Work); then 0006_boards.sql (sub-boards under Projects and Marketing,
-// each person's own Projects page, and who sees and edits which board). Last, the sync engine's writes of every
-// synced table (flatten() rows as PostgREST upserts), personal pages included.
+// each person's own Projects page, and who sees and edits which board); then 0007_outreach.sql (outreach mailboxes,
+// the agent's emails read from its sheet, notes and the sheet's link: who reads and writes what, the guards, and the
+// dashboard RPCs, which must give the same numbers as src/lib/outreach.js). Last, the sync engine's writes of every
+// synced table (flatten() rows as PostgREST upserts), personal pages and Outreach included.
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -22,6 +24,7 @@ const migration3 = await readFile(new URL('supabase/migrations/0003_timezones_pr
 const migration4 = await readFile(new URL('supabase/migrations/0004_clients_google.sql', root), 'utf8');
 const migration5 = await readFile(new URL('supabase/migrations/0005_work_tools.sql', root), 'utf8');
 const migration6 = await readFile(new URL('supabase/migrations/0006_boards.sql', root), 'utf8');
+const migration7 = await readFile(new URL('supabase/migrations/0007_outreach.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -2389,15 +2392,602 @@ async function phase6({ alice, boss, david, hello, carol, newcomer }) {
   return { alice, boss, david, hello, carol, newcomer, early, late, board, page };
 }
 
+// Phase 7: 0007_outreach.sql (outreach mailboxes, the agent's emails read from its sheet, notes, the sheet's link) ---------
+
+async function applyMigration7() {
+  await as(null);
+  try {
+    await db.exec(migration7);
+    return null;
+  } catch (e) {
+    await db.exec('rollback').catch(() => {});
+    return e.message;
+  }
+}
+
+const OUTREACH_TABLES = ['outreach_mailboxes', 'outreach_emails', 'outreach_notes', 'outreach_settings'];
+const OUTREACH_FUNCTIONS = ['protect_outreach_note', 'protect_outreach_settings', 'outreach_daily', 'outreach_breakdown', 'outreach_access'];
+
+// Everything 0007 makes (tables, columns, constraints, indexes, triggers, policies, functions, grants, realtime and the
+// settings row), in a form that compares across runs and databases.
+async function outreachShape(dbx) {
+  const q = async (sql, params) => (await dbx.query(sql, params)).rows;
+  const ofTables = "(select oid from pg_class where relnamespace = 'public'::regnamespace and relname = any($1::text[]))";
+  return {
+    tables: await q(`select c.relname, c.relrowsecurity as rls, (select array_agg(a::text order by a::text) from unnest(c.relacl) a) as acl
+      from pg_class c where c.oid in ${ofTables} order by c.relname`, [OUTREACH_TABLES]),
+    columns: await q(`select table_name, column_name, udt_name, is_nullable, column_default from information_schema.columns
+      where table_schema = 'public' and table_name = any($1::text[]) order by table_name, ordinal_position`, [OUTREACH_TABLES]),
+    constraints: await q(`select conrelid::regclass::text as t, conname, pg_get_constraintdef(oid) as def from pg_constraint
+      where conrelid in ${ofTables} order by 1, 2`, [OUTREACH_TABLES]),
+    indexes: await q(`select tablename, indexname, indexdef from pg_indexes where schemaname = 'public' and tablename = any($1::text[])
+      order by 1, 2`, [OUTREACH_TABLES]),
+    triggers: await q(`select tgrelid::regclass::text as t, tgname, pg_get_triggerdef(oid) as def from pg_trigger
+      where not tgisinternal and tgrelid in ${ofTables} order by 1, 2`, [OUTREACH_TABLES]),
+    policies: await q(`select tablename, policyname, cmd, permissive, roles::text as roles, qual, with_check from pg_policies
+      where schemaname = 'public' and tablename = any($1::text[]) order by 1, 2`, [OUTREACH_TABLES]),
+    functions: await q(`select proname, prosecdef, provolatile, proconfig, md5(prosrc) as src, pg_get_function_identity_arguments(oid) as args,
+        pg_get_function_result(oid) as result, (select array_agg(a::text order by a::text) from unnest(proacl) a) as acl
+      from pg_proc where pronamespace = 'public'::regnamespace and proname = any($1::text[]) order by 1`, [OUTREACH_FUNCTIONS]),
+    published: (await q(`select tablename from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public'
+      and tablename = any($1::text[]) order by 1`, [OUTREACH_TABLES])).map((r) => r.tablename),
+    settings: await q('select id, sheet_url, sheet_by, synced_at, sync_error, sync_stats from public.outreach_settings order by id'),
+  };
+}
+// The parts of two shapes that differ.
+const shapeDiff = (a, b) => Object.keys({ ...a, ...b }).filter((k) => stable(a[k]) !== stable(b[k]));
+
+// The google function's outreach-sync writes with the secret key: PostgREST's service_role (bypasses RLS) with no
+// signed-in user. Supabase grants service_role everything on public tables and the auth schema (auth.uid() in column
+// defaults and touch()); the stub doesn't, so phase 7 grants it.
+async function asSecretKey() {
+  await as(null);
+  await db.exec('set role service_role');
+}
+
+// src/lib/outreach.js has relative imports only, so Node loads it as it is (the store's demo mode runs the same code).
+const outreachLib = () => import('../src/lib/outreach.js');
+
+async function phase7(ctx) {
+  const { alice, boss, david, hello, carol, newcomer, early, late } = ctx;
+
+  // 43. 0007 on the database the phases above leave behind -----------------------------------------------------------
+
+  await as(null);
+  const publishedBefore = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'")).n;
+  const first = await applyMigration7();
+  const body = migration7.replace(/--.*$/gm, '').trim();
+  check('43. 0007 runs on top of 0006 and its rows, as one transaction (begin … commit when run whole)',
+    first === null && /^begin;/i.test(body) && /commit;$/i.test(body), first);
+  if (first) return null;
+  const shape = await outreachShape(db);
+  const second = await applyMigration7();
+  const reshaped = await outreachShape(db);
+  check('43. 0007 re-runs cleanly, changing nothing, and never mentions module_level',
+    second === null && !shapeDiff(shape, reshaped).length && !migration7.includes('module_level'),
+    { second, changed: shapeDiff(shape, reshaped) });
+  if (second) return null;
+
+  // 44. As the SQL editor may run it: statement by statement on a fresh database after 0006 ---------------------------
+
+  const freshAt6 = async () => {
+    const dbx = new PGlite({ extensions: { pgcrypto } });
+    await dbx.exec(SUPABASE_STUB);
+    for (const m of [migration, migration2, migration3, migration4, migration5, migration6]) await dbx.exec(m);
+    return dbx;
+  };
+  const whole = await freshAt6();
+  const wholeError = await whole.exec(migration7).then(() => null, (e) => e.message);
+  const wholeShape = await outreachShape(whole);
+  await whole.close();
+  const stop = await freshAt6();
+  const stopErrors = await runSplit(stop, migration7);
+  const stopShape = await outreachShape(stop);
+  const againErrors = await runSplit(stop, migration7);
+  const againShape = await outreachShape(stop);
+  await stop.close();
+  const carry = await freshAt6();
+  const carryErrors = await runSplit(carry, migration7, { continueOnError: true });
+  const carryShape = await outreachShape(carry);
+  await carry.close();
+  const statements = splitSql(migration7).length;
+  check('44. 0007 run statement by statement on a fresh database (stopping at the first error, or carrying on) ends exactly as '
+    + 'a whole run does; a second statement-by-statement run changes nothing',
+    statements > 20 && wholeError === null && !stopErrors.length && !carryErrors.length && !againErrors.length
+      && !shapeDiff(wholeShape, stopShape).length && !shapeDiff(wholeShape, carryShape).length && !shapeDiff(wholeShape, againShape).length,
+    { statements, wholeError, stopErrors, carryErrors, againErrors, stop: shapeDiff(wholeShape, stopShape),
+      carry: shapeDiff(wholeShape, carryShape), again: shapeDiff(wholeShape, againShape) });
+  check('44. ...and a fresh database ends with the same tables, policies, functions, grants and settings row as the used one',
+    !shapeDiff(wholeShape, shape).length, shapeDiff(wholeShape, shape));
+
+  // 45. Tables, grants and realtime ---------------------------------------------------------------------------------
+
+  const tableInfo = await rows(`select t,
+      (select relrowsecurity from pg_class where oid = ('public.' || t)::regclass) as rls,
+      exists (select 1 from pg_trigger where tgrelid = ('public.' || t)::regclass and tgname = 'touch') as touch,
+      exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) as published,
+      (select string_agg(p, ',') from unnest(array['select', 'insert', 'update', 'delete', 'truncate']) p
+        where has_table_privilege('anon', 'public.' || t, p)) as anon,
+      (select string_agg(p, ',') from unnest(array['select', 'insert', 'update', 'delete']) p
+        where has_table_privilege('authenticated', 'public.' || t, p)) as signed_in
+    from unnest($1::text[]) as t order by t`, [OUTREACH_TABLES]);
+  const info = Object.fromEntries(tableInfo.map(({ t, ...r }) => [t, r]));
+  const noRls = await rows(`select relname from pg_class where relnamespace = 'public'::regnamespace and relkind = 'r' and not relrowsecurity`);
+  check('45. the four Outreach tables: RLS on, touch(), no anon access; signed-in users only read the emails, and only read '
+    + 'and update the settings',
+    OUTREACH_TABLES.every((t) => info[t]?.rls && info[t].touch && info[t].anon === null) && !noRls.length
+      && info.outreach_mailboxes.signed_in === 'select,insert,update,delete' && info.outreach_emails.signed_in === 'select'
+      && info.outreach_notes.signed_in === 'select,insert,update,delete' && info.outreach_settings.signed_in === 'select,update',
+    { info, noRls });
+  const publishedAfter = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'")).n;
+  check('45. realtime publishes mailboxes, notes and settings (35 → 38 tables), never the emails',
+    publishedBefore === 35 && publishedAfter === 38 && info.outreach_mailboxes.published && info.outreach_notes.published
+      && info.outreach_settings.published && !info.outreach_emails.published,
+    { publishedBefore, publishedAfter, info });
+
+  // 46. One settings row ----------------------------------------------------------------------------------------------
+
+  await as(null);
+  const ownerSecond = await error('insert into public.outreach_settings (id) values (2)');
+  const ownerAgain = await error('insert into public.outreach_settings (id) values (1)');
+  await as(david);
+  const superInsert = await error("insert into public.outreach_settings (id, sheet_url) values (2, 'https://example.com')");
+  const superUpsert = await error(`insert into public.outreach_settings (id, sheet_url) values (1, 'https://example.com')
+    on conflict (id) do update set sheet_url = excluded.sheet_url`);
+  const superDelete = await error('delete from public.outreach_settings');
+  const superMove = await affected('update public.outreach_settings set id = 2 where id = 1');
+  await as(null);
+  const settingsIds = (await rows('select id from public.outreach_settings')).map((r) => r.id);
+  check('46. outreach_settings holds exactly one row (id 1): no second one even from the SQL editor; nobody signed in '
+    + '(not even the SuperAdmin) inserts, upserts, deletes or renumbers it',
+    stable(settingsIds) === stable([1]) && ownerSecond !== null && ownerAgain !== null && superInsert !== null && superUpsert !== null
+      && superDelete !== null && superMove === 1,
+    { settingsIds, ownerSecond, ownerAgain, superInsert, superUpsert, superDelete, superMove });
+
+  // Outreach access from here on: Hello views and New and Late edit (staff overrides); Alice keeps the staff default
+  // (none); Carol is inactive, so her edit override counts for nothing.
+  await as(david);
+  await db.query(`insert into module_access (user_id, module, level)
+    values ($1, 'outreach', 'view'), ($2, 'outreach', 'edit'), ($3, 'outreach', 'edit'), ($4, 'outreach', 'edit')
+    on conflict (user_id, module) do update set level = excluded.level`, [hello, newcomer, late, carol]);
+
+  // 47. outreach_access() and who may call the RPCs -------------------------------------------------------------------
+
+  const accessOf = {};
+  for (const [name, user] of Object.entries({ david, boss, early, hello, newcomer, alice, carol })) {
+    await as(user);
+    accessOf[name] = (await one('select public.outreach_access() as a')).a;
+  }
+  await as(null);
+  await db.exec('set role anon');
+  const anonCalls = {
+    daily: await error("select * from public.outreach_daily('2026-10-01', '2026-10-31')"),
+    breakdown: await error("select * from public.outreach_breakdown('2026-10-01', '2026-10-31')"),
+    access: await error('select public.outreach_access()'),
+  };
+  await as(null);
+  const rpcInfo = await rows(`select proname, prosecdef as definer,
+      has_function_privilege('anon', oid, 'execute') as anon, has_function_privilege('authenticated', oid, 'execute') as signed_in
+    from pg_proc where pronamespace = 'public'::regnamespace and proname = any($1::text[]) order by proname`,
+  [['outreach_access', 'outreach_breakdown', 'outreach_daily']]);
+  const all3 = (o, v) => stable(o) === stable({ view: v[0], edit: v[1], admin: v[2] });
+  check('47. outreach_access() answers for the caller: admins view, edit and admin; Outreach view or edit as granted; '
+    + 'staff on the default and inactive accounts nothing',
+    all3(accessOf.david, [true, true, true]) && all3(accessOf.boss, [true, true, true]) && all3(accessOf.early, [true, true, true])
+      && all3(accessOf.hello, [true, false, false]) && all3(accessOf.newcomer, [true, true, false])
+      && all3(accessOf.alice, [false, false, false]) && all3(accessOf.carol, [false, false, false]),
+    accessOf);
+  check('47. anon can\'t call outreach_daily, outreach_breakdown or outreach_access; signed-in users can; the totals run as the '
+    + 'caller (security invoker, so RLS applies) and only outreach_access is security definer',
+    Object.values(anonCalls).every((e) => e !== null) && stable(rpcInfo) === stable([
+      { proname: 'outreach_access', definer: true, anon: false, signed_in: true },
+      { proname: 'outreach_breakdown', definer: false, anon: false, signed_in: true },
+      { proname: 'outreach_daily', definer: false, anon: false, signed_in: true },
+    ]),
+    { anonCalls, rpcInfo });
+
+  // 48. Mailboxes: admins add, change and remove them ----------------------------------------------------------------
+
+  await as(boss);
+  const addMailbox = (name, addresses, owner, position) => one(`insert into public.outreach_mailboxes (name, addresses, owner_id, position)
+    values ($1, $2, $3, $4) returning id, updated_by`, [name, addresses, owner, position]);
+  const mbDavid = await addMailbox('David', ['david@example.com', 'david@old.example.com'], david, 0);
+  const mbJosh = await addMailbox('Josh', ['josh@example.com'], early, 1);
+  const mbSarah = await addMailbox('Sarah', ['sarah@example.com'], null, 2);
+  await as(early);
+  const adminEdit = await affected("update public.outreach_mailboxes set addresses = array['josh@example.com', 'josh@new.example.com'] where id = $1",
+    [mbJosh.id]);
+  await as(david);
+  const temp = await attempt("insert into public.outreach_mailboxes (name, position) values ('Temp', 3) returning id");
+  const superRemove = await affected('delete from public.outreach_mailboxes where id = $1', [temp?.id]);
+  const staffWrites = {};
+  for (const [name, user] of Object.entries({ newcomer, hello, alice, carol })) {
+    await as(user);
+    staffWrites[name] = {
+      insert: await error("insert into public.outreach_mailboxes (name) values ('Mine')"),
+      update: await affected("update public.outreach_mailboxes set name = 'Mine', addresses = '{}' where id = $1", [mbDavid.id]),
+      delete: await affected('delete from public.outreach_mailboxes where id = $1', [mbJosh.id]),
+      upsert: await postgrestUpsert('outreach_mailboxes', [{ id: mbSarah.id, name: 'Mine', addresses: [], owner_id: null, active: true, position: 2 }]),
+    };
+  }
+  await as(null);
+  const mailboxesNow = await rows('select name, addresses, owner_id, position from public.outreach_mailboxes order by position');
+  check('48. mailboxes: admins (and the SuperAdmin) add, change and remove them (touch() stamps who); staff with Outreach edit '
+    + 'or view, without it, or inactive can\'t (insert, update, delete or the sync\'s upsert)',
+    mbDavid.updated_by === boss && adminEdit === 1 && typeof temp?.id === 'string' && superRemove === 1
+      && Object.values(staffWrites).every((w) => typeof w.insert === 'string' && w.update === 0 && w.delete === 0 && typeof w.upsert === 'string')
+      && stable(mailboxesNow) === stable([
+        { name: 'David', addresses: ['david@example.com', 'david@old.example.com'], owner_id: david, position: 0 },
+        { name: 'Josh', addresses: ['josh@example.com', 'josh@new.example.com'], owner_id: early, position: 1 },
+        { name: 'Sarah', addresses: ['sarah@example.com'], owner_id: null, position: 2 },
+      ]),
+    { mbDavid, adminEdit, temp, superRemove, staffWrites, mailboxesNow });
+
+  // 49. Emails: only the sheet sync (secret key) writes them -----------------------------------------------------------
+
+  await as(null);
+  await db.exec(`grant usage on schema auth to service_role;
+    grant all on ${OUTREACH_TABLES.map((t) => `public.${t}`).join(', ')} to service_role`);
+  const A = mbDavid.id;
+  const B = mbJosh.id;
+  const C = mbSarah.id;
+  const SENDERS = { [A]: 'david@example.com', [B]: 'josh@example.com', [C]: 'sarah@example.com' };
+  // One row per contact, as the sync writes them (row_key is the sheet row's key; one email to two contacts is two rows
+  // with one Gmail message id). Every row has every key. `msg` defaults to the row's own id once it is sent.
+  const prospect = (key, mailbox, f = {}) => {
+    const msg = f.msg ?? (f.sent ? `18c2f0a1b2c3${key.padStart(4, '0')}` : '');
+    return {
+      row_key: key, mailbox_id: mailbox, sender: f.sender ?? SENDERS[mailbox] ?? 'unknown@example.com', date_logged: f.logged ?? null,
+      organisation: `Example Council ${key.replace(/[ab]$/, '')}`, contact_name: 'Pat Example', contact_role: 'Asset Manager',
+      contact_email: `pat.${key}@example.com`, subject: f.sent ? 'Asset condition data' : '', status: f.status ?? (f.sent ? 'sent' : ''),
+      sent_on: f.sent ?? null, message_id: msg, thread_id: msg, sequence_status: f.reply ? `replied-${f.reply}` : f.bounced ? 'bounced' : f.sent ? 'active' : '',
+      bounced: Boolean(f.bounced), reply_status: f.reply ?? '', reply_on: f.replyOn ?? null, meeting_on: f.meeting ?? null,
+      in_sheet: f.inSheet ?? true, raw: { kdm_name: 'Pat Example', sender: f.sender ?? '' },
+    };
+  };
+  // The week checked below is 2026-10-05 … 2026-10-11 (Monday to Sunday).
+  const PROSPECTS = [
+    prospect('a1', A, { logged: '2026-10-05', sent: '2026-10-05' }), // the first day
+    prospect('a2', A, { logged: '2026-10-05', sent: '2026-10-05', bounced: true }),
+    prospect('a3', A, { logged: '2026-10-06', sent: '2026-10-06', reply: 'negative', replyOn: '2026-10-07' }),
+    prospect('a4', A, { logged: '2026-10-06', sent: '2026-10-06', replyOn: '2026-10-07' }), // a reply date without a reply status
+    prospect('a5', A, { logged: '2026-10-06', status: 'draft-saved' }),
+    prospect('a6', A, { logged: '2026-10-06', status: 'skipped-unverified' }),
+    // Sent the week before; replied and booked in the week.
+    prospect('a7', A, { logged: '2026-10-04', sent: '2026-10-04', reply: 'positive', replyOn: '2026-10-06', meeting: '2026-10-09' }),
+    // Sent on the last day; replied and booked after it.
+    prospect('a8', A, { logged: '2026-10-11', sent: '2026-10-11', reply: 'referral', replyOn: '2026-10-12', meeting: '2026-10-15' }),
+    prospect('a9', A, { logged: '2026-10-12', sent: '2026-10-12' }), // the day after
+    prospect('a10', A, { sent: '2026-10-10' }), // no date logged
+    prospect('a11', A, { logged: '2026-10-07', status: 'draft-lost', bounced: true }), // marked bounced but never sent
+    prospect('a12', A, { logged: '2026-10-07', sent: '2026-10-07', reply: 'neutral' }), // a reply status without a date
+    // One email to two contacts (two rows, one message id): counted once, bounced when either address bounced.
+    prospect('t1a', A, { logged: '2026-10-08', sent: '2026-10-08', msg: '18c2f0a1b2c3t001', bounced: true }),
+    prospect('t1b', A, { logged: '2026-10-08', sent: '2026-10-08', msg: '18c2f0a1b2c3t001' }),
+    // ...replied on different days: the first reply's day and kind; the first meeting.
+    prospect('t2a', A, { logged: '2026-10-08', sent: '2026-10-08', msg: '18c2f0a1b2c3t002', reply: 'positive', replyOn: '2026-10-10', meeting: '2026-10-11' }),
+    prospect('t2b', A, { logged: '2026-10-08', sent: '2026-10-08', msg: '18c2f0a1b2c3t002', reply: 'negative', replyOn: '2026-10-09' }),
+    // ...both replied on one day with different kinds: the smallest kind (byte order: collate "C" in SQL, < in JS).
+    prospect('t3a', A, { logged: '2026-10-09', sent: '2026-10-09', msg: '18c2f0a1b2c3t003', reply: 'referral', replyOn: '2026-10-10' }),
+    prospect('t3b', A, { logged: '2026-10-09', sent: '2026-10-09', msg: '18c2f0a1b2c3t003', reply: 'negative', replyOn: '2026-10-10' }),
+    prospect('t4a', A, { logged: '2026-10-09', sent: '2026-10-09', msg: '18c2f0a1b2c3t004', reply: 'negative', replyOn: '2026-10-10' }),
+    prospect('t4b', A, { logged: '2026-10-09', sent: '2026-10-09', msg: '18c2f0a1b2c3t004', reply: 'Positive', replyOn: '2026-10-10' }), // 'P' < 'n'
+    // ...sent on different days (the first counts: before the week), each row still a contact logged in its period.
+    prospect('t5a', A, { logged: '2026-10-04', sent: '2026-10-04', msg: '18c2f0a1b2c3t005' }),
+    prospect('t5b', A, { logged: '2026-10-06', sent: '2026-10-06', msg: '18c2f0a1b2c3t005' }),
+    // One message id in two mailboxes: an email each.
+    prospect('t6a', A, { logged: '2026-10-10', sent: '2026-10-10', msg: '18c2f0a1b2c3t006' }),
+    prospect('t6b', B, { logged: '2026-10-10', sent: '2026-10-10', msg: '18c2f0a1b2c3t006' }),
+    // Rows no longer in the sheet count for nothing (not even through an email whose other row is still there).
+    prospect('t7a', A, { logged: '2026-10-07', sent: '2026-10-06', msg: '18c2f0a1b2c3t007', bounced: true, reply: 'positive', replyOn: '2026-10-08',
+      meeting: '2026-10-09', inSheet: false }),
+    prospect('t7b', A, { logged: '2026-10-07', sent: '2026-10-07', msg: '18c2f0a1b2c3t007' }),
+    prospect('g1', A, { logged: '2026-10-06', sent: '2026-10-06', reply: 'negative', replyOn: '2026-10-07', inSheet: false }),
+    // Sent rows without a message id (logged before the agent kept them): each row is its own email (row_key).
+    prospect('n1', A, { logged: '2026-10-08', sent: '2026-10-08', msg: '', reply: 'neutral', replyOn: '2026-10-09' }),
+    prospect('n2', A, { logged: '2026-10-08', sent: '2026-10-08', msg: '' }),
+    prospect('b1', B, { logged: '2026-10-07', sent: '2026-10-07', reply: 'positive', replyOn: '2026-10-08', meeting: '2026-10-10' }),
+    prospect('b2', B, { logged: '2026-10-07', sent: '2026-10-07', bounced: true }),
+    prospect('b3', B, { logged: '2026-10-08', status: 'skipped-colleague' }),
+    prospect('b4', B, { logged: '2026-10-11', sent: '2026-10-11', reply: 'negative', replyOn: '2026-10-11' }), // replied the same day
+    prospect('c1', C, { logged: '2026-10-09', sent: '2026-10-09' }),
+    // Unassigned: a sender no mailbox lists.
+    prospect('u1', null, { logged: '2026-10-08', sent: '2026-10-08', reply: 'neutral', replyOn: '2026-10-09' }),
+    prospect('u2', null, { logged: '2026-10-08', sent: '2026-10-08', bounced: true }),
+    prospect('u3', null, {}), // nothing dated
+    prospect('u4', null, { logged: '2026-10-05', status: '' }), // logged without a status yet
+    prospect('ut1a', null, { logged: '2026-10-10', sent: '2026-10-10', msg: '18c2f0a1b2c3u001' }),
+    prospect('ut1b', null, { logged: '2026-10-10', sent: '2026-10-10', msg: '18c2f0a1b2c3u001', reply: 'referral', replyOn: '2026-10-11' }),
+  ];
+  await asSecretKey();
+  const syncWrite = await postgrestUpsert('outreach_emails', PROSPECTS, { onConflict: 'row_key' });
+  const syncResend = await postgrestUpsert('outreach_emails', PROSPECTS, { onConflict: 'row_key' }); // the next sync: same rows
+  const syncUpdate = await affected("update public.outreach_emails set note = 'Checked' where row_key = 'a1'");
+  await db.query("insert into public.outreach_emails (row_key) values ('gone')");
+  const syncDelete = await affected("delete from public.outreach_emails where row_key = 'gone'");
+  await as(null);
+  const emailCount = (await one('select count(*)::int as n from public.outreach_emails')).n;
+  const a1 = (await one("select id from public.outreach_emails where row_key = 'a1'")).id;
+  const emailWrites = {};
+  for (const [name, user] of Object.entries({ david, boss, newcomer })) {
+    await as(user);
+    emailWrites[name] = {
+      insert: await error("insert into public.outreach_emails (row_key) values ('mine')"),
+      update: await error("update public.outreach_emails set note = 'Mine' where id = $1", [a1]),
+      delete: await error('delete from public.outreach_emails where id = $1', [a1]),
+      upsert: await postgrestUpsert('outreach_emails', [{ row_key: 'a1', note: 'Mine' }], { onConflict: 'row_key' }),
+    };
+  }
+  await as(null);
+  const a1Note = (await one('select note from public.outreach_emails where id = $1', [a1])).note;
+  check('49. emails: the sheet sync (secret key) inserts, re-sends (upsert on row_key), updates and deletes them; nobody signed in '
+    + 'writes one (insert, update, delete or upsert), not even the SuperAdmin',
+    syncWrite === null && syncResend === null && syncUpdate === 1 && syncDelete === 1 && emailCount === PROSPECTS.length && a1Note === 'Checked'
+      && Object.values(emailWrites).every((w) => Object.values(w).every((e) => typeof e === 'string')),
+    { syncWrite, syncResend, syncUpdate, syncDelete, emailCount, a1Note, emailWrites });
+
+  // 50. Notes: written as yourself with Outreach edit -----------------------------------------------------------------
+
+  const forgedAt = '2020-01-01T00:00:00+00:00';
+  const recent = (ts) => Boolean(ts) && Math.abs(Date.now() - new Date(ts).getTime()) < 10 * 60e3;
+  await as(newcomer);
+  const staffNote = await attempt(`insert into public.outreach_notes (mailbox_id, pinned, body, author_id, created_at)
+    values ($1, true, 'Lead with the live tender', $2, $3) returning id, author_id, created_at`, [A, boss, forgedAt]);
+  await as(late);
+  const lateNote = await attempt("insert into public.outreach_notes (body) values ('Councils answer before 10am') returning id, author_id, mailbox_id");
+  await as(boss);
+  const bossNote = await attempt("insert into public.outreach_notes (body, author_id) values ('Keep it under 90 words', $1) returning id, author_id",
+    [newcomer]);
+  await as(david);
+  const sarahNote = await attempt("insert into public.outreach_notes (mailbox_id, body) values ($1, 'Sarah starts on Monday') returning id", [C]);
+  const noInsert = {};
+  for (const [name, user] of Object.entries({ hello, alice, carol })) {
+    await as(user);
+    noInsert[name] = await error("insert into public.outreach_notes (body, author_id) values ('Mine', $1)", [user]);
+  }
+  await as(null);
+  await db.exec('set role anon');
+  noInsert.anon = await error("insert into public.outreach_notes (body) values ('Mine')");
+  await as(null);
+  check('50. notes: staff with Outreach edit and admins add them as themselves (a forged author or date is replaced: the signed-in '
+    + 'user, now); Outreach view, no Outreach, inactive accounts and anon can\'t',
+    staffNote?.author_id === newcomer && recent(staffNote.created_at) && lateNote?.author_id === late && lateNote.mailbox_id === null
+      && bossNote?.author_id === boss && typeof sarahNote?.id === 'string' && Object.values(noInsert).every((e) => typeof e === 'string'),
+    { staffNote, lateNote, bossNote, sarahNote, noInsert });
+  if (!staffNote?.id || !lateNote?.id || !sarahNote?.id) return null;
+
+  // 51. Notes: changed and removed by their author or an admin ---------------------------------------------------------
+
+  const noteNow = async (noteId) => { await as(null); return one('select author_id, created_at, body, pinned, mailbox_id from public.outreach_notes where id = $1', [noteId]); };
+  // The row the sync engine sends for a note (flatten()), with a new body.
+  const asSynced = async (noteId, text) => {
+    await as(null);
+    const row = normalizeRow('outreach_notes', (await one('select row_to_json(n) as r from public.outreach_notes n where id = $1', [noteId])).r);
+    return { ...row, body: text };
+  };
+  const original = await noteNow(staffNote.id);
+  await as(newcomer);
+  const ownEdit = await affected("update public.outreach_notes set body = 'Lead with the tender', pinned = false, mailbox_id = null where id = $1",
+    [staffNote.id]);
+  const ownForge = await affected('update public.outreach_notes set author_id = $2, created_at = $3 where id = $1', [staffNote.id, boss, forgedAt]);
+  const afterOwn = await noteNow(staffNote.id);
+  const lateRow = await asSynced(staffNote.id, 'Late was here');
+  await as(late);
+  const other = {
+    update: await affected("update public.outreach_notes set body = 'Late was here' where id = $1", [staffNote.id]),
+    delete: await affected('delete from public.outreach_notes where id = $1', [staffNote.id]),
+    upsert: await postgrestUpsert('outreach_notes', [lateRow]),
+  };
+  await as(hello);
+  const viewer = {
+    update: await affected("update public.outreach_notes set body = 'Hello was here' where id = $1", [staffNote.id]),
+    delete: await affected('delete from public.outreach_notes where id = $1', [staffNote.id]),
+  };
+  const afterOthers = await noteNow(staffNote.id);
+  await as(boss);
+  const adminEdit2 = await affected("update public.outreach_notes set pinned = true where id = $1", [staffNote.id]);
+  const adminRow = await asSynced(staffNote.id, 'Lead with the tender (tidied)');
+  await as(boss);
+  const adminUpsert = await postgrestUpsert('outreach_notes', [adminRow]);
+  const afterAdmin = await noteNow(staffNote.id);
+  // An author whose access drops to view can't change their own note any more.
+  await as(david);
+  await db.query("update module_access set level = 'view' where user_id = $1 and module = 'outreach'", [late]);
+  await as(late);
+  const viewOwn = {
+    update: await affected("update public.outreach_notes set body = 'Changed' where id = $1", [lateNote.id]),
+    delete: await affected('delete from public.outreach_notes where id = $1', [lateNote.id]),
+  };
+  await as(david);
+  await db.query("update module_access set level = 'edit' where user_id = $1 and module = 'outreach'", [late]);
+  await as(late);
+  const ownDelete = await affected('delete from public.outreach_notes where id = $1', [lateNote.id]);
+  await as(david);
+  const superDeletesStaff = await affected('delete from public.outreach_notes where id = $1', [bossNote.id]);
+  await as(null);
+  check('51. notes: the author (with edit) changes and removes their own, but author and date stay put; another staff member '
+    + 'can\'t (not even as the sync\'s upsert), nor can view-only staff, their own notes included',
+    ownEdit === 1 && ownForge === 1 && afterOwn.body === 'Lead with the tender' && afterOwn.pinned === false && afterOwn.mailbox_id === null
+      && afterOwn.author_id === newcomer && +afterOwn.created_at === +original.created_at
+      && other.update === 0 && other.delete === 0 && typeof other.upsert === 'string' && viewer.update === 0 && viewer.delete === 0
+      && afterOthers.body === 'Lead with the tender' && viewOwn.update === 0 && viewOwn.delete === 0 && ownDelete === 1,
+    { ownEdit, ownForge, afterOwn, original, other, viewer, afterOthers, viewOwn, ownDelete });
+  check('51. notes: admins change and remove anyone\'s, also as the sync\'s upsert (the author and date stay the writer\'s)',
+    adminEdit2 === 1 && adminUpsert === null && afterAdmin.body === 'Lead with the tender (tidied)' && afterAdmin.pinned === true
+      && afterAdmin.author_id === newcomer && +afterAdmin.created_at === +original.created_at && superDeletesStaff === 1,
+    { adminEdit2, adminUpsert, afterAdmin, superDeletesStaff });
+
+  // 52. Settings: admins set the sheet's link; the sync's results are the secret key's ---------------------------------
+
+  const SHEET = 'https://docs.google.com/spreadsheets/d/1ExampleSheetIdAbCdEfGhIjKlMnOpQrStUv/edit#gid=0';
+  const SHEET2 = 'https://docs.google.com/spreadsheets/d/1ExampleSheetIdZyXwVuTsRqPoNmLkJiHgFe/edit';
+  const settingsNow = async () => {
+    await as(null);
+    return one('select sheet_url, sheet_by, synced_at, sync_error, sync_stats, updated_by from public.outreach_settings where id = 1');
+  };
+  const setLink = async (user, url) => { await as(user); return affected('update public.outreach_settings set sheet_url = $1 where id = 1', [url]); };
+  const linked = await setLink(boss, SHEET);
+  const afterLink = await settingsNow();
+  await as(boss);
+  const forged = await affected(`update public.outreach_settings set synced_at = now(), sync_error = 'Forged', sync_stats = '{"rows": 99}',
+    sheet_by = $1 where id = 1`, [david]);
+  const afterForge = await settingsNow();
+  const resaved = await setLink(early, SHEET); // another admin saves the same link (the sync sends the whole row)
+  const afterResave = await settingsNow();
+  const relinked = await setLink(david, SHEET2);
+  const afterRelink = await settingsNow();
+  const staffLinks = {};
+  for (const [name, user] of Object.entries({ newcomer, hello, alice, carol })) staffLinks[name] = await setLink(user, 'https://example.com/nope');
+  await as(null);
+  await db.exec('set role anon');
+  const anonSettings = { read: await error('select * from public.outreach_settings'), update: await error("update public.outreach_settings set sheet_url = ''") };
+  await asSecretKey();
+  const synced = await affected(`update public.outreach_settings set synced_at = '2026-10-18T01:00:00Z', sync_error = 'No sender column',
+    sync_stats = '{"rows": 21, "unassigned": 3}', sheet_by = $1 where id = 1`, [boss]);
+  const afterSync = await settingsNow();
+  check('52. settings: an admin sets the sheet\'s link and becomes sheet_by (the Google account the sync reads it with); another '
+    + 'admin saving the same link doesn\'t take it over; changing it does',
+    linked === 1 && afterLink.sheet_url === SHEET && afterLink.sheet_by === boss && afterLink.updated_by === boss
+      && resaved === 1 && afterResave.sheet_by === boss && relinked === 1 && afterRelink.sheet_url === SHEET2 && afterRelink.sheet_by === david,
+    { linked, afterLink, resaved, afterResave, relinked, afterRelink });
+  check('52. settings: signed-in users can\'t touch synced_at, sync_error, sync_stats or sheet_by (pinned); staff (edit, view, none, '
+    + 'inactive) and anon can\'t change the link; the secret key writes the sync\'s results (and sheet_by)',
+    forged === 1 && afterForge.synced_at === null && afterForge.sync_error === '' && stable(afterForge.sync_stats) === '{}'
+      && afterForge.sheet_by === boss && afterForge.sheet_url === SHEET && Object.values(staffLinks).every((n) => n === 0)
+      && Object.values(anonSettings).every((e) => e !== null) && synced === 1 && afterSync.sheet_url === SHEET2
+      && afterSync.synced_at?.toISOString() === '2026-10-18T01:00:00.000Z' && afterSync.sync_error === 'No sender column'
+      && stable(afterSync.sync_stats) === stable({ rows: 21, unassigned: 3 }) && afterSync.sheet_by === boss,
+    { forged, afterForge, staffLinks, anonSettings, synced, afterSync });
+
+  // 53. Reading: everything with Outreach view ----------------------------------------------------------------------------
+
+  const counts = async () => {
+    const out = {};
+    for (const t of OUTREACH_TABLES) out[t] = await one(`select count(*)::int as n from public.${t}`).then((r) => r.n, (e) => e.message);
+    return out;
+  };
+  await as(null);
+  const everything = await counts();
+  const readers = {};
+  for (const [name, user] of Object.entries({ david, boss, early, hello, newcomer, alice, carol })) {
+    await as(user);
+    readers[name] = await counts();
+  }
+  await as(null);
+  await db.exec('set role anon');
+  readers.anon = await counts();
+  await as(null);
+  const none = { outreach_mailboxes: 0, outreach_emails: 0, outreach_notes: 0, outreach_settings: 0 };
+  check('53. reading: admins and staff with Outreach view or edit read every mailbox, email, note and the settings; staff '
+    + 'without Outreach and inactive accounts read nothing; anon is refused',
+    everything.outreach_mailboxes === 3 && everything.outreach_emails === PROSPECTS.length && everything.outreach_notes === 2
+      && everything.outreach_settings === 1
+      && ['david', 'boss', 'early', 'hello', 'newcomer'].every((n) => stable(readers[n]) === stable(everything))
+      && stable(readers.alice) === stable(none) && stable(readers.carol) === stable(none)
+      && Object.values(readers.anon).every((e) => typeof e === 'string'),
+    { everything, readers });
+
+  // 54. The dashboard's numbers: outreach_daily() / outreach_breakdown() ⇄ src/lib/outreach.js ------------------------
+
+  const lib = await outreachLib();
+  // The rows as the app reads them (PostgREST returns json), in its shape.
+  const appRows = async () => {
+    await as(null);
+    return (await one("select coalesce(json_agg(e), '[]') as r from public.outreach_emails e")).r.map(lib.emailFromRow);
+  };
+  // An RPC's rows as liveOutreach() in src/data/store.jsx maps them (PostgREST returns json), or the error.
+  const rpc = async (user, fn, from, to) => {
+    await as(user);
+    const out = await db.query(`select to_json(x) as r from public.${fn}($1, $2) x`, [from, to]).then((r) => r.rows.map((x) => x.r), (e) => e.message);
+    await as(null);
+    if (typeof out === 'string') return out;
+    return fn === 'outreach_daily'
+      ? out.map((r) => ({ day: String(r.day).slice(0, 10), mailbox: r.mailbox_id || '', sent: r.sent, replies: r.replies, bounces: r.bounces, meetings: r.meetings }))
+      : out.map((r) => ({ mailbox: r.mailbox_id || '', kind: r.kind, value: r.value || '', n: r.n }));
+  };
+  // Same rows, whatever the order (SQL sorts an Unassigned row last within its day, the lib first; neither order is relied on).
+  const canon = (list) => (Array.isArray(list) ? list.map((r) => stable(r)).sort() : list);
+  const RANGES = [['2026-10-05', '2026-10-11'], ['2026-10-06', '2026-10-06'], ['2026-10-12', '2026-10-15'], ['2026-01-01', '2026-12-31'],
+    ['2026-10-11', '2026-10-05'], ['2027-01-01', '2027-01-31']];
+  const app = await appRows();
+  const compare = async (user) => {
+    const out = [];
+    for (const [from, to] of RANGES) {
+      const pairs = [['outreach_daily', lib.outreachDaily], ['outreach_breakdown', lib.outreachBreakdown]];
+      for (const [fn, js] of pairs) {
+        const sql = await rpc(user, fn, from, to);
+        const mine = js(app, from, to);
+        if (stable(canon(sql)) !== stable(canon(mine))) out.push({ fn, from, to, sql, js: mine });
+      }
+    }
+    return out;
+  };
+  const mismatches = await compare(david);
+  const week = await rpc(david, 'outreach_daily', '2026-10-05', '2026-10-11');
+  const weekBreakdown = await rpc(david, 'outreach_breakdown', '2026-10-05', '2026-10-11');
+  const totals = Array.isArray(week) ? lib.outreachTotals(week) : week;
+  const per = Array.isArray(week) ? Object.fromEntries([['A', A], ['B', B], ['C', C], ['U', '']].map(([k, m]) => {
+    const t = lib.outreachTotals(week, m);
+    return [k, [t.sent, t.replies, t.bounces, t.meetings]];
+  })) : week;
+  const nameOf = { [A]: 'A', [B]: 'B', [C]: 'C', '': 'U' };
+  const breakdownNamed = Array.isArray(weekBreakdown)
+    ? weekBreakdown.map((r) => `${nameOf[r.mailbox]} ${r.kind} ${r.value || '(none)'} ${r.n}`).sort() : weekBreakdown;
+  check('54. outreach_daily() and outreach_breakdown() give exactly the rows outreachDaily() / outreachBreakdown() in '
+    + 'src/lib/outreach.js give on the same rows (via emailFromRow), for every range (inclusive; reversed or empty ranges: none)',
+    app.length === PROSPECTS.length && !mismatches.length, mismatches);
+  check('54. ...the week\'s numbers by hand: sent by sent day (bounces only on sent rows), replies by reply day and only with a reply '
+    + 'status, meetings by meeting day; Unassigned rows count on their own',
+    stable(totals) === stable({ sent: 13, replies: 5, bounces: 3, meetings: 2, replyRate: 5 / 13, bounceRate: 3 / 13 })
+      && stable(per) === stable({ A: [7, 2, 1, 1], B: [3, 2, 1, 1], C: [1, 0, 0, 0], U: [2, 1, 1, 0] })
+      && stable(breakdownNamed) === stable([
+        'A reply negative 1', 'A reply positive 1', 'A status draft-lost 1', 'A status draft-saved 1', 'A status sent 6', 'A status skipped-unverified 1',
+        'B reply negative 1', 'B reply positive 1', 'B status sent 3', 'B status skipped-colleague 1',
+        'C status sent 1',
+        'U reply neutral 1', 'U status (none) 1', 'U status sent 2',
+      ].sort()),
+    { totals, per, breakdownNamed });
+
+  // 55. The RPCs read through RLS ----------------------------------------------------------------------------------------
+
+  const asStaff = { hello: await compare(hello), newcomer: await compare(newcomer) };
+  const hidden = {};
+  for (const [name, user] of Object.entries({ alice, carol })) {
+    hidden[name] = [await rpc(user, 'outreach_daily', '2026-01-01', '2026-12-31'), await rpc(user, 'outreach_breakdown', '2026-01-01', '2026-12-31')];
+  }
+  check('55. the RPCs read through RLS: staff with Outreach view or edit get the same numbers; without Outreach, or inactive, none',
+    !asStaff.hello.length && !asStaff.newcomer.length && Object.values(hidden).every(([d, b]) => stable(d) === '[]' && stable(b) === '[]'),
+    { asStaff, hidden });
+
+  // 56. Removing a mailbox -----------------------------------------------------------------------------------------------
+
+  await as(boss);
+  const removed = await affected('delete from public.outreach_mailboxes where id = $1', [C]);
+  await as(null);
+  const leftover = await one(`select (select count(*)::int from public.outreach_notes where id = $1) as note,
+    (select count(*)::int from public.outreach_emails where row_key = 'c1' and mailbox_id is null) as unassigned`, [sarahNote.id]);
+  const appAfter = await appRows();
+  const weekAfter = await rpc(david, 'outreach_daily', '2026-10-05', '2026-10-11');
+  const unassignedAfter = Array.isArray(weekAfter) ? lib.outreachTotals(weekAfter, '').sent : weekAfter;
+  check('56. removing a mailbox removes its notes (on delete cascade, as removeMailbox does in the app) and leaves its emails, '
+    + 'as Unassigned, where the RPCs and the lib still agree',
+    removed === 1 && leftover.note === 0 && leftover.unassigned === 1 && unassignedAfter === 3
+      && stable(canon(weekAfter)) === stable(canon(lib.outreachDaily(appAfter, '2026-10-05', '2026-10-11'))),
+    { removed, leftover, unassignedAfter, weekAfter });
+
+  await as(null);
+  return ctx;
+}
+
 // 22. (After the newest migration, since flatten() writes every synced column and table.)
-async function syncWriteCheck({ david, alice, boss, hello, early, board, page }) {
+async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, board, page }) {
   // The sync engine's writes: the superadmin (who may write every table) saves flatten() rows for every synced
   // table the way PostgREST sends them, and reading them back the way PostgREST returns them (json) gives the same
   // rows. Catches a column, type or FK order that schema.js and the migrations disagree on, and policies that refuse
-  // a normal save. Boards are new team boards here (personal pages: below).
+  // a normal save. Boards are new team boards here (personal pages: below), and so are Outreach's (who: below).
 
   await as(david);
-  const [grp, grp2, itm, cli, inv, pln, con, chn, rtn, stm, teamP, teamM] = Array.from({ length: 12 }, uid);
+  const [grp, grp2, itm, cli, inv, pln, con, chn, rtn, stm, teamP, teamM, mbx, mbx2] = Array.from({ length: 14 }, uid);
   const flat = flatten({
     me: david,
     users: [],
@@ -2461,10 +3051,28 @@ async function syncWriteCheck({ david, alice, boss, hello, early, board, page })
     }],
     timeEntries: [{ id: uid(), user: david, day: '2026-10-12', start: '09:00', minutes: 60, category: 'Demos', note: 'Prep', source: 'suggested' }],
     tools: [{ id: uid(), user: hello, name: 'Apollo', url: 'https://app.apollo.io', username: 'hello@example.com', how: 'Invite', notes: '', createdBy: david }],
+    mailboxes: [
+      { id: mbx, name: 'Sync check', addresses: [' Sync.Check@Example.com', 'sync.check@old.example.com'], owner: david, active: true },
+      { id: mbx2, name: 'Paused', addresses: [], owner: '', active: false },
+    ],
+    outreachNotes: [
+      { id: uid(), mailbox: mbx, pinned: true, body: 'Pinned', author: david, createdAt: '2026-10-07T00:00:00.000Z' },
+      { id: uid(), mailbox: '', pinned: false, body: 'For every mailbox', author: david, createdAt: '2026-10-06T00:00:00.000Z' },
+    ],
+    outreachSheet: 'https://docs.google.com/spreadsheets/d/1ExampleSyncCheckSheetId0123456789/edit#gid=0',
   });
+  // Columns the database sets itself whatever a signed-in request sends (protect_outreach_note: a note's date is when
+  // it was saved): compared without them here, and checked to be the server's below.
+  const SERVER_SET = { outreach_notes: ['created_at'] };
+  const withoutServerSet = (table, r) => {
+    const x = { ...r };
+    (SERVER_SET[table] || []).forEach((c) => { delete x[c]; });
+    return x;
+  };
   const writeErrors = {};
   const mismatched = {};
-  for (const t of TABLES.filter((x) => !x.update)) { // profiles / org_settings are plain updates (checked in 5. and 20.)
+  // Profiles / org_settings / outreach_settings are plain updates (checked in 5., 20. and below).
+  for (const t of TABLES.filter((x) => !x.update)) {
     const sent = [...flat[t.name].values()];
     if (!sent.length) { writeErrors[t.name] = 'fixture has no rows'; continue; }
     const err = await postgrestUpsert(t.name, sent, t);
@@ -2472,11 +3080,54 @@ async function syncWriteCheck({ david, alice, boss, hello, early, board, page })
     const back = (await one(`select coalesce(json_agg(x), '[]') as rows from public.${t.name} x`)).rows
       .map((r) => normalizeRow(t.name, r));
     const byKey = new Map(back.map((r) => [t.key(r), r]));
-    const diffs = sent.filter((r) => stable(byKey.get(t.key(r))) !== stable(r));
+    const diffs = sent.filter((r) => {
+      const got = byKey.get(t.key(r));
+      return !got || stable(withoutServerSet(t.name, got)) !== stable(withoutServerSet(t.name, r));
+    });
     if (diffs.length) mismatched[t.name] = { sent: diffs[0], back: byKey.get(t.key(diffs[0])) ?? null };
   }
   check('sync: flatten() rows for every synced table save as PostgREST sends them and read back unchanged',
     !Object.keys(writeErrors).length && !Object.keys(mismatched).length, { writeErrors, mismatched });
+  const noteDates = (await rows('select created_at from public.outreach_notes where id = any($1::uuid[])', [[...flat.outreach_notes.keys()]]))
+    .map((r) => r.created_at);
+  check('sync: a new note\'s date is the database\'s (when it was saved), not the one the client sent',
+    noteDates.length === 2 && noteDates.every((d) => Math.abs(Date.now() - d.getTime()) < 10 * 60e3), noteDates);
+
+  // Outreach for whoever may write it, as the sync sends it: mailboxes are the admins'; a note its author's (with Outreach
+  // edit), and an admin re-saving someone's keeps its author; the sheet's link the admins' (a plain update: TABLES marks
+  // outreach_settings update-only, as the row always exists). Staff with Outreach view save nothing.
+  const outRows = (table, st) => [...flatten({ users: [], org: {}, ...st })[table].values()];
+  const saveOut = async (user, table, list) => { await as(user); const e = await postgrestUpsert(table, list); await as(null); return e; };
+  const staffNote = { id: uid(), mailbox: mbx, pinned: false, body: 'From staff', author: newcomer, createdAt: '2026-10-08T00:00:00.000Z' };
+  const outSaved = {
+    adminMailbox: await saveOut(boss, 'outreach_mailboxes', outRows('outreach_mailboxes', {
+      mailboxes: [{ id: uid(), name: 'Added by an admin', addresses: ['added@example.com'], owner: boss, active: true }],
+    })),
+    staffMailbox: await saveOut(newcomer, 'outreach_mailboxes', outRows('outreach_mailboxes', {
+      mailboxes: [{ id: uid(), name: 'Added by staff', addresses: [], owner: '', active: true }],
+    })),
+    staffNote: await saveOut(newcomer, 'outreach_notes', outRows('outreach_notes', { outreachNotes: [staffNote] })),
+    viewerNote: await saveOut(hello, 'outreach_notes', outRows('outreach_notes', { outreachNotes: [{ ...staffNote, id: uid(), author: hello }] })),
+    adminResave: await saveOut(boss, 'outreach_notes', outRows('outreach_notes', { outreachNotes: [{ ...staffNote, body: 'From staff (tidied)' }] })),
+  };
+  const staffNoteBack = normalizeRow('outreach_notes', (await one('select row_to_json(n) as r from public.outreach_notes n where id = $1',
+    [staffNote.id]))?.r);
+  const sheet = flat.outreach_settings.get('1');
+  const saveSheet = async (user) => {
+    await as(user);
+    const n = await affected('update public.outreach_settings set sheet_url = $1 where id = $2', [sheet.sheet_url, sheet.id]);
+    await as(null);
+    return n;
+  };
+  const sheetSaves = { viewer: await saveSheet(hello), editor: await saveSheet(newcomer), admin: await saveSheet(boss) };
+  const sheetBack = normalizeRow('outreach_settings', await one('select * from public.outreach_settings where id = 1'));
+  check('sync: Outreach saves for whoever may write it: mailboxes admins; notes their author with Outreach edit (an admin '
+    + 're-saving one keeps its author), never view-only staff; the sheet\'s link admins, as an update',
+    outSaved.adminMailbox === null && typeof outSaved.staffMailbox === 'string' && outSaved.staffNote === null
+      && typeof outSaved.viewerNote === 'string' && outSaved.adminResave === null && staffNoteBack.author_id === newcomer
+      && staffNoteBack.body === 'From staff (tidied)' && sheetSaves.viewer === 0 && sheetSaves.editor === 0 && sheetSaves.admin === 1
+      && stable(sheetBack) === stable(sheet),
+    { outSaved, staffNoteBack, sheetSaves, sheet, sheetBack });
 
   // Boards for the people who may write them (39.), saved the same way. A personal page's own row is never sent:
   // flatten() makes it exactly as the database holds it (unnamed, position 0), so diff() leaves it out (no client may
@@ -2665,7 +3316,8 @@ try {
   const ctx4 = ctx3 && await phase4(ctx3);
   const ctx5 = ctx4 && await phase5(ctx4);
   const ctx6 = ctx5 && await phase6(ctx5);
-  if (ctx6) await syncWriteCheck(ctx6);
+  const ctx7 = ctx6 && await phase7(ctx6);
+  if (ctx7) await syncWriteCheck(ctx7);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);
