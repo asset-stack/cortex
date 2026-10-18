@@ -139,37 +139,57 @@ create trigger protect_outreach_settings before update on public.outreach_settin
 
 -- 3. Reading: totals for the dashboard (RLS applies: security invoker) --------------------------------------------
 
--- Per day and mailbox between p_from and p_to: emails sent (by sent day, with how many of those bounced), replies (by
--- reply day) and meetings booked (by meeting day). Same rules as outreachDaily() in src/lib/outreach.js.
+-- The sheet has one row per contact; an email sent to two people at one organisation is two rows with one Gmail
+-- message. These count emails: rows are grouped by their message (else the row itself) and mailbox, and each email
+-- counts once on its first sent day (with whether any of its addresses bounced), its first reply's day (rows with a
+-- reply status) and its first meeting's day. Rows no longer in the sheet don't count. Same rules as outreachDaily() /
+-- outreachBreakdown() in src/lib/outreach.js and the sheet's Summary tab (the google function).
 create or replace function public.outreach_daily(p_from date, p_to date)
 returns table (day date, mailbox_id uuid, sent int, replies int, bounces int, meetings int)
 language sql stable security invoker set search_path = public as $$
+  with m as (
+    select e.mailbox_id,
+           min(e.sent_on) as sent_on,
+           bool_or(e.bounced) as bounced,
+           min(e.reply_on) filter (where e.reply_status <> '') as reply_on,
+           min(e.meeting_on) as meeting_on
+    from public.outreach_emails e
+    where e.in_sheet
+    group by coalesce(nullif(e.message_id, ''), e.row_key), e.mailbox_id
+  )
   select x.day, x.mailbox_id, sum(x.sent)::int, sum(x.replies)::int, sum(x.bounces)::int, sum(x.meetings)::int
   from (
-    select e.sent_on as day, e.mailbox_id, 1 as sent, 0 as replies, e.bounced::int as bounces, 0 as meetings
-    from public.outreach_emails e where e.sent_on between p_from and p_to
+    select m.sent_on as day, m.mailbox_id, 1 as sent, 0 as replies, m.bounced::int as bounces, 0 as meetings
+    from m where m.sent_on between p_from and p_to
     union all
-    select e.reply_on, e.mailbox_id, 0, 1, 0, 0
-    from public.outreach_emails e where e.reply_on between p_from and p_to and e.reply_status <> ''
+    select m.reply_on, m.mailbox_id, 0, 1, 0, 0 from m where m.reply_on between p_from and p_to
     union all
-    select e.meeting_on, e.mailbox_id, 0, 0, 0, 1
-    from public.outreach_emails e where e.meeting_on between p_from and p_to
+    select m.meeting_on, m.mailbox_id, 0, 0, 0, 1 from m where m.meeting_on between p_from and p_to
   ) x
   group by x.day, x.mailbox_id
   order by x.day, x.mailbox_id;
 $$;
 
--- Prospects logged between p_from and p_to by mailbox and status (draft-saved, sent, skipped-…), and replies by kind.
+-- Contacts logged between p_from and p_to by mailbox and status (draft-saved, sent, skipped-…), and emails first
+-- replied to in the period by kind (the first reply's; on the same day, the first kind alphabetically).
 create or replace function public.outreach_breakdown(p_from date, p_to date)
 returns table (mailbox_id uuid, kind text, value text, n int)
 language sql stable security invoker set search_path = public as $$
+  with r as (
+    select e.mailbox_id,
+           min(e.reply_on) as reply_on,
+           (array_agg(e.reply_status order by e.reply_on, e.reply_status collate "C"))[1] as reply_status
+    from public.outreach_emails e
+    where e.in_sheet and e.reply_status <> '' and e.reply_on is not null
+    group by coalesce(nullif(e.message_id, ''), e.row_key), e.mailbox_id
+  )
   select e.mailbox_id, 'status', e.status, count(*)::int
-  from public.outreach_emails e where e.date_logged between p_from and p_to
+  from public.outreach_emails e where e.in_sheet and e.date_logged between p_from and p_to
   group by e.mailbox_id, e.status
   union all
-  select e.mailbox_id, 'reply', e.reply_status, count(*)::int
-  from public.outreach_emails e where e.reply_on between p_from and p_to and e.reply_status <> ''
-  group by e.mailbox_id, e.reply_status
+  select r.mailbox_id, 'reply', r.reply_status, count(*)::int
+  from r where r.reply_on between p_from and p_to
+  group by r.mailbox_id, r.reply_status
   order by 1, 2, 3;
 $$;
 

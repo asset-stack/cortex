@@ -6,12 +6,13 @@
 const str = (v) => String(v ?? '').trim();
 const ymd = (v) => (/^\d{4}-\d{2}-\d{2}/.test(str(v)) ? str(v).slice(0, 10) : '');
 const inRange = (day, from, to) => Boolean(day) && day >= from && day <= to;
+const earlier = (a, b) => Boolean(a) && (!b || a < b);
 
 // A database row (snake_case, from a select or realtime) → the app's shape. `mailbox` is '' for rows whose sender
-// matches no mailbox (Unassigned).
+// matches no mailbox (Unassigned). One row per contact: an email sent to two people is two rows with one messageId.
 export function emailFromRow(r = {}) {
   return {
-    id: str(r.id), mailbox: str(r.mailbox_id), sender: str(r.sender), dateLogged: ymd(r.date_logged), vertical: str(r.vertical),
+    id: str(r.id), rowKey: str(r.row_key), mailbox: str(r.mailbox_id), sender: str(r.sender), dateLogged: ymd(r.date_logged), vertical: str(r.vertical),
     organisation: str(r.organisation), domain: str(r.domain), location: str(r.location), contactName: str(r.contact_name),
     contactRole: str(r.contact_role), contactEmail: str(r.contact_email), tier: str(r.tier), signal: str(r.signal),
     subject: str(r.subject), variant: str(r.variant), status: str(r.status), sentOn: ymd(r.sent_on), messageId: str(r.message_id),
@@ -21,10 +22,35 @@ export function emailFromRow(r = {}) {
   };
 }
 
+/** The email a row belongs to: its Gmail message (shared by everyone it went to), else the row itself. */
+export function emailKey(e) {
+  return e.messageId || e.rowKey || e.id;
+}
+
+// Rows still in the sheet, one entry per email and mailbox: its first sent day, whether any of its addresses bounced,
+// its first reply (day and kind, from rows with a reply status) and its first meeting. Same rules as 0007's.
+function byEmail(rows) {
+  const out = new Map();
+  (rows || []).filter((e) => e.inSheet !== false).forEach((e) => {
+    const k = `${emailKey(e)}|${e.mailbox}`;
+    if (!out.has(k)) out.set(k, { mailbox: e.mailbox, sentOn: '', bounced: false, replyOn: '', replyStatus: '', meetingOn: '' });
+    const g = out.get(k);
+    if (earlier(e.sentOn, g.sentOn)) g.sentOn = e.sentOn;
+    if (e.bounced) g.bounced = true;
+    if (e.replyStatus && e.replyOn && (earlier(e.replyOn, g.replyOn) || (e.replyOn === g.replyOn && e.replyStatus < g.replyStatus))) {
+      g.replyOn = e.replyOn; g.replyStatus = e.replyStatus;
+    }
+    if (earlier(e.meetingOn, g.meetingOn)) g.meetingOn = e.meetingOn;
+  });
+  return [...out.values()];
+}
+
 /**
- * Per day and mailbox between `from` and `to` (YYYY-MM-DD, inclusive): emails sent (by sent day, and how many of
- * those bounced), replies (by reply day) and meetings booked (by meeting day). Same rules as outreach_daily() in 0007.
- * → [{ day, mailbox, sent, replies, bounces, meetings }] sorted by day, then mailbox.
+ * Per day and mailbox between `from` and `to` (YYYY-MM-DD, inclusive): emails sent (on their sent day, with how many
+ * of those bounced), replied to (on the first reply's day) and meetings booked (on the meeting day). Counts emails, not
+ * people: an email to two contacts counts once. Rows no longer in the sheet don't count. Same rules as outreach_daily()
+ * in 0007 and the sheet's Summary tab. → [{ day, mailbox, sent, replies, bounces, meetings }] sorted by day, then mailbox
+ * (Unassigned last).
  */
 export function outreachDaily(rows, from, to) {
   const out = new Map();
@@ -33,17 +59,18 @@ export function outreachDaily(rows, from, to) {
     if (!out.has(k)) out.set(k, { day, mailbox, sent: 0, replies: 0, bounces: 0, meetings: 0 });
     return out.get(k);
   };
-  (rows || []).forEach((e) => {
-    if (inRange(e.sentOn, from, to)) { const x = at(e.sentOn, e.mailbox); x.sent++; if (e.bounced) x.bounces++; }
-    if (inRange(e.replyOn, from, to) && e.replyStatus) at(e.replyOn, e.mailbox).replies++;
-    if (inRange(e.meetingOn, from, to)) at(e.meetingOn, e.mailbox).meetings++;
+  byEmail(rows).forEach((g) => {
+    if (inRange(g.sentOn, from, to)) { const x = at(g.sentOn, g.mailbox); x.sent++; if (g.bounced) x.bounces++; }
+    if (inRange(g.replyOn, from, to)) at(g.replyOn, g.mailbox).replies++;
+    if (inRange(g.meetingOn, from, to)) at(g.meetingOn, g.mailbox).meetings++;
   });
-  return [...out.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.mailbox < b.mailbox ? -1 : a.mailbox > b.mailbox ? 1 : 0));
+  const box = (m) => m || '\uffff'; // Unassigned last in a day, as the database orders a null mailbox
+  return [...out.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : box(a.mailbox) < box(b.mailbox) ? -1 : box(a.mailbox) > box(b.mailbox) ? 1 : 0));
 }
 
 /**
- * Prospects logged between `from` and `to` by mailbox and status (sent, draft-saved, skipped-…), and replies in the
- * period by kind (negative, referral, …). Same rules as outreach_breakdown() in 0007.
+ * Contacts logged between `from` and `to` by mailbox and status (sent, draft-saved, skipped-…), and emails first
+ * replied to in the period by kind (negative, referral, …). Same rules as outreach_breakdown() in 0007.
  * → [{ mailbox, kind: 'status' | 'reply', value, n }]
  */
 export function outreachBreakdown(rows, from, to) {
@@ -53,9 +80,11 @@ export function outreachBreakdown(rows, from, to) {
     if (!out.has(k)) out.set(k, { mailbox, kind, value, n: 0 });
     out.get(k).n++;
   };
-  (rows || []).forEach((e) => {
+  (rows || []).filter((e) => e.inSheet !== false).forEach((e) => {
     if (inRange(e.dateLogged, from, to)) add(e.mailbox, 'status', e.status);
-    if (inRange(e.replyOn, from, to) && e.replyStatus) add(e.mailbox, 'reply', e.replyStatus);
+  });
+  byEmail(rows).forEach((g) => {
+    if (inRange(g.replyOn, from, to)) add(g.mailbox, 'reply', g.replyStatus);
   });
   return [...out.values()];
 }
@@ -70,15 +99,16 @@ export function outreachTotals(daily, mailbox = null) {
 }
 
 /**
- * The emails list: rows for one mailbox (or all), in the period, newest first. `only`: 'sent' (sent in the period),
- * 'replies' (replied in the period) or 'logged' (logged in the period, whatever happened). `search` matches
- * organisation, contact, role, email, subject and sender. → { rows, more }
+ * The emails list, one row per contact still in the sheet: for one mailbox (or all), in the period, newest first.
+ * `only`: 'sent' (sent in the period), 'replies' (replied in the period) or 'logged' (logged in the period, whatever
+ * happened). `search` matches organisation, contact, role, email, subject and sender. → { rows, more }
  */
 export function filterEmails(rows, { mailbox = null, from, to, search = '', only = 'sent', limit = 50, offset = 0 } = {}) {
   const q = str(search).toLowerCase();
   const day = (e) => (only === 'replies' ? e.replyOn : only === 'logged' ? e.dateLogged : e.sentOn);
   const list = (rows || [])
-    .filter((e) => (mailbox === null || e.mailbox === mailbox) && inRange(day(e), from, to) && (only !== 'replies' || e.replyStatus))
+    .filter((e) => e.inSheet !== false && (mailbox === null || e.mailbox === mailbox) && inRange(day(e), from, to)
+      && (only !== 'replies' || e.replyStatus))
     .filter((e) => !q || [e.organisation, e.contactName, e.contactRole, e.contactEmail, e.subject, e.sender]
       .some((v) => v.toLowerCase().includes(q)))
     .sort((a, b) => (day(a) < day(b) ? 1 : day(a) > day(b) ? -1 : a.id < b.id ? -1 : 1));
@@ -101,7 +131,7 @@ export function daysBetween(from, to) {
   return out;
 }
 
-/** "a@x.com, b@y.com" (commas, spaces, semicolons or new lines) → distinct, lower-case, valid addresses. */
+/** "a@example.com, b@example.com" (commas, spaces, semicolons or new lines) → distinct, lower-case, valid addresses. */
 export function parseAddresses(text) {
   const list = (Array.isArray(text) ? text : String(text ?? '').split(/[\s,;]+/)).map((x) => str(x).toLowerCase()).filter(Boolean);
   return [...new Set(list)].filter((x) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));

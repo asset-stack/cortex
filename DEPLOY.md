@@ -71,9 +71,10 @@ to **Public**, and don't add policies to it in the dashboard.
 
 Then run `supabase/migrations/0004_clients_google.sql` the same way (client contacts and contracts, credits,
 and each admin's Google connection; see section 11), then `0005_work_tools.sql` (each person's Tools in My Work),
-then `0006_boards.sql` (the boards under Projects and Marketing, and each person's own Projects page).
+then `0006_boards.sql` (the boards under Projects and Marketing, and each person's own Projects page), then
+`0007_outreach.sql` (Outreach, read from the outreach agent's Google Sheet; see section 12).
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0007_…`). Run each new file
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0008_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one.
 
 **0003 on a database that already has 0002**: **SQL Editor** → **+** → **Create a new snippet**, paste
@@ -115,6 +116,18 @@ tables: choose **Run this query**. Afterwards:
   until then still saves, but it shows the new boards' starting groups (several **Active** / **To do** groups) on one
   page, and a task added to one of those goes to that board, possibly someone's own page. A group it adds goes on
   **General** / **Posting schedule**.
+
+**0007 on an existing database**: run it after `0006` (run any earlier file that hasn't run first, in order, as above).
+Paste `supabase/migrations/0007_outreach.sql` into a new snippet and **Run** it *before* the app version that uses it
+goes live (the app loads `outreach_mailboxes`, which doesn't exist until then). Nobody needs to close Cortex. The
+editor warns about destructive operations because the file drops and recreates its own policies on the Outreach
+tables: choose **Run this query**. It is safe to run again, also when the editor runs it statement by statement and
+carries on past an error: if Supabase shows an error, send it to whoever maintains Cortex and run the current file
+again. Afterwards:
+- **Table Editor** lists `outreach_mailboxes`, `outreach_emails`, `outreach_notes` and `outreach_settings`, none of
+  them **Unrestricted**. **Database** → **Publications** → `supabase_realtime` lists the mailboxes, notes and settings
+  tables, not `outreach_emails` (only the sheet sync writes it, and the app reads it on demand).
+- Then redeploy the `google` function, deploy the new app and set up Outreach (section 12).
 
 ### Upgrading an existing project
 
@@ -275,7 +288,7 @@ There are no invitations to send.
    `setup-admins.sql` come in with the role listed there (**SuperAdmin** or **Admin**).
 3. The SuperAdmin manages people in **Settings** → **Team**: the **Role** menu (SuperAdmin / Admin / Staff),
    the **Active** switch, and each staff member's access to **Projects**, **Marketing**, **Outreach**,
-   **Pipeline** and **Clients** (None / View / Edit). Staff start with Marketing on Edit, Projects, Pipeline
+   **Pipeline** and **Clients** (None / View / Edit). Staff start with Projects and Marketing on Edit, Pipeline
    and Clients on View, and Outreach on None; admins always have Edit. Admins see the page read-only.
    Each person also gets their own Projects page, which they can always edit (unless Projects is None for them).
    Switching Active off removes all of that person's access at once, because every database policy checks it.
@@ -327,6 +340,8 @@ name or email.
 - [ ] Leavers are deactivated in **Settings** → **Team** (by the SuperAdmin) the same day.
 - [ ] The `google` Edge Function's secrets are only `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`; nobody adds
   `private` to the Data API's exposed schemas (that schema holds the admins' Google tokens).
+- [ ] The outreach sheet's link and the mailbox addresses are only in **Settings** → **Outreach**, never in the repo.
+  The sheet holds prospects' names and emails: share it only with the agent's account and the people who need it.
 
 ## 11. Invoice email and contracts (Google)
 
@@ -384,6 +399,65 @@ them. Use a Google Workspace admin account for steps 1 and 2.
 revoke it at Google too: <https://myaccount.google.com/connections>. When someone leaves, deactivating them in
 **Settings** → **Team** also stops their connection from being used.
 
+## 12. Outreach (the agent's sheet)
+
+**Outreach** shows the cold email the outreach agent (a separate Claude agent, outside Cortex) sends from each outreach
+mailbox. The agent logs every prospect in its own Google Sheet. Cortex reads that sheet into the database through the
+`google` Edge Function, **with the Google account of the admin who linked it**, and writes a **Summary** and a **Notes**
+tab back into it. Cortex never sends outreach email and never changes the agent's rows. This needs section 11 steps
+1–3 done and that admin's Google connected (11.5). Contract: `docs/PHASE2.md` §12.
+
+1. **Database**: run `0007_outreach.sql` (section 2, *0007 on an existing database*).
+2. **Google Cloud** (<https://console.cloud.google.com>, the Cortex project) → **APIs & Services** → **Library** →
+   **Google Sheets API** → **Enable**. No new scope: the `drive` scope from section 11 covers Sheets, so nobody has to
+   reconnect.
+3. **Redeploy the `google` function**: Supabase → **Edge Functions** → `google` → **Code**. Replace all of it with the
+   current `supabase/functions/google/index.ts` (GitHub → **Raw**, copy all) → **Deploy** (it may read **Deploy
+   updates**). Then check its settings: **Enforce JWT verification** stays **off**. The secrets don't change.
+4. **Deploy the app** (merge to `main`) once 0007 has run, and reload Cortex.
+5. **The sheet** (the agent's *Email Outbound Tracker*):
+   - Add a column headed `sender` in row 1, anywhere: Cortex finds columns by their header (in any case), so the
+     order doesn't matter, but don't rename the existing headers (renaming one blanks that field in Cortex).
+   - Fill `sender` for the existing rows with the address each row was sent from, for example
+     `name@your-outreach-domain`, or `name@your-old-domain` for rows from before a domain change. Rows left blank show
+     as **Unassigned**.
+   - Share the sheet as **Editor** with the admin who will link it in step 6 (Cortex writes the Summary and Notes
+     tabs), or keep it in a shared drive they belong to.
+6. **Cortex** → **Settings** → **Outreach** (admins):
+   - **Sheet**: open the agent's tab, copy the link from the address bar (it ends in `#gid=…`, which picks the tab)
+     and paste it. Whoever pastes it must have connected Google (**Settings** → **Business**) with an account that can
+     edit the sheet: every sync reads it as them, whoever clicks **Sync now**.
+   - **Mailboxes**: add the three mailboxes, each with a name, its person (if they use Cortex) and **every address it
+     has sent from**, for example both `name@your-old-domain` and `name@your-outreach-domain`. Each mailbox is its own
+     data set; an address belongs to one mailbox.
+   - Open **Outreach** → **Sync now**. The numbers should match the sheet, and the sheet gains **Summary** and **Notes**
+     tabs.
+7. **The agent's instructions** (wherever the outreach agent's prompt or skill lives):
+   - Fill `sender` on **every** row it logs (sent, draft or skipped) with the address of the mailbox it is working
+     for, exactly as listed in **Settings** → **Outreach**.
+   - Keep **one tab shared by all mailboxes**, so its checks dedupe prospects across mailboxes (nobody is emailed from
+     two), and keep the header names.
+   - Don't edit, rename or delete the **Summary** and **Notes** tabs: Cortex rewrites them on every sync. Notes are
+     written in Cortex.
+8. **Access**: admins see Outreach. Staff start with None; the SuperAdmin gives someone **View** (the dashboard, the
+   emails and the notes, and **Sync now**) or **Edit** (also writing notes) in **Settings** → **Team**.
+
+**Using it**
+- Outreach reads the sheet when someone opens it and the last sync is more than 10 minutes old, and on **Sync now**.
+  There is no schedule, so the sheet's **Summary** and **Notes** tabs are as of the last time someone did.
+- Each email links to its Gmail thread in the mailbox it was sent from; you need to be signed in to that mailbox in the
+  browser to open it.
+- Opens show *Not tracked*: the agent's emails carry no tracking image, which would hurt deliverability on the new
+  domains, and Apple Mail makes opens unreliable anyway. `docs/PHASE2.md` §12 says what turning them on would take.
+- A new mailbox or sending address: add it in **Settings** → **Outreach** before the agent uses it. Rows from an
+  address no mailbox lists show as **Unassigned** until it is added (the next sync moves them). To retire a mailbox,
+  switch it off rather than removing it: removing it deletes its notes and leaves its emails Unassigned.
+- Syncs read the sheet as the admin who last set its link, whoever clicks **Sync now**. If that admin leaves or
+  disconnects Google, another admin with Google connected and access to the sheet clears the link in **Settings** →
+  **Outreach** (let it save), then pastes it again: syncs then read the sheet as them. Do this before deactivating the
+  admin who linked it: once they're inactive, syncs stop with "<name> is no longer active…" until another admin sets
+  the link again.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -417,3 +491,20 @@ revoke it at Google too: <https://myaccount.google.com/connections>. When someon
 | Create contract: "Template or folder not found" | The template or folder isn't shared with your Google account, or a link is wrong (section 11.4–5). |
 | Connect Google: after allowing access, a `supabase.co` page shows a 401 "Missing authorization header" | **Enforce JWT verification** is still on for the `google` function. Turn it off (section 11.3), then **Connect Google** again. |
 | Connect Google, sending or creating a contract fails with a function error or "Google isn’t set up yet" | The function isn't deployed as `google`, or the Google secrets are missing (section 11.2–3). |
+| "Couldn't load your workspace … outreach_mailboxes" after an update | `0007_outreach.sql` hasn't run yet (section 2). |
+| Outreach says "No sheet yet" or "Add the sheet in Settings → Outreach" | No sheet is linked yet. An admin pastes the agent's sheet link in **Settings** → **Outreach** (section 12.6). |
+| "Ask an admin to set the outreach sheet again in Settings → Outreach." | Cortex doesn't know whose Google account to read it with (the link was set outside the app, or that admin's account was deleted). An admin with Google connected clears the link, lets it save and pastes it again. |
+| "… is no longer active. Another admin needs to set the sheet link again in Settings → Outreach." | The admin who linked the sheet was deactivated, so Cortex stops using their Google account. Another admin with Google connected clears the link, lets it save and pastes it again. |
+| "… needs to connect Google in Settings → Business." or "… needs to reconnect Google …" | The named admin (who linked the sheet) has no working Google connection. They connect it in **Settings** → **Business**, or another admin takes the link over (section 12, *Using it*). |
+| "The outreach sheet wasn't found or isn't shared with …" | The named admin's Google account can't open the sheet, or the link is wrong. Share the sheet with them as **Editor** (12.5), or paste the right link. |
+| "… can't edit the outreach sheet." | The named admin can read the sheet but not write the Summary and Notes tabs. Make them **Editor** on it. |
+| "The outreach sheet isn't a Google Sheets link." | Paste the sheet's own link (`docs.google.com/spreadsheets/d/…`) in **Settings** → **Outreach**. |
+| "The "…" tab has no outreach columns in row 1." | The link opens another tab, or the agent's headers were renamed. Paste the link of the agent's tab, or put the headers back (`docs/PHASE2.md` §12). |
+| **Sync now** fails mentioning the Google Sheets API | It isn't enabled in the Google Cloud project (section 12.2). Enable it, wait a few minutes and sync again. |
+| **Sync now** fails with "Not found." | The `google` function still runs the old code. Redeploy it (section 12.3). |
+| Rows show under **Unassigned** | Their `sender` is blank or an address no mailbox lists. Add the address to its mailbox in **Settings** → **Outreach** (or fill `sender` in the sheet), then **Sync now**. |
+| Outreach's numbers differ from the sheet | Cortex shows the last sync (its time is on the page): **Sync now**. Then check the rules: an email counts as sent on its `sent_date`, a reply on its `reply_date` (with a `reply_status`), a meeting on its `meeting_booked_date`; drafts and skipped rows aren't sent. Dates must be `YYYY-MM-DD` (or `D/M/YYYY`). |
+| One field is blank on every email (no sent dates, no replies, …) | A header in row 1 of the agent's tab was renamed. Put back the name Cortex expects (`docs/PHASE2.md` §12), then **Sync now**. |
+| A sync reads the wrong tab after the agent's tab was re-created | Cortex reads the tab the link opens (`#gid=…`; renaming or moving it is fine), else the first tab that isn't Summary or Notes. A re-created tab is a new one: open it, copy its link and paste it in **Settings** → **Outreach**. |
+| The sheet's **Summary** or **Notes** is out of date, or a renamed copy stopped updating | They change only when someone opens Outreach or clicks **Sync now**. Cortex writes the tabs named **Summary** and **Notes** and adds them when missing, so a renamed copy is left behind: delete it. |
+| A Gmail link on an email opens the wrong account or "conversation not found" | The thread is in the mailbox that sent it. Sign in to that mailbox in the same browser (Gmail's account switcher). |

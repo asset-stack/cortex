@@ -7,17 +7,21 @@ once on top of `0001` (applied in production, never edited), `0003_timezones_pro
 ([PHASE2.md §8](PHASE2.md#8-0003-time-zones-and-projects-view-only)), `0004_clients_google.sql` on top of `0003`
 ([PHASE2.md §9](PHASE2.md#9-0004-client-contacts-contracts-credits-and-google-invoice-email-contract-docs): client
 contacts and contracts, credits, the admins' Google accounts and the `google` Edge Function), `0005_work_tools.sql`
-([PHASE2.md §10](PHASE2.md#10-0005-each-persons-tools-in-my-work): each person's Tools) and `0006_boards.sql`
+([PHASE2.md §10](PHASE2.md#10-0005-each-persons-tools-in-my-work): each person's Tools), `0006_boards.sql`
 ([PHASE2.md §11](PHASE2.md#11-0006-boards-under-projects-and-marketing): boards under Projects and Marketing, each
-person's own Projects page). The rest of this file is phase 1, corrected where 0002–0006 changed it.
+person's own Projects page) and `0007_outreach.sql`
+([PHASE2.md §12](PHASE2.md#12-0007-outreach--cold-email-per-mailbox-synced-with-the-agents-sheet): Outreach, the
+cold email the agent sends from each mailbox, read from its Google Sheet). The rest of this file is phase 1,
+corrected where 0002–0007 changed it.
 
 - **Roles**: `superadmin | admin | staff` (phase 1's `member` became `staff`). Admins (superadmin or admin) edit
   every module and see finance; only the SuperAdmin changes roles, active flags and module access, and the last
   active SuperAdmin can't be demoted or deactivated. `admin_emails.role` sets the role at sign-up (else staff).
 - **Module access**: modules `projects`, `marketing`, `outreach`, `pipeline`, `clients`, each `none | view | edit`.
-  Admins always edit; staff get a `module_access` override or the default (marketing edit, projects, pipeline
-  and clients view (projects since 0003), outreach none). One rule set on each side: SQL `module_level` / `can_view` / `can_edit`
-  (every module table's RLS), JS `src/lib/access.js` (`useAccess()`; nav, read-only screens, store actions).
+  Admins always edit; staff get a `module_access` override or the default (projects and marketing edit, pipeline
+  and clients view, outreach none; projects was view from 0003 until 0006). One rule set on each side: SQL
+  `module_level` / `can_view` / `can_edit` (every module table's RLS), JS `src/lib/access.js` (`useAccess()`; nav,
+  read-only screens, store actions).
   My Work, team chat and the timesheet are always available; Settings is admins only.
 - **Boards**: the Admin board merged into **Projects** (`board_key in ('projects','marketing')`; the seeded
   *To do* group became *Admin*). `items.values.people` (user ids) replaced `values.owner`. Since 0006 each module holds
@@ -36,6 +40,11 @@ person's own Projects page). The rest of this file is phase 1, corrected where 0
   paid). Business dates (invoices) use `team_today()`, Sydney's day (0003; was Perth); a follow-up to-do lands on
   its owner's own day, `user_today(owner)` from `profiles.timezone` (0003). Demo mode runs the same rules in
   `src/lib/automations.js`.
+- **Outreach** (0007): `outreach_mailboxes`, `outreach_notes` and `outreach_settings` (the sheet's link) are synced
+  and in realtime; `outreach_emails` is **server-written**: only the `google` function's `outreach-sync` route writes
+  it (secret key), from the agent's Google Sheet, and the app reads it on demand through `useStore().outreach` (§4),
+  never in synced state. Everything is read with Outreach view; mailboxes and the link are written by admins, notes
+  with Outreach edit.
 - **Storage**: private bucket `finance` (bank screenshots, receipts), admins only.
 - **Demo team**: David (superadmin), Josh (admin), Hello (staff), all `@example.com`.
 
@@ -91,6 +100,12 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
   messages:  [{ id, channel, user, text, ts }],
   lastRead:  { [userId]: { [channelId]: isoTs } },   // live: only the current user's map
   // 0005: tools: [{ id, user, name, url, username, how, notes, createdBy }]  (each person's logins and links)
+  // 0007 (docs/PHASE2.md §12): Outreach. contacts stay (the Pipeline automation); emails, sequences and approvals
+  // are no longer shown in the UI but are still synced.
+  mailboxes:     [{ id, name, addresses /* [lower-case address] */, owner /* userId | '' */, active }],  // in order
+  outreachNotes: [{ id, mailbox /* '' = all mailboxes */, pinned, body, author, createdAt }],        // newest first
+  outreachSheet: '<the sheet link>',   // absent in live mode for someone without Outreach access
+  outreachEmails: [ … ],               // demo only; live mode reads outreach_emails through useStore().outreach
   // phase 2: moduleAccess, todos, routines, payments, bankStatements, expenses, subscriptions, timeEntries,
   // clients[].plans and clients[].usage (docs/PHASE2.md §2)
 }
@@ -141,6 +156,15 @@ Text columns default to `''` and are `not null` unless noted, so the state never
 `expenses`, `subscriptions` and `time_entries` (columns in `docs/PHASE2.md` §3); `time` columns map `'HH:MM'` ⇄
 `null`.
 
+0007 (Outreach; full columns in `docs/PHASE2.md` §12):
+
+| table | columns (besides id/updated_*) | state source |
+|---|---|---|
+| `outreach_mailboxes` | `name text`, `addresses text[]` (every address the mailbox sends as, lower case), `owner_id uuid null → profiles on delete set null`, `active bool`, `position int` | `mailboxes[]` |
+| `outreach_notes` | `mailbox_id uuid null → outreach_mailboxes cascade` (null = all mailboxes), `pinned bool`, `body text`, `author_id → profiles on delete set null`, `created_at timestamptz` | `outreachNotes[]` (newest first) |
+| `outreach_settings` | `id int pk default 1 check (id = 1)` (seeded), `sheet_url text`, `sheet_by uuid null → profiles on delete set null` (the admin who set the link; a trigger sets it); written by the function only: `synced_at timestamptz`, `sync_error text`, `sync_stats jsonb` | `outreachSheet` (only `sheet_url`) |
+| `outreach_emails` | `row_key text unique`, `mailbox_id uuid null → outreach_mailboxes on delete set null` (null = Unassigned), `sender`, the sheet's fields (`date_logged`, `organisation`, `contact_*`, `status`, `sent_on`, `thread_id`, `bounced`, `reply_status`, `reply_on`, `meeting_on`, …), `in_sheet bool`, `raw jsonb`, `synced_at` | **not synced**: server-written by the sheet sync, read through `useStore().outreach` |
+
 ### Security (RLS on every table)
 - `public.is_staff()`: `security definer`, true when `auth.uid()` has an **active** profile whose email
   ends in `@assetstackai.com`. `public.is_admin()`: `is_staff()` and `role in ('superadmin','admin')` (0002;
@@ -156,6 +180,12 @@ Text columns default to `''` and are `not null` unless noted, so the state never
   (`item_board_id(item_id)`). `board_level(board)` is a team board's module level, or `'edit'` on a personal board
   for whoever `sees_person()` its owner (yourself; staff's for admins; everyone's for the SuperAdmin) while they can
   view Projects (`can_view('projects')`), else `'none'`.
+- Outreach (0007): every table select `can_view('outreach')`. `outreach_mailboxes` and `outreach_settings` (update
+  only; a trigger keeps everything but `sheet_url` for the function) write `is_admin()`. `outreach_notes` insert as
+  yourself with `can_edit('outreach')`, update/delete by the author or an admin with `can_edit('outreach')` (a trigger
+  pins the author and date). `outreach_emails`: no write grants or policies for `authenticated`; the `google` function
+  writes it with the secret key. RPCs `outreach_daily` / `outreach_breakdown` are `security invoker` (RLS applies),
+  `outreach_access()` tells the function whether the caller may view or edit Outreach.
 - Finance (0002): `bank_statements, payments, expenses, subscriptions` and the `finance` storage bucket: `is_admin()` only.
   `todos`: select/insert/update own (`assignee_id`) or admin, delete creator or admin. `time_entries`: write own only,
   select own or admin. `routines`: select `is_staff()`, write admin. `module_access`: select own or admin, write
@@ -174,6 +204,8 @@ Text columns default to `''` and are `not null` unless noted, so the state never
 - `handle_new_user` (after insert on `auth.users`, `security definer`): **raises an exception** when the email domain is not `assetstackai.com` (blocks the sign-up); otherwise inserts the profile (name from `raw_user_meta_data->>'full_name'` or the email's local part, two-letter initials, a colour from a fixed palette by hash, the role listed in `admin_emails`, else `'staff'` (0002)) and adds the user to the `general` channel.
 - `touch()` on every table; `protect_profile` on `profiles`. 0002 adds `protect_invoice_status` and `protect_todo`
   (`created_by` can't be forged), `contact_pipeline` on `contacts`, and the RPCs `ensure_todos` / `generate_due_invoices`.
+  0007 adds `protect_outreach_note` (a note's author and date) and `protect_outreach_settings` (the app changes only the
+  sheet's link; `sheet_by` follows whoever changes it).
 - Seed (empty start): `org_settings` row 1; board groups `projects`: Active, Backlog · `admin`: To do (0002 moves it to `projects` as *Admin*) · `marketing`: This month; channel `general`. 0006 adds the starting boards and puts the Projects groups on *General*, the Marketing ones on *Posting schedule*; triggers `add_personal_board` (new profiles) and `place_on_board` (fills a missing `board_id`).
 - `alter publication supabase_realtime add table …` for every synced table.
 - `supabase/setup-admins.sql` (run after 0002): `insert into public.admin_emails (email, role) values ('you@assetstackai.com', 'superadmin'), … on conflict (email) do update set role = excluded.role;` plus updates that promote people who already signed in to their listed role (never demote).
@@ -186,7 +218,8 @@ Text columns default to `''` and are `not null` unless noted, so the state never
 - `schema.js` (pure, no Supabase import):
   - `TABLES`: ordered parent → child, each `{ name, key: (row) => string, onConflict? }`
     (`channel_members` key `channel_id:user_id`, `read_state` key `user_id:channel_id`, `module_access` key
-    `user_id:module`).
+    `user_id:module`). `outreach_emails` is deliberately not in `TABLES` (0007): it is never loaded, diffed or written
+    by the sync engine.
   - `flatten(state) → { [table]: Map<key, row> }`: DB-column rows, snake_case, `''`→`null` for dates/uuid fks, positions from array index (from the end for clients, contacts, invoices and expenses; per person and day for todos and time entries). `read_state` only for `state.me`. Never emits `updated_at/updated_by`.
   - `assemble(rowsByTable, { me }) → state fields` (everything except `version/mode/me`). Must satisfy **`flatten(assemble(flatten(s)))` deep-equals `flatten(s)`** for any valid state.
   - `diff(prev, next) → ops[]`: `{ table, op: 'upsert'|'delete', key, row }` comparing rows by `JSON.stringify` with sorted keys.
@@ -219,6 +252,15 @@ Text columns default to `''` and are `not null` unless noted, so the state never
 - Extra context value `google: { ready, demo, connected, email, connectedAt }` (0004): the signed-in admin's own Google
   connection, read from `google_me()` (not synced state; demo: `{ demo: true, connected: false }`). Google work goes
   through `src/integrations/google.js` → the store's `invoke()` → the `google` Edge Function.
+- Extra context value `outreach` (0007), the read API for the agent's emails, which are not in state (both modes;
+  every call resolves to `{ ok, … }` or `{ ok: false, error }`, never throws):
+  `live`; `daily(from, to)` → `{ rows: [{ day, mailbox, sent, replies, bounces, meetings }] }` (live: RPC
+  `outreach_daily`); `breakdown(from, to)` → `{ rows: [{ mailbox, kind: 'status' | 'reply', value, n }] }` (RPC
+  `outreach_breakdown`); `emails({ mailbox /* null = all, '' = Unassigned */, from, to, search, only /* 'sent' |
+  'replies' | 'logged' */, limit, offset })` → `{ rows, more }` (a paged select on `outreach_emails`, rows through
+  `emailFromRow()`); `status()` → `{ sheetUrl, syncedAt, error, stats }` (`outreach_settings`); `sync()` → the
+  `google/outreach-sync` route (`actions.syncOutreach()`; refused in demo mode). Demo mode answers the same calls from
+  `state.outreachEmails` with the same rules (`src/lib/outreach.js`).
 
 ## 5. Auth (`src/components/auth/AuthGate.jsx`)
 Live mode only (demo renders children directly). States: loading → signed out (Cortex card, **Sign in with Google**, note "Use your @assetstackai.com account") → signed in but no active profile ("Your account isn't active yet. Ask an admin.", Sign out) → app.

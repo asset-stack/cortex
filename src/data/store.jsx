@@ -1261,9 +1261,10 @@ const DEMO_GOOGLE = { ready: true, demo: true, connected: false, email: '' };
 
 // Outreach's emails (docs/PHASE2.md §12) are read on demand, not kept in state: they grow by the hundred a day. Both
 // modes answer the same calls; every call resolves (never throws) to { ok, … } or { ok: false, error }.
-//   daily(from, to) → { rows: [{ day, mailbox, sent, replies, bounces, meetings }] }   (src/lib/outreach.js)
+//   daily(from, to) → { rows: [{ day, mailbox, sent, replies, bounces, meetings }] }   (src/lib/outreach.js; counts emails)
 //   breakdown(from, to) → { rows: [{ mailbox, kind: 'status' | 'reply', value, n }] }
-//   emails({ mailbox, from, to, search, only, limit, offset }) → { rows, more }        (mailbox null = all, '' = Unassigned)
+//   emails({ mailbox, from, to, search, only, limit, offset }) → { rows, more }        (one per contact; mailbox null = all,
+//                                                                                    '' = Unassigned)
 //   status() → { sheetUrl, syncedAt, error, stats }   sync() → { stats } (live only: the google function)
 function demoOutreach(state) {
   const rows = state?.outreachEmails || [];
@@ -1301,7 +1302,7 @@ function liveOutreach(syncOutreach) {
     emails: async ({ mailbox = null, from, to, search = '', only = 'sent', limit = 50, offset = 0 } = {}) => {
       try {
         const col = OUTREACH_DAY[only] || OUTREACH_DAY.sent;
-        let q = supabase.from('outreach_emails').select('*').gte(col, from).lte(col, to);
+        let q = supabase.from('outreach_emails').select('*').eq('in_sheet', true).gte(col, from).lte(col, to);
         if (only === 'replies') q = q.neq('reply_status', '');
         if (mailbox !== null) q = mailbox ? q.eq('mailbox_id', mailbox) : q.is('mailbox_id', null);
         const term = String(search ?? '').replace(/[,()*%\\]/g, ' ').trim(); // PostgREST or() syntax characters

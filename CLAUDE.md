@@ -3,7 +3,7 @@
 Cortex is AssetStack's internal ops platform (Vite + React 18 + Tailwind 3 + lucide-react, Supabase in live mode).
 It is separate from the marketing site (`AssetLanding`) and from the signed-in product
 (bunburycouncil.assetstack.site). The backend contract is `docs/BACKEND.md` (phase 1) plus `docs/PHASE2.md`
-(team workflow: roles, module access, My Work, finance, timesheets, boards); setup steps are in `DEPLOY.md`.
+(team workflow: roles, module access, My Work, finance, timesheets, boards, Outreach); setup steps are in `DEPLOY.md`.
 
 ## Rules
 - All data access goes through `src/data/store.jsx` (`useStore()` → `{ state, actions }`), in both modes. Screens
@@ -14,8 +14,9 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
 - Keep demo mode working. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` the app runs on localStorage
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
-  migration that has been applied** (`0001`–`0006` are live in production): fix forward in the next file. A migration must never mention `module_level` unless it
-  redefines it (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table
+  migration that has been applied** (`0001`–`0006` are live in production; treat `0007` the same once it has run): fix
+  forward in the next file. A migration must never mention `module_level` unless it redefines it
+  (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table
   keeps row-level security on with policies that require `is_staff()` (directly or through `is_admin()` /
   `can_view()` / `can_edit()` / the board helpers), and is added to the `supabase_realtime` publication if it is synced. Extend
   `scripts/test-db.mjs` to cover it.
@@ -34,6 +35,11 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
 - **A new module gets a module key**: add it to `MODULES` and `STAFF_DEFAULTS` in `src/lib/access.js`, to the
   `module_access.module` check and the defaults in `public.module_level()` (in a new migration), give its tables
   `can_view` / `can_edit` policies on that key, and set `module` on its `NAV` entry in `Sidebar.jsx`.
+- **Outreach (0007)**: `outreach_emails` is written only by the `google` function's sheet sync (route `outreach-sync`,
+  secret key); the app reads it through `useStore().outreach`, never in synced state, and never writes it. A row is a
+  contact; its numbers count emails (rows grouped by Gmail message) and follow one rule set: `outreach_daily()` /
+  `outreach_breakdown()` ⇄ `src/lib/outreach.js` ⇄ the function's Summary tab. Mailbox addresses and the sheet link are data (Settings → Outreach), never code. Cortex never sends outreach
+  email (the agent does).
 - Automations run in the database in live mode (`contact_pipeline` trigger, `ensure_todos` and
   `generate_due_invoices` RPCs) and in `src/lib/automations.js` in demo mode. Change both together; live mode
   never creates those rows client-side.
@@ -54,9 +60,9 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
 - No secrets in the frontend. Google (invoice email from the approver's own Gmail, contract Docs in Drive) goes
   through `src/integrations/google.js` → the store's `invoke()` → the `google` Edge Function
   (`supabase/functions/google/index.ts`: one self-contained, pasteable file with no imports, tested by
-  `scripts/test-google.mjs`). Admins' Google refresh tokens live only in `private.google_accounts`, read by the
-  function with the secret key, which exists only inside the Supabase function runtime (injected by Supabase).
-  Outreach's Gmail feed and the Claude agent (`src/integrations/gmail.js`, `claudeAgent.js`) are still stubs.
+  `scripts/test-google.mjs`), as does the Outreach sheet sync (`syncOutreach()` → route `outreach-sync`). Admins'
+  Google refresh tokens live only in `private.google_accounts`, read by the function with the secret key, which exists
+  only inside the Supabase function runtime (injected by Supabase).
 - The printed tax invoice and the emailed PDF both come from `taxInvoiceModel()` (`src/lib/taxInvoice.js`); change
   invoice content there, not in one renderer. pdf-lib loads only on demand (dynamic import).
 - Domain is `assetstackai.com` (never `assetstack.ai`, which belongs to another company).

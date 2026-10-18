@@ -18,7 +18,9 @@ RLS on every table, repo is public (no real people/client data, keys or bank det
   page (§11).
 - **Marketing** board: shared, everyone edits ("marketing machine" detail comes later). Since `0006` it is split
   into boards: Daily Automation, Posting schedule, Campaigns, Events (§11).
-- **Outreach**: admins only by default; the SuperAdmin can switch it on (view/edit) per staff member.
+- **Outreach**: admins only by default; the SuperAdmin can switch it on (view/edit) per staff member. Since `0007` it
+  shows the cold email a separate Claude agent sends from each outreach mailbox, read from the agent's Google Sheet
+  (§12); its Contacts list stays, for the Pipeline automation below.
 - **Pipeline**: everyone views, admins edit. **Automation**: a contact moving to *Replied* or
   *Meeting booked* creates (or advances) a deal in Pipeline, plus a follow-up to-do for its owner.
 - **Clients** (third stage): staff **view** clients, invoices and client usage, but cannot approve, mark
@@ -61,6 +63,10 @@ staff default above. One implementation per side:
 Since 0006 Projects and Marketing boards each have a level (§11): a team board has its module's level; a person's own
 Projects page is edit for whoever may open it.
 
+Outreach since 0007 (§12): `view` sees the dashboard, the emails and the notes and may **Sync now**; `edit` also writes
+notes (changing or removing one: its author or an admin). The mailboxes and the sheet's link are admins only
+(**Settings → Outreach**).
+
 UI rules: nav hides modules at `none`; a hidden route falls back to My Work. At `view`, pages render
 read-only (no add buttons, pickers disabled, no drag, inputs readOnly). Store actions also refuse edits
 the user can't make (defence in depth); RLS is the real enforcement.
@@ -91,6 +97,11 @@ bankStatements: [{ id, weekStart, filePath, note, uploadedBy, createdAt }],
 expenses:       [{ id, date, vendor, category, amount /* inc GST */, gst, clientId, receiptPath, notes, createdBy }],
 subscriptions:  [{ id, name, vendor, category, amount, cycle /* 'monthly'|'annually' */, renewsOn, active, notes }],
 timeEntries:    [{ id, user, day, start /* 'HH:MM' */, minutes, category, note, source /* 'manual'|'suggested' */ }],
+// 0007 (§12): Outreach. The agent's emails are not in state: useStore().outreach reads them on demand.
+mailboxes:      [{ id, name, addresses /* [lower-case address] */, owner /* userId | '' */, active }],   // in order
+outreachNotes:  [{ id, mailbox /* '' = all mailboxes */, pinned, body, author, createdAt }],         // newest first
+outreachSheet:  '<the sheet link>',                     // undefined in live mode without Outreach access
+outreachEmails: [{ id, mailbox, sender, sentOn, … }],   // demo only (emailFromRow() shape, §12)
 ```
 Empty strings, never `null`, for absent text/ids/dates in state (as phase 1). Money and counts are numbers.
 Lists that live views read newest-first are stored with the same position convention as phase 1.
@@ -174,7 +185,8 @@ The round-trip property must hold for every table. Rows the user can't read simp
   `addRoutine`, `updateRoutine`, `deleteRoutine` (admins); `ensureTodos(day)` → live: `rpc('ensure_todos')`;
   demo: same rules in JS (`src/lib/automations.js` → `ensureTodosLocal(state, day)`).
 - Outreach: `updateContact(id, patch)`; demo mode applies `contactPipelineLocal` (same rules as the trigger) from
-  `src/lib/automations.js`; live mode relies on the trigger (never create the deal client-side in live).
+  `src/lib/automations.js`; live mode relies on the trigger (never create the deal client-side in live). 0007 adds
+  the mailbox, sheet, note and sync actions (§12).
 - Clients: `addPlan(clientId, plan)`, `updatePlan`, `deletePlan`; `generateDueInvoices()` → live `rpc`, demo
   `generateDueInvoicesLocal`; `approveInvoice(clientId, invId)` → status `Approved`, issued today, due = today + terms,
   then if Gmail is connected `sendInvoice` (stub returns `{ sent: false }` today) → `Sent` + `sentAt`;
@@ -200,7 +212,8 @@ The round-trip property must hold for every table. Rows the user can't read simp
   carried over, mentions. Calls `ensureTodos(today)` once per day per signed-in user.
 - **Projects / Marketing** boards: people column = multi-avatar picker (`PeoplePicker` in `src/components/ui`);
   read-only at `view` (per board since 0006, §11).
-- **Outreach**: contact status select (New → Meeting booked …) and owner; read-only at `view`.
+- **Outreach**: contact status select (New → Meeting booked …) and owner; read-only at `view`. Since 0007 the page is
+  the agent's dashboard, with this contact list kept as its **Contacts** view (§12).
 - **Pipeline**: read-only for `view` (no drag, no stage select, no New deal, no Make client); deal card shows a small
   link icon when it came from a contact.
 - **Clients**: top-level tabs **Clients · Invoices · Money in · Expenses · Usage** (Money in and Expenses admins only;
@@ -430,3 +443,166 @@ version that uses it.
   and new profiles, who sees and edits which board, team boards admins only, moving a task across boards,
   `place_on_board`, re-run, realtime); `scripts/test-sync.mjs` (mapping and positions, `boardLevel` against the SQL
   rules, store actions refused as in RLS, `migrate`, `resolveBoard`).
+
+## 12. 0007: Outreach — cold email per mailbox, synced with the agent's sheet
+
+`supabase/migrations/0007_outreach.sql` runs on top of `0006` (safe to re-run, also statement by statement as the SQL
+editor may run it: no statement relies on another having run in the same transaction or session), before the app
+version that uses it. The `google` Edge Function (§9) gains the route `outreach-sync`, so it is redeployed with it
+(`DEPLOY.md` section 12).
+
+- **Owner's decisions**: Outreach shows the cold email a separate Claude agent (outside Cortex) sends from three
+  outreach mailboxes, one person each (today only David's sends). Each mailbox is its own data set; *All* adds them
+  up. The top line is emails sent per day; then sent, replies, reply rate, opens (*Not tracked* for now, see *Opens*),
+  bounces and meetings, and notes for what the team knows (the outreach strategy that works). Everything also stays in
+  the agent's Google Sheet for hard reference, where Cortex keeps a **Summary** and a **Notes** tab. Cortex never sends
+  outreach email and never changes the agent's rows.
+- **Data flow**:
+  1. The agent keeps its own sheet (*Email Outbound Tracker*): **one tab** shared by every mailbox (so the agent's
+     checks dedupe prospects across mailboxes), one row per prospect, headers in row 1: `date_logged, vertical,
+     organisation, domain, location, kdm_name, kdm_role, kdm_email, apollo_email_status, gmail_check,
+     apollo_history_check, tracker_check, eligible, tier, signal, research_hook, subject, variant, email_id,
+     draft_status, gmail_draft_id, sent_date, sent_message_id, thread_id, sequence_status, followup_stage,
+     next_followup_date, ooo_until, bounced, suppress_until, reply_status, reply_date, reply_summary, note,
+     meeting_booked_date`, plus **`sender`** (added for Cortex: the address the row's mailbox sends from, filled on
+     every row). Dates are `YYYY-MM-DD`, `bounced` is `yes` or blank, `draft_status` is `sent`, `draft-saved`,
+     `draft-lost` or `skipped-…` (colleague, unverified, held, crisis, warm), message and thread ids are Gmail's.
+  2. Someone who can view Outreach opens it, or clicks **Sync now**: `actions.syncOutreach()` → the store's `invoke()`
+     → `google/outreach-sync`. The function checks the caller with their own JWT (`outreach_access()`: view is
+     enough), reads `outreach_settings` with the secret key, and reads the sheet **as the admin who set its link**
+     (`sheet_by`: their token from `private.google_accounts` through `google_token()`), with the Sheets API (the
+     `drive` scope of §9 covers it). It reads the tab the link opens (`#gid=…`, `sheetFromUrl()`), else the first tab
+     that isn't Summary or Notes.
+  3. Each sheet row becomes an `outreach_emails` row, upserted with the secret key in batches. Headers are matched by
+     name in any case, so column order doesn't matter:
+
+     | sheet | `outreach_emails` |
+     |---|---|
+     | `date_logged`, `vertical`, `organisation`, `domain`, `location`, `tier`, `signal`, `subject`, `variant`, `thread_id`, `sequence_status`, `followup_stage`, `reply_status`, `reply_summary`, `note` | same name |
+     | `sender` (else `mailbox`, `from` or `sent_from`: the first with a value; `Name <address>` works) | `sender` (lower case) |
+     | `kdm_name`, `kdm_role`, `kdm_email` | `contact_name`, `contact_role`, `contact_email` |
+     | `draft_status` | `status` |
+     | `sent_date`, `sent_message_id` | `sent_on`, `message_id` |
+     | `next_followup_date`, `reply_date`, `meeting_booked_date` | `next_followup`, `reply_on`, `meeting_on` |
+     | `bounced` (`yes`, `y`, `true`, `1`) | `bounced` (true) |
+     | the whole row's non-blank cells (also the agent's checks, `research_hook`, `ooo_until`, `suppress_until`, …) | `raw` |
+
+     Dates are read as `YYYY-MM-DD` (or `D/M/YYYY`); anything else is blank. The sheet has a row per **contact**: an
+     email to two people at one organisation is two rows with the same `email_id` and `sent_message_id`. So
+     `row_key` (lower case) is the contact and the day it was logged, `kdm_email|date_logged`, else
+     `organisation|kdm_name|date_logged`, which stays the same as the row moves from logged to drafted to sent (the
+     ids only appear along the way); a row with neither is skipped, and of two rows with the same key the later one
+     wins. `mailbox_id` is the mailbox whose `addresses` include `sender` (`mailboxFor()`), else null: **Unassigned**.
+     Every sync works it out again, so adding an address to a mailbox moves its rows at the next sync. A row this sync
+     didn't write (gone from the sheet) keeps its data, with `in_sheet` false. A tab whose row 1 has none of these
+     headers is refused.
+  4. It writes two tabs back into the same spreadsheet, found by name (any case) and added when missing, each cleared
+     and rewritten as plain values: **Summary** (`Date, Mailbox, Sent, Replies, Reply rate, Bounces, Meetings`, one row
+     per day and mailbox, newest day first, by the rules under *Numbers*; then the all-time totals per mailbox and for
+     all) and **Notes** (`Created, Mailbox, Pinned, Author, Note`, times in Sydney; pinned first, then newest). It never
+     writes the agent's tab.
+  5. It records `synced_at`, `sync_error` (cleared when it works) and `sync_stats` (`{ rows, contacts, sent, replies,
+     bounced, meetings, unassigned, duplicates, skipped, missing, tab }`, all time; `contacts` = rows with a sent date,
+     the rest counted as under *Numbers*) in `outreach_settings` and returns
+     `{ ok, stats }`. A failure (no link, that admin's Google not connected or without access to the sheet, the Sheets
+     API off, …) is saved as `sync_error`, which Outreach shows to everyone; the messages name the admin whose Google
+     account is used. Upserts are idempotent, so two syncs at once do no harm and there is no lock.
+- **When the sheet is read**: when someone opens Outreach and the last sync is more than 10 minutes old, and on **Sync
+  now**. There is no cron: when nobody is looking nothing needs to be fresh, and the sheet stays the record in between
+  (its Summary and Notes tabs are as of the last sync).
+- **Numbers** (one rule set: SQL `outreach_daily()` / `outreach_breakdown()` ⇄ JS `outreachDaily()` /
+  `outreachBreakdown()` / `outreachTotals()` in `src/lib/outreach.js`, and the Summary tab's `summaryValues()` in the
+  function; change them together). They count **emails, not people**: rows are grouped by their Gmail message
+  (`message_id`, else the row's `row_key`; `emailKey()`) and mailbox, so an email to two contacts counts once. An
+  email counts as **sent** on its first `sent_on`, and as a **bounce** on that same day if any of its addresses
+  bounced; as a **reply** on its first `reply_on` among rows with a `reply_status`; and as a **meeting** on its first
+  `meeting_on`. Rows no longer in the sheet (`in_sheet` false) count nowhere, so the numbers match the sheet's.
+  Reply rate = replies ÷ sent in the period (a reply in the period may answer an email sent before it). The
+  **breakdown** counts contacts logged in the period (`date_logged`, one per row) by status (sent, draft-saved,
+  skipped-…) and the emails first replied to in the period by the kind of that first reply (negative, referral, …;
+  on a same-day tie, the first alphabetically). The emails list shows a row per contact. Days are the sheet's dates
+  as the agent wrote them; a period ends on the browser's today (`periodRange()`).
+- **Tables** (`id uuid`, touch, RLS on):
+  - `outreach_mailboxes (name, addresses text[] (every address it sends as, lower case: an old and a new domain are
+    one mailbox), owner_id uuid null → profiles on delete set null (its person may have no Cortex account), active,
+    position)`: realtime.
+  - `outreach_emails (row_key text unique, mailbox_id uuid null → outreach_mailboxes on delete set null (null =
+    Unassigned), sender, date_logged, vertical, organisation, domain, location, contact_name, contact_role,
+    contact_email, tier, signal, subject, variant, status, sent_on, message_id, thread_id, sequence_status,
+    followup_stage int, next_followup, bounced bool, reply_status, reply_on, reply_summary, note, meeting_on, in_sheet
+    bool, raw jsonb, synced_at)`, indexed on `sent_on`, `reply_on`, `date_logged` and `mailbox_id`. **Server-written**:
+    `authenticated` has select only, it is not in realtime and not synced.
+  - `outreach_notes (mailbox_id uuid null → outreach_mailboxes cascade (null = all mailboxes), pinned, body,
+    author_id → profiles on delete set null, created_at)`: realtime.
+  - `outreach_settings`: one row (`id = 1`, seeded): `sheet_url`, `sheet_by → profiles on delete set null` (the admin
+    who set the link), `synced_at`, `sync_error`, `sync_stats jsonb`: realtime.
+- **Triggers**: `protect_outreach_note` pins a note's `author_id` and `created_at` to whoever wrote it, when.
+  `protect_outreach_settings`: a signed-in request changes only `sheet_url`, and `sheet_by` becomes whoever changes
+  it (the sync then reads the sheet with that admin's Google account); `synced_at`, `sync_error` and `sync_stats` are
+  the function's (the secret key has no `auth.uid()`). `touch()` on all four.
+- **RPCs** (granted to `authenticated` only): `outreach_daily(p_from, p_to)` → `(day, mailbox_id, sent, replies,
+  bounces, meetings)` and `outreach_breakdown(p_from, p_to)` → `(mailbox_id, kind 'status' | 'reply', value, n)`, both
+  `security invoker`, so RLS applies (no rows without Outreach); `outreach_access()` → `{ view, edit, admin }`
+  (`security definer`), which the function asks with the caller's JWT before it syncs for them.
+- **Who sees and writes what** (RLS ⇄ store; each refused action returns `false` and changes nothing):
+
+  | | read | write |
+  |---|---|---|
+  | mailboxes | Outreach view | admins (**Settings → Outreach**) |
+  | emails | Outreach view | nobody in the app: the sync, with the secret key (which bypasses RLS) |
+  | notes | Outreach view | Outreach edit, as yourself; changed or removed by their author or an admin |
+  | settings | Outreach view | admins, the sheet's link only |
+  | **Sync now** | | Outreach view (the function checks `outreach_access()`) |
+
+  `outreach` has been a module key since 0002, and staff still default to `none` (§1).
+- **App**:
+  - State (both modes, synced, realtime in live mode): `mailboxes`, `outreachNotes`, `outreachSheet` (§2). The sync
+    mapping (`src/data/backend/schema.js`) has `outreach_settings` (only `sheet_url`, updated in place, and only sent
+    when state holds it), `outreach_mailboxes` and `outreach_notes`.
+  - **The emails are not in synced state**: they only grow (the agent logs dozens of prospects a day per mailbox),
+    `loadAll()` would select every one on each load and resync, every sync's upserts would stream to every open tab,
+    and nobody edits them in the app. The page needs totals and one page of the list at a time, so it asks for those.
+    Demo mode keeps them in `state.outreachEmails`.
+  - Read API `useStore().outreach` (both modes; every call resolves, never throws, to `{ ok, … }` or
+    `{ ok: false, error }`): `live` (bool); `daily(from, to)` → `{ rows: [{ day, mailbox, sent, replies, bounces,
+    meetings }] }`; `breakdown(from, to)` → `{ rows: [{ mailbox, kind, value, n }] }`; `emails({ mailbox /* null =
+    all, '' = Unassigned */, from, to, search, only /* 'sent' | 'replies' | 'logged' */, limit, offset })` →
+    `{ rows, more }` (newest first; `search` matches organisation, contact, role, email, subject and sender);
+    `status()` → `{ sheetUrl, syncedAt, error, stats }`; `sync()` (as `syncOutreach`). Live: the two RPCs and paged
+    selects on `outreach_emails` / `outreach_settings`; demo: the same helpers over `state.outreachEmails`, and
+    `sync()` refuses (*Syncing the sheet works in live mode only.*). An email in the app: `emailFromRow()` →
+    `{ id, mailbox ('' = Unassigned), sender, dateLogged, vertical, organisation, domain, location, contactName,
+    contactRole, contactEmail, tier, signal, subject, variant, status, sentOn, messageId, threadId, sequenceStatus,
+    followupStage, nextFollowup, bounced, replyStatus, replyOn, replySummary, note, meetingOn, inSheet }`.
+  - Store actions: `addMailbox({ name, addresses, owner }) → id`, `updateMailbox(id, patch)`, `removeMailbox(id)`
+    (with its notes; its emails become Unassigned), `moveMailbox(id, ±1)`, `setOutreachSheet(url)` (admins);
+    `addOutreachNote({ body, mailbox, pinned }) → id`, `updateOutreachNote(id, { body, pinned, mailbox })`,
+    `removeOutreachNote(id)` (Outreach edit; author or admin to change or remove); `syncOutreach()` → `{ ok, stats }`
+    or `{ ok: false, error }`. Pure helpers in `src/lib/outreach.js` (also `parseAddresses`, `mailboxFor`,
+    `gmailThreadUrl`, `sheetFromUrl`, `periodRange`, `daysBetween`, `filterEmails`).
+  - Demo seed: mailboxes David, Josh and Sarah (`david@` / `josh@` / `sarah@example.com`; Sarah has no Cortex user),
+    about 215 rows over the last 12 working days and two notes (one pinned); `migrate()` adds them to older saved demo
+    data.
+- **Screens**: **Outreach** has two views, **Emails** and **Contacts**. Emails: a mailbox picker (All, each mailbox,
+  and Unassigned when there are such rows) and a period (7, 30 or 90 days); emails sent per day, then Sent, Replies,
+  Reply rate, Bounces, Meetings and Opens (*Not tracked*), the breakdown, the emails (each links to its Gmail thread in
+  the sending mailbox, `gmailThreadUrl()`), the notes (pinned first; written at edit), and the last sync with **Sync
+  now** (`src/components/outreach/SyncStatus.jsx`, which also syncs on open). **Contacts** stays: the contact list
+  with owner and status, because a contact moving to *Replied* or *Meeting booked* drives the Pipeline automation
+  (`contact_pipeline`, §3). The old demo composer, Gmail feed, sequences and approvals queue are gone from the UI;
+  their tables (`emails`, `sequences`, `approvals`), state and sync are untouched. **Settings → Outreach** (admins):
+  the sheet's link, and the mailboxes (name, addresses, person, active, order).
+- **Opens are not tracked yet.** An open is only visible through a tracking image: a tiny remote image, unique to each
+  email, that the recipient's mail app loads. The agent's emails carry none, on purpose: tracking images (and tracked
+  links) are a spam signal, and the outreach domains are new and still building their sending reputation; and Apple
+  Mail (Mail Privacy Protection) loads every image when the email arrives, so many "opens" would be fake, while other
+  apps block images and hide real ones. Outreach shows *Not tracked* rather than a misleading number. Turning opens on
+  would take: the agent adding an image link per email (with its `email_id`); a public route that serves the image and
+  records the open (an Edge Function, ideally behind a tracking subdomain of the sending domain), telling Apple's
+  automatic loads apart from real ones; a new migration with the open columns on `outreach_emails` (written by that
+  route with the secret key, like the sync); the same rule in `outreach_daily()` and `outreachDaily()`; and the KPI.
+  Only worth it once the domains are warmed up.
+- **Tests**: `scripts/test-db.mjs` phase 7 (who reads and writes each table, no client writes to `outreach_emails`,
+  the two guards, the RPCs against the JS rules, re-run, realtime); `scripts/test-sync.mjs` (mapping, the store actions
+  refused as in RLS, `src/lib/outreach.js`, seed and `migrate`); `scripts/test-google.mjs` (`outreach-sync` with
+  Google and Supabase mocked).

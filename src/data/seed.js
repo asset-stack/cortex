@@ -308,7 +308,7 @@ export function outreachDemo(today, idf = (p) => `${p}_${uid()}`) {
         const status = sent ? 'sent' : OUTREACH_SKIPS[rnd(OUTREACH_SKIPS.length)];
         const id = idf('oe');
         const e = {
-          id, mailbox: m.id, sender: m.addresses[0], dateLogged: day, vertical, organisation, domain: 'example.com', location,
+          id, rowKey: '', mailbox: m.id, sender: m.addresses[0], dateLogged: day, vertical, organisation, domain: 'example.com', location,
           contactName: name, contactRole: OUTREACH_ROLES[rnd(OUTREACH_ROLES.length)],
           contactEmail: `${name.toLowerCase().replace(/[^a-z]+/g, '.')}@example.com`, tier: ['A', 'B', 'C'][rnd(3)],
           signal: OUTREACH_SIGNALS[rnd(OUTREACH_SIGNALS.length)], subject: sent ? `${organisation}: asset condition data` : '',
@@ -317,6 +317,7 @@ export function outreachDemo(today, idf = (p) => `${p}_${uid()}`) {
           nextFollowup: sent ? addDays(day, 4) : '', bounced: false, replyStatus: '', replyOn: '', replySummary: '', note: '',
           meetingOn: '', inSheet: true,
         };
+        e.rowKey = `${e.contactEmail}|${day}`;
         if (sent && rnd(100) < 2) { e.bounced = true; e.sequenceStatus = 'bounced'; }
         else if (sent && rnd(100) < 7) {
           const replyOn = addDays(day, 1 + rnd(3));
@@ -327,6 +328,15 @@ export function outreachDemo(today, idf = (p) => `${p}_${uid()}`) {
           }
         }
         emails.push(e);
+        // Some emails go to two people at the organisation (one Gmail message, a row each, as the agent logs them).
+        if (sent && rnd(10) < 2) {
+          const other = OUTREACH_PEOPLE[rnd(OUTREACH_PEOPLE.length)];
+          const contactEmail = `${other.toLowerCase().replace(/[^a-z]+/g, '.')}@example.com`;
+          if (contactEmail !== e.contactEmail) {
+            emails.push({ ...e, id: idf('oe'), rowKey: `${contactEmail}|${day}`, contactName: other, contactEmail,
+              contactRole: OUTREACH_ROLES[rnd(OUTREACH_ROLES.length)], bounced: false, sequenceStatus: e.bounced ? 'active' : e.sequenceStatus });
+          }
+        }
       }
     });
   });
