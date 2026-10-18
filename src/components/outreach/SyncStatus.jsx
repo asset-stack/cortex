@@ -10,21 +10,26 @@ let autoSyncedAt = 0; // this page load's last automatic sync, so switching view
 
 /**
  * When the sheet was last read into Cortex, and Sync now. `autoSync` (the Outreach page, live mode): sync once on
- * open when the last sync is missing or over 10 minutes old. `onSynced` runs after a sync that worked.
+ * open when the last sync is missing or over 10 minutes old. `onSynced` runs after a sync that worked. `reader`
+ * (Settings → Outreach): whose Google account reads the sheet, and Use my Google for another admin.
  */
-export default function SyncStatus({ autoSync = false, onSynced, className }) {
-  const { state, outreach } = useStore();
+export default function SyncStatus({ autoSync = false, onSynced, reader = false, className }) {
+  const { state, actions, outreach, google } = useStore();
   const { isAdmin } = useAccess();
   const [status, setStatus] = useState(null); // outreach.status()
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(''); // the last Sync now's error
+  const [taking, setTaking] = useState(false); // Use my Google, until it has saved
   const api = useRef(outreach);
   api.current = outreach;
   const done = useRef(onSynced);
   done.current = onSynced;
   const seq = useRef(0);
   const alive = useRef(true);
-  useEffect(() => () => { alive.current = false; }, []);
+  useEffect(() => {
+    alive.current = true; // StrictMode mounts twice in development
+    return () => { alive.current = false; };
+  }, []);
 
   const load = useCallback(async () => {
     const n = ++seq.current;
@@ -61,6 +66,21 @@ export default function SyncStatus({ autoSync = false, onSynced, className }) {
     sync();
   }, [autoSync, outreach.live, status, sync]);
 
+  // Use my Google: this admin's Google account reads the sheet from now on (the last error goes), then a sync.
+  const takeOver = async () => {
+    if (!google.connected) { setFailed('Connect Google in Settings → Business first.'); return; }
+    setFailed('');
+    setTaking(true);
+    const res = await actions.takeOutreachSheet();
+    if (!alive.current) return;
+    setTaking(false);
+    if (!res?.ok) { setFailed(res?.error || 'That didn’t work'); return; }
+    await load();
+    sync();
+  };
+  const readerName = status?.sheetBy ? state.users.find((u) => u.id === status.sheetBy)?.name || '' : '';
+  const showReader = reader && outreach.live && isAdmin && status?.ok && Boolean(status.sheetUrl);
+
   let line;
   let warn = false;
   if (busy) line = 'Syncing…';
@@ -82,6 +102,17 @@ export default function SyncStatus({ autoSync = false, onSynced, className }) {
         className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full chip px-3.5 font-semibold disabled:cursor-not-allowed disabled:opacity-60">
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />}Sync now
       </button>
+      {showReader && (
+        <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          {readerName && <span className="dimmer">Reads as {readerName}</span>}
+          {status.sheetBy !== state.me && (
+            <button type="button" onClick={takeOver} disabled={busy || taking}
+              className="inline-flex h-9 shrink-0 items-center rounded-full chip px-3.5 font-semibold disabled:cursor-not-allowed disabled:opacity-60">
+              Use my Google
+            </button>
+          )}
+        </span>
+      )}
     </div>
   );
 }

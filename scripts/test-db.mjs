@@ -2865,18 +2865,28 @@ async function phase7(ctx) {
     return one('select sheet_url, sheet_by, synced_at, sync_error, sync_stats, updated_by from public.outreach_settings where id = 1');
   };
   const setLink = async (user, url) => { await as(user); return affected('update public.outreach_settings set sheet_url = $1 where id = 1', [url]); };
+  const syncResults = async (error) => {
+    await asSecretKey();
+    return affected(`update public.outreach_settings set synced_at = '2026-10-18T01:00:00Z', sync_error = $1,
+      sync_stats = '{"rows": 21, "unassigned": 3}' where id = 1`, [error]);
+  };
+  const T1 = '2026-10-18T01:00:00.000Z';
   const linked = await setLink(boss, SHEET);
   const afterLink = await settingsNow();
+  const firstSync = await syncResults('No sender column');
+  const afterFirstSync = await settingsNow();
   await as(boss);
   const forged = await affected(`update public.outreach_settings set synced_at = now(), sync_error = 'Forged', sync_stats = '{"rows": 99}',
     sheet_by = $1 where id = 1`, [david]);
   const afterForge = await settingsNow();
-  const resaved = await setLink(early, SHEET); // another admin saves the same link (the sync sends the whole row)
+  await syncResults('Boss is no longer active.');
+  const resaved = await setLink(early, SHEET); // another admin saves the same link: Use my Google
   const afterResave = await settingsNow();
   const relinked = await setLink(david, SHEET2);
   const afterRelink = await settingsNow();
   const staffLinks = {};
   for (const [name, user] of Object.entries({ newcomer, hello, alice, carol })) staffLinks[name] = await setLink(user, 'https://example.com/nope');
+  const afterStaff = await settingsNow();
   await as(null);
   await db.exec('set role anon');
   const anonSettings = { read: await error('select * from public.outreach_settings'), update: await error("update public.outreach_settings set sheet_url = ''") };
@@ -2884,19 +2894,23 @@ async function phase7(ctx) {
   const synced = await affected(`update public.outreach_settings set synced_at = '2026-10-18T01:00:00Z', sync_error = 'No sender column',
     sync_stats = '{"rows": 21, "unassigned": 3}', sheet_by = $1 where id = 1`, [boss]);
   const afterSync = await settingsNow();
+  const results = (x) => x.synced_at?.toISOString() === T1 && stable(x.sync_stats) === stable({ rows: 21, unassigned: 3 });
   check('52. settings: an admin sets the sheet\'s link and becomes sheet_by (the Google account the sync reads it with); another '
-    + 'admin saving the same link doesn\'t take it over; changing it does',
+    + 'admin saving the same link takes it over (Use my Google) and clears the last error; a new link also clears the last sync',
     linked === 1 && afterLink.sheet_url === SHEET && afterLink.sheet_by === boss && afterLink.updated_by === boss
-      && resaved === 1 && afterResave.sheet_by === boss && relinked === 1 && afterRelink.sheet_url === SHEET2 && afterRelink.sheet_by === david,
-    { linked, afterLink, resaved, afterResave, relinked, afterRelink });
-  check('52. settings: signed-in users can\'t touch synced_at, sync_error, sync_stats or sheet_by (pinned); staff (edit, view, none, '
-    + 'inactive) and anon can\'t change the link; the secret key writes the sync\'s results (and sheet_by)',
-    forged === 1 && afterForge.synced_at === null && afterForge.sync_error === '' && stable(afterForge.sync_stats) === '{}'
-      && afterForge.sheet_by === boss && afterForge.sheet_url === SHEET && Object.values(staffLinks).every((n) => n === 0)
+      && afterLink.synced_at === null && firstSync === 1 && results(afterFirstSync) && afterFirstSync.sync_error === 'No sender column'
+      && resaved === 1 && afterResave.sheet_by === early && afterResave.sync_error === '' && results(afterResave)
+      && relinked === 1 && afterRelink.sheet_url === SHEET2 && afterRelink.sheet_by === david && afterRelink.synced_at === null
+      && stable(afterRelink.sync_stats) === '{}' && afterRelink.sync_error === '',
+    { linked, afterLink, afterFirstSync, resaved, afterResave, relinked, afterRelink });
+  check('52. settings: signed-in users can\'t set synced_at, sync_error, sync_stats or sheet_by (a save makes them sheet_by and '
+    + 'clears the error); staff (edit, view, none, inactive) and anon can\'t change the link; the secret key writes the sync\'s '
+    + 'results (and sheet_by)',
+    forged === 1 && results(afterForge) && afterForge.sync_error === '' && afterForge.sheet_by === boss && afterForge.sheet_url === SHEET
+      && Object.values(staffLinks).every((n) => n === 0) && afterStaff.sheet_url === SHEET2 && afterStaff.sheet_by === david
       && Object.values(anonSettings).every((e) => e !== null) && synced === 1 && afterSync.sheet_url === SHEET2
-      && afterSync.synced_at?.toISOString() === '2026-10-18T01:00:00.000Z' && afterSync.sync_error === 'No sender column'
-      && stable(afterSync.sync_stats) === stable({ rows: 21, unassigned: 3 }) && afterSync.sheet_by === boss,
-    { forged, afterForge, staffLinks, anonSettings, synced, afterSync });
+      && results(afterSync) && afterSync.sync_error === 'No sender column' && afterSync.sheet_by === boss,
+    { forged, afterForge, staffLinks, afterStaff, anonSettings, synced, afterSync });
 
   // 53. Reading: everything with Outreach view ----------------------------------------------------------------------------
 
@@ -3072,6 +3086,38 @@ async function phase7(ctx) {
     removed === 1 && leftover.note === 0 && leftover.unassigned === 1 && unassignedAfter === 4
       && stable(weekAfter) === stable(lib.outreachDaily(appAfter, '2026-10-05', '2026-10-11')),
     { removed, leftover, unassignedAfter, weekAfter });
+
+  // 57. Two syncs at once -------------------------------------------------------------------------------------------------
+
+  // Sync B (started later, read the sheet later) has written its rows when the older sync A's upsert of the same rows
+  // lands: keep_newer_sync skips A's writes, so B's "not in the sheet any more" step doesn't flag them.
+  const tA = '2026-10-18T02:00:00.000Z';
+  const tB = '2026-10-18T02:00:05.000Z';
+  const raceRow = (key, at, subject) => ({ row_key: key, sender: 'david@example.com', subject, sent_on: '2026-10-17', in_sheet: true, synced_at: at });
+  await asSecretKey();
+  const bUpsert = await postgrestUpsert('outreach_emails', [raceRow('race-1', tB, 'B'), raceRow('race-2', tB, 'B')], { onConflict: 'row_key' });
+  const aUpsert = await postgrestUpsert('outreach_emails', [raceRow('race-1', tA, 'A'), raceRow('race-2', tA, 'A'), raceRow('race-3', tA, 'A')],
+    { onConflict: 'row_key' });
+  const goneB = await affected("update public.outreach_emails set in_sheet = false where synced_at < $1 and in_sheet and row_key like 'race-%'", [tB]);
+  const goneA = await affected("update public.outreach_emails set in_sheet = false where synced_at < $1 and in_sheet and row_key like 'race-%'", [tA]);
+  await as(null);
+  const raced = await rows("select row_key, subject, in_sheet, synced_at from public.outreach_emails where row_key like 'race-%' order by row_key");
+  const later = await (async () => {
+    await asSecretKey();
+    const n = await postgrestUpsert('outreach_emails', [raceRow('race-1', '2026-10-18T03:00:00.000Z', 'C')], { onConflict: 'row_key' });
+    await as(null);
+    return { n, row: await one("select subject, synced_at from public.outreach_emails where row_key = 'race-1'") };
+  })();
+  await asSecretKey();
+  await db.query("delete from public.outreach_emails where row_key like 'race-%'");
+  await as(null);
+  check('57. two syncs at once: an older sync\'s upsert never overwrites a newer sync\'s rows (keep_newer_sync), so the newer one '
+    + 'flags only rows it didn\'t read; a later sync still writes',
+    bUpsert === null && aUpsert === null && goneB === 1 && goneA === 0
+      && stable(raced.map((r) => [r.row_key, r.subject, r.in_sheet, r.synced_at.toISOString()])) === stable([
+        ['race-1', 'B', true, tB], ['race-2', 'B', true, tB], ['race-3', 'A', false, tA]])
+      && later.n === null && later.row.subject === 'C' && later.row.synced_at.toISOString() === '2026-10-18T03:00:00.000Z',
+    { bUpsert, aUpsert, goneB, goneA, raced, later });
 
   await as(null);
   return ctx;

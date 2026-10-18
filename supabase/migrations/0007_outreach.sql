@@ -117,17 +117,24 @@ drop trigger if exists protect_outreach_note on public.outreach_notes;
 create trigger protect_outreach_note before insert or update on public.outreach_notes
   for each row execute function public.protect_outreach_note();
 
--- The app sets only the sheet's link; the admin who sets it is the Google account the sync reads it with. The sync's
--- results are written by the google function (secret key, no signed-in user) and never by the app.
+-- The app sets only the sheet's link. Whoever saves it (an admin; saving the same link again is how another admin takes
+-- it over: Use my Google) is the Google account the sync reads it with, and the last sync's error no longer applies; a
+-- new link also hasn't been synced yet. The sync's results are written by the google function (secret key, no
+-- signed-in user) and never by the app.
 create or replace function public.protect_outreach_settings() returns trigger
 language plpgsql set search_path = public as $$
 begin
   if auth.uid() is not null then
     new.id := old.id;
-    new.synced_at := old.synced_at;
-    new.sync_error := old.sync_error;
-    new.sync_stats := old.sync_stats;
-    new.sheet_by := case when new.sheet_url is distinct from old.sheet_url then auth.uid() else old.sheet_by end;
+    new.sheet_by := auth.uid();
+    new.sync_error := '';
+    if new.sheet_url is distinct from old.sheet_url then
+      new.synced_at := null;
+      new.sync_stats := '{}';
+    else
+      new.synced_at := old.synced_at;
+      new.sync_stats := old.sync_stats;
+    end if;
   end if;
   return new;
 end;
@@ -136,6 +143,23 @@ $$;
 drop trigger if exists protect_outreach_settings on public.outreach_settings;
 create trigger protect_outreach_settings before update on public.outreach_settings
   for each row execute function public.protect_outreach_settings();
+
+-- Two syncs can overlap (two people open Outreach at once). Each stamps the rows it writes with its start time and then
+-- flags the rows it didn't write as gone from the sheet, so an older sync must never overwrite a newer one's rows:
+-- its write is skipped (the newer sync read the sheet later).
+create or replace function public.keep_newer_outreach_sync() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if new.synced_at < old.synced_at then
+    return null;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists keep_newer_sync on public.outreach_emails;
+create trigger keep_newer_sync before update on public.outreach_emails
+  for each row execute function public.keep_newer_outreach_sync();
 
 -- 3. Reading: totals for the dashboard (RLS applies: security invoker) --------------------------------------------
 

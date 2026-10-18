@@ -908,7 +908,7 @@ await check('outreach settings: read with the secret key; no sheet or no sheet_b
   const cases = [
     [{ sheet_url: '', sheet_by: ADMIN_ID }, 'Add the outreach sheet in Settings → Outreach.'],
     [null, 'Add the outreach sheet in Settings → Outreach.'],
-    [{ sheet_url: SHEET_URL, sheet_by: null }, 'Ask an admin to set the outreach sheet again in Settings → Outreach.'],
+    [{ sheet_url: SHEET_URL, sheet_by: null }, 'Ask an admin to click Use my Google in Settings → Outreach.'],
   ];
   for (const [settings, error] of cases) {
     const r = await sync({ settings });
@@ -951,9 +951,9 @@ await check('outreach Google: the token of the admin who set the sheet; not conn
 });
 
 await check('outreach admin: the admin who set the sheet must be an active admin; else 409 and their Google token is never read', async () => {
-  const inactive = 'David Example is no longer active. Another admin needs to set the sheet link again in Settings → Outreach.';
-  const unknown = 'The admin who set the sheet link is no longer active. Another admin needs to set the sheet link again in Settings → Outreach.';
-  const demoted = 'David Example is no longer an admin. Another admin needs to set the sheet link again in Settings → Outreach.';
+  const inactive = 'David Example is no longer active. Another admin can click Use my Google in Settings → Outreach.';
+  const unknown = 'The admin who set the sheet link is no longer active. Another admin can click Use my Google in Settings → Outreach.';
+  const demoted = 'David Example is no longer an admin. Another admin can click Use my Google in Settings → Outreach.';
   for (const [people, error] of [
     [[{ id: ADMIN_ID, name: 'David Example', active: false, role: 'admin' }], inactive],
     [[{ id: ADMIN_ID, name: 'David Example', active: true, role: 'staff' }], demoted],
@@ -1310,6 +1310,25 @@ await check('outreach write-back: addSheet only for missing tabs; each tab clear
   assert.deepEqual(one.sheets.find((c) => c.url.startsWith(`${SHEET}:batchUpdate`)).json(), { requests: [{ addSheet: { properties: { title: 'Notes' } } }] });
 });
 
+await check('outreach write-back: another sync added the tabs first → found again and written; still missing → the error', async () => {
+  const taken = () => reply(400, { error: { code: 400, message: 'Invalid requests[0].addSheet: A sheet with the name "Summary" already exists.', status: 'INVALID_ARGUMENT' } });
+  const metaThen = (later) => { let n = 0; return () => reply(200, { sheets: (n++ ? later : [{ sheetId: 777, title: 'Tracker' }]).map((properties) => ({ properties })) }); };
+  const raced = await sync({ routes: {
+    [`${SHEET}?`]: metaThen([{ sheetId: 777, title: 'Tracker' }, { sheetId: 8, title: 'Summary' }, { sheetId: 9, title: 'Notes' }]),
+    [`${SHEET}:batchUpdate`]: taken,
+  } });
+  assert.equal(raced.status, 200, JSON.stringify(raced.data));
+  assert.equal(raced.sheets.filter((c) => c.url.startsWith(`${SHEET}?`)).length, 2, 'the tabs read again');
+  assert.deepEqual(raced.sheets.filter((c) => c.method === 'PUT').map((c) => sheetRange(c.url).title), ['Summary', 'Notes']);
+  assert.equal(raced.patches.at(-1).json().sync_error, '');
+
+  const still = await sync({ routes: { [`${SHEET}?`]: metaThen([{ sheetId: 777, title: 'Tracker' }, { sheetId: 8, title: 'Summary' }]), [`${SHEET}:batchUpdate`]: taken } });
+  assert.equal(still.status, 502);
+  assert.match(still.data.error, /already exists/);
+  assert.equal(still.sheets.filter((c) => c.method === 'PUT').length, 0, 'nothing written');
+  assert.deepEqual(syncError(still), [{ sync_error: still.data.error }]);
+});
+
 await check('outreach settings: synced_at, an empty sync_error and the stats; returns { ok, stats }', async () => {
   const r = await sync();
   assert.equal(r.status, 200);
@@ -1319,7 +1338,9 @@ await check('outreach settings: synced_at, an empty sync_error and the stats; re
   assert.deepEqual(r.data, { ok: true, stats });
   assert.equal(r.patches.length, 1);
   const [patch] = r.patches;
-  assert.equal(patch.url, `${REST}/outreach_settings?id=eq.1`);
+  // Only when no newer sync has saved its results since this one started.
+  assert.equal(patch.url, `${REST}/outreach_settings?id=eq.1&or=(synced_at.is.null,synced_at.lt.${encodeURIComponent(r.rows[0].synced_at)})`);
+  assert.equal(new URL(patch.url).searchParams.get('or'), `(synced_at.is.null,synced_at.lt.${r.rows[0].synced_at})`);
   assert.equal(patch.headers.get('apikey'), 'sb_secret_test');
   assert.equal(patch.headers.get('prefer'), 'return=minimal');
   assert.deepEqual(patch.json(), { synced_at: r.rows[0].synced_at, sync_error: '', sync_stats: stats });

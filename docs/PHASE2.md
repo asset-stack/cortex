@@ -505,9 +505,14 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   5. It records `synced_at`, `sync_error` (cleared when it works) and `sync_stats` (`{ rows, contacts, sent, replies,
      bounced, meetings, unassigned, duplicates, skipped, missing, tab }`, all time; `contacts` = rows with a sent date,
      the rest counted as under *Numbers*) in `outreach_settings` and returns
-     `{ ok, stats }`. A failure (no link, that admin's Google not connected or without access to the sheet, the Sheets
-     API off, …) is saved as `sync_error`, which Outreach shows to everyone; the messages name the admin whose Google
-     account is used. Upserts are idempotent, so two syncs at once do no harm and there is no lock.
+     `{ ok, stats }`, unless a newer sync has saved its results meanwhile. A failure once a link and its admin are set
+     (that admin no longer an active admin, their Google not connected or without access to the sheet, the Sheets API
+     off, …) is saved as `sync_error`, which Outreach shows to everyone; the messages name the admin whose Google
+     account is used. No link, or no admin for it, is only returned to the caller (Outreach then says so).
+  6. There is no lock: two syncs can overlap (two people open Outreach at once). Each stamps its rows with its start
+     time and then flags the rows it didn't write as gone, so 0007's `keep_newer_sync` trigger skips an older sync's
+     writes over a newer one's rows (the newer one read the sheet later): neither flags rows the other read. If both
+     add the Summary and Notes tabs, the second finds them again and carries on.
 - **When the sheet is read**: when someone opens Outreach and the last sync is more than 10 minutes old, and on **Sync
   now**. There is no cron: when nobody is looking nothing needs to be fresh, and the sheet stays the record in between
   (its Summary and Notes tabs are as of the last sync).
@@ -538,9 +543,12 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   - `outreach_settings`: one row (`id = 1`, seeded): `sheet_url`, `sheet_by → profiles on delete set null` (the admin
     who set the link), `synced_at`, `sync_error`, `sync_stats jsonb`: realtime.
 - **Triggers**: `protect_outreach_note` pins a note's `author_id` and `created_at` to whoever wrote it, when.
-  `protect_outreach_settings`: a signed-in request changes only `sheet_url`, and `sheet_by` becomes whoever changes
-  it (the sync then reads the sheet with that admin's Google account); `synced_at`, `sync_error` and `sync_stats` are
-  the function's (the secret key has no `auth.uid()`). `touch()` on all four.
+  `protect_outreach_settings`: a signed-in request changes only `sheet_url`, and `sheet_by` becomes whoever saves it,
+  the same link included (the sync then reads the sheet with that admin's Google account: **Use my Google** in
+  Settings → Outreach saves the same link again); a save clears `sync_error`, and a new link also clears `synced_at`
+  and `sync_stats` (not synced yet, so opening Outreach syncs it); otherwise `synced_at`, `sync_error` and
+  `sync_stats` are the function's (the secret key has no `auth.uid()`). `keep_newer_sync` on `outreach_emails` skips
+  an update whose `synced_at` is older than the row's (two syncs at once, above). `touch()` on all four.
 - **RPCs** (granted to `authenticated` only): `outreach_daily(p_from, p_to)` → `(day, mailbox_id, sent, replies,
   bounces, meetings)` and `outreach_breakdown(p_from, p_to)` → `(mailbox_id, kind 'status' | 'reply', value, n)`, both
   `security invoker`, so RLS applies (no rows without Outreach); `outreach_access()` → `{ view, edit, admin }`
@@ -569,30 +577,34 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
     meetings }] }`; `breakdown(from, to)` → `{ rows: [{ mailbox, kind, value, n }] }`; `emails({ mailbox /* null =
     all, '' = Unassigned */, from, to, search, only /* 'sent' | 'replies' | 'logged' */, limit, offset })` →
     `{ rows, more }` (newest first; `search` matches organisation, contact, role, email, subject and sender);
-    `status()` → `{ sheetUrl, syncedAt, error, stats }`; `sync()` (as `syncOutreach`). Live: the two RPCs and paged
+    `status()` → `{ sheetUrl, sheetBy, syncedAt, error, stats }`; `sync()` (as `syncOutreach`). Live: the two RPCs and paged
     selects on `outreach_emails` / `outreach_settings`; demo: the same helpers over `state.outreachEmails`, and
     `sync()` refuses (*Syncing the sheet works in live mode only.*). An email in the app: `emailFromRow()` →
     `{ id, mailbox ('' = Unassigned), sender, dateLogged, vertical, organisation, domain, location, contactName,
     contactRole, contactEmail, tier, signal, subject, variant, status, sentOn, messageId, threadId, sequenceStatus,
     followupStage, nextFollowup, bounced, replyStatus, replyOn, replySummary, note, meetingOn, inSheet }`.
   - Store actions: `addMailbox({ name, addresses, owner }) → id`, `updateMailbox(id, patch)`, `removeMailbox(id)`
-    (with its notes; its emails become Unassigned), `moveMailbox(id, ±1)`, `setOutreachSheet(url)` (admins);
+    (with its notes; its emails become Unassigned), `moveMailbox(id, ±1)`, `setOutreachSheet(url)`,
+    `takeOutreachSheet()` → `{ ok } | { ok: false, error }` (Use my Google; live mode) (admins);
     `addOutreachNote({ body, mailbox, pinned }) → id`, `updateOutreachNote(id, { body, pinned, mailbox })`,
     `removeOutreachNote(id)` (Outreach edit; author or admin to change or remove); `syncOutreach()` → `{ ok, stats }`
-    or `{ ok: false, error }`. Pure helpers in `src/lib/outreach.js` (also `parseAddresses`, `mailboxFor`,
+    or `{ ok: false, error }` (pending edits, such as a sheet link just saved, go first). Pure helpers in `src/lib/outreach.js` (also `parseAddresses`, `mailboxFor`,
     `gmailThreadUrl`, `sheetFromUrl`, `periodRange`, `daysBetween`, `filterEmails`).
   - Demo seed: mailboxes David, Josh and Sarah (`david@` / `josh@` / `sarah@example.com`; Sarah has no Cortex user),
     about 240 contact rows over the last 12 working days (some emails to two contacts; a contact at most once a day)
     and two notes (one pinned); `migrate()` adds them to older saved demo data.
-- **Screens**: **Outreach** has two views, **Emails** and **Contacts**. Emails: a mailbox picker (All, each mailbox,
-  and Unassigned when there are such rows) and a period (7, 30 or 90 days); emails sent per day, then Sent, Replies,
-  Reply rate, Bounces, Meetings and Opens (*Not tracked*), the breakdown, the emails (each links to its Gmail thread in
-  the sending mailbox, `gmailThreadUrl()`), the notes (pinned first; written at edit), and the last sync with **Sync
-  now** (`src/components/outreach/SyncStatus.jsx`, which also syncs on open). **Contacts** stays: the contact list
+- **Screens**: **Outreach** has two views, **Emails** and **Contacts**. Emails: a mailbox picker (All, each active
+  mailbox, and Unassigned when there are such rows in the period), a period (7, 30 or 90 days) and the last sync with
+  **Sync now** (`src/components/outreach/SyncStatus.jsx`, which also syncs on open); then Sent, Sent today, Replies,
+  Reply rate, Bounces, Meetings and Opens (*Not tracked*); the emails sent per day (stacked by mailbox); with All, a
+  card per mailbox (sent, replies, reply rate, last sent; a click picks it); the notes (pinned first; written at
+  edit) beside the breakdown; and the emails, a row per contact (Sent, Replies, All logged; search; each opens with
+  everything and a link to its Gmail thread in the sending mailbox, `gmailThreadUrl()`). **Contacts** stays: the contact list
   with owner and status, because a contact moving to *Replied* or *Meeting booked* drives the Pipeline automation
   (`contact_pipeline`, §3). The old demo composer, Gmail feed, sequences and approvals queue are gone from the UI;
   their tables (`emails`, `sequences`, `approvals`), state and sync are untouched. **Settings → Outreach** (admins):
-  the sheet's link, and the mailboxes (name, addresses, person, active, order).
+  the sheet's link with the last sync, whose Google account reads it (*Reads as …*) and **Use my Google**, and the
+  mailboxes (name, addresses, person, active, order).
 - **Opens are not tracked yet.** An open is only visible through a tracking image: a tiny remote image, unique to each
   email, that the recipient's mail app loads. The agent's emails carry none, on purpose: tracking images (and tracked
   links) are a spam signal, and the outreach domains are new and still building their sending reputation; and Apple

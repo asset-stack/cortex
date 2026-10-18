@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ExternalLink, Trash2 } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { ConfirmModal } from '@/components/ui';
@@ -17,35 +17,42 @@ function badAddress(text) {
 const addressHint = (text) => (badAddress(text) ? `Not an email address: ${badAddress(text)}` : '');
 
 /**
- * A text input that saves when you leave it or press Enter (Escape puts the saved value back). `hintFor(text)` names
- * a problem (shown under it, nothing saved); `onCommit(trimmed)` → false when the store refused, which restores it;
- * `format` tidies what was saved.
+ * A text input that saves when you leave it or press Enter (Escape puts the saved value back). Only what you typed is
+ * saved: an untouched field follows the saved value (another admin may change it meanwhile). `hintFor(text)` names a
+ * problem (shown under it once you try to save, nothing saved); `onCommit(trimmed)` → false when the store refused,
+ * which restores it; `format` tidies what was saved.
  */
 function CommitInput({ value, onCommit, hintFor, format = (t) => t, className, wrapClass, ...props }) {
   const [text, setText] = useState(value);
-  const editing = useRef(false);
-  useEffect(() => { if (!editing.current) setText(value); }, [value]);
+  const [tried, setTried] = useState(false); // a save was refused for the hint: show it until fixed
+  const dirty = useRef(false);
+  const hintId = useId();
+  useEffect(() => { if (!dirty.current) setText(value); }, [value]);
   const hint = hintFor?.(text) || '';
+  const shown = tried && hint;
+  const reset = () => { dirty.current = false; setTried(false); setText(value); };
   const commit = () => {
-    if (hint) return;
+    if (!dirty.current) { setText(value); return; }
+    if (hint) { setTried(true); return; }
     const t = text.trim();
+    dirty.current = false;
+    setTried(false);
     if (t === value.trim() || onCommit(t) === false) setText(value);
     else setText(format(t));
   };
   return (
     <div className={cn('flex min-w-0 flex-col gap-1', wrapClass)}>
       <input value={text} autoComplete="off" spellCheck={false} {...props}
-        onChange={(e) => setText(e.target.value)}
-        onFocus={() => { editing.current = true; }}
-        onBlur={() => { editing.current = false; commit(); }}
+        onChange={(e) => { dirty.current = true; setText(e.target.value); }}
+        onBlur={commit}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing) return;
           if (e.key === 'Enter') { e.preventDefault(); commit(); }
-          if (e.key === 'Escape') { e.preventDefault(); setText(value); }
+          if (e.key === 'Escape') { e.preventDefault(); reset(); }
         }}
-        aria-invalid={hint ? true : undefined}
-        className={cn('field', hint && '!border-amber-300', className)} />
-      {hint && <span role="alert" className="text-[12px] text-amber-200">{hint}</span>}
+        aria-invalid={shown ? true : undefined} aria-describedby={shown ? hintId : undefined}
+        className={cn('field', shown && '!border-amber-300', className)} />
+      {shown && <span id={hintId} className="text-[12px] text-amber-200">{hint}</span>}
     </div>
   );
 }
@@ -114,23 +121,29 @@ function AddMailbox() {
   const { actions } = useStore();
   const [name, setName] = useState('');
   const [addresses, setAddresses] = useState('');
+  const [touched, setTouched] = useState(false); // the addresses' hint shows once you leave the field
+  const hintId = useId();
   const hint = addressHint(addresses);
+  const shown = touched && hint;
   const submit = (e) => {
     e.preventDefault();
+    if (hint) setTouched(true);
     if (!name.trim() || hint) return;
     if (actions.addMailbox({ name: name.trim(), addresses: parseAddresses(addresses) }) === false) return;
     setName('');
     setAddresses('');
+    setTouched(false);
   };
   return (
     <form onSubmit={submit} className="border-t rowline px-3 py-3 sm:px-4">
       <div className="grid gap-2 sm:grid-cols-[180px_minmax(0,1fr)_auto]">
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" aria-label="New mailbox name" autoComplete="off" className="field" />
-        <input value={addresses} onChange={(e) => setAddresses(e.target.value)} placeholder="Addresses" aria-label="New mailbox addresses" autoComplete="off"
-          inputMode="email" spellCheck={false} aria-invalid={hint ? true : undefined} className={cn('field', hint && '!border-amber-300')} />
-        <button type="submit" disabled={!name.trim() || Boolean(hint)} className="btn-primary h-10 rounded-full px-4 font-semibold">Add mailbox</button>
+        <input value={addresses} onChange={(e) => setAddresses(e.target.value)} onBlur={() => setTouched(true)} placeholder="Addresses"
+          aria-label="New mailbox addresses" autoComplete="off" inputMode="email" spellCheck={false}
+          aria-invalid={shown ? true : undefined} aria-describedby={shown ? hintId : undefined} className={cn('field', shown && '!border-amber-300')} />
+        <button type="submit" disabled={!name.trim()} className="btn-primary h-10 rounded-full px-4 font-semibold">Add mailbox</button>
       </div>
-      {hint && <p role="alert" className="mt-1 text-[12px] text-amber-200">{hint}</p>}
+      {shown && <p id={hintId} className="mt-1 text-[12px] text-amber-200">{hint}</p>}
     </form>
   );
 }
@@ -144,7 +157,7 @@ export default function Outreach() {
       <section className="rounded-[26px] glass glass-rim p-5 sm:p-6">
         <h2 className="font-extrabold text-[16px]">Sheet</h2>
         <SheetLink />
-        <SyncStatus className="mt-3" />
+        <SyncStatus reader className="mt-3" />
       </section>
       <section className="rounded-[26px] glass glass-rim p-2 sm:p-3">
         <h2 className="px-3 pb-3 pt-2 font-extrabold text-[16px] sm:px-4">Mailboxes</h2>

@@ -119,7 +119,8 @@ tables: choose **Run this query**. Afterwards:
 
 **0007 on an existing database**: run it after `0006` (run any earlier file that hasn't run first, in order, as above).
 Paste `supabase/migrations/0007_outreach.sql` into a new snippet and **Run** it *before* the app version that uses it
-goes live (the app loads `outreach_mailboxes`, which doesn't exist until then). Nobody needs to close Cortex. The
+goes live (the app loads the Outreach tables, which don't exist until then). Until the change is merged, take the
+file from its branch or pull request on GitHub (**Raw**), not from `main`. Nobody needs to close Cortex. The
 editor warns about destructive operations because the file drops and recreates its own policies on the Outreach
 tables: choose **Run this query**. It is safe to run again, also when the editor runs it statement by statement and
 carries on past an error: if Supabase shows an error, send it to whoever maintains Cortex and run the current file
@@ -412,8 +413,10 @@ tab back into it. Cortex never sends outreach email and never changes the agent'
    **Google Sheets API** → **Enable**. No new scope: the `drive` scope from section 11 covers Sheets, so nobody has to
    reconnect.
 3. **Redeploy the `google` function**: Supabase → **Edge Functions** → `google` → **Code**. Replace all of it with the
-   current `supabase/functions/google/index.ts` (GitHub → **Raw**, copy all) → **Deploy** (it may read **Deploy
-   updates**). Then check its settings: **Enforce JWT verification** stays **off**. The secrets don't change.
+   new `supabase/functions/google/index.ts` (GitHub → **Raw**, copy all; before the merge in step 4, from the change's
+   branch or pull request, since `main` still has the old one, which answers the sync with "Not found.") → **Deploy**
+   (it may read **Deploy updates**). The new file is safe to deploy first: the invoice and contract routes are
+   unchanged. Then check its settings: **Enforce JWT verification** stays **off**. The secrets don't change.
 4. **Deploy the app** (merge to `main`) once 0007 has run, and reload Cortex.
 5. **The sheet** (the agent's *Email Outbound Tracker*):
    - Add a column headed `sender` in row 1, anywhere: Cortex finds columns by their header (in any case), so the
@@ -452,11 +455,12 @@ tab back into it. Cortex never sends outreach email and never changes the agent'
 - A new mailbox or sending address: add it in **Settings** → **Outreach** before the agent uses it. Rows from an
   address no mailbox lists show as **Unassigned** until it is added (the next sync moves them). To retire a mailbox,
   switch it off rather than removing it: removing it deletes its notes and leaves its emails Unassigned.
-- Syncs read the sheet as the admin who last set its link, whoever clicks **Sync now**. If that admin leaves or
-  disconnects Google, another admin with Google connected and access to the sheet clears the link in **Settings** →
-  **Outreach** (let it save), then pastes it again: syncs then read the sheet as them. Do this before deactivating the
-  admin who linked it: once they're inactive or staff, syncs stop ("<name> is no longer active…" / "… an admin…")
-  until another admin sets the link again.
+- Syncs read the sheet as the admin who last saved its link (**Settings** → **Outreach** shows *Reads as …*),
+  whoever clicks **Sync now**. If that admin leaves or disconnects Google, another admin with Google connected and
+  access to the sheet clicks **Use my Google** there: syncs then read the sheet as them. Do this before deactivating
+  the admin who linked it: once they're inactive or staff, syncs stop ("<name> is no longer active…" / "… an
+  admin…") until another admin clicks **Use my Google**.
+- Two people opening Outreach at the same moment may both sync; that's harmless (the newer sync's rows win).
 
 ## Troubleshooting
 
@@ -491,11 +495,12 @@ tab back into it. Cortex never sends outreach email and never changes the agent'
 | Create contract: "Template or folder not found" | The template or folder isn't shared with your Google account, or a link is wrong (section 11.4–5). |
 | Connect Google: after allowing access, a `supabase.co` page shows a 401 "Missing authorization header" | **Enforce JWT verification** is still on for the `google` function. Turn it off (section 11.3), then **Connect Google** again. |
 | Connect Google, sending or creating a contract fails with a function error or "Google isn’t set up yet" | The function isn't deployed as `google`, or the Google secrets are missing (section 11.2–3). |
-| "Couldn't load your workspace … outreach_mailboxes" after an update | `0007_outreach.sql` hasn't run yet (section 2). |
+| "Couldn't load your workspace … outreach_settings" (or `outreach_mailboxes` / `outreach_notes`) after an update | `0007_outreach.sql` hasn't run yet (section 2). |
 | Outreach says "No sheet yet" or "Add the sheet in Settings → Outreach" | No sheet is linked yet. An admin pastes the agent's sheet link in **Settings** → **Outreach** (section 12.6). |
-| "Ask an admin to set the outreach sheet again in Settings → Outreach." | Cortex doesn't know whose Google account to read it with (the link was set outside the app, or that admin's account was deleted). An admin with Google connected clears the link, lets it save and pastes it again. |
-| "… is no longer active." or "… is no longer an admin." (… "Another admin needs to set the sheet link again in Settings → Outreach.") | The admin who linked the sheet was deactivated or made staff, so Cortex stops using their Google account. Another admin with Google connected clears the link, lets it save and pastes it again. |
-| "… needs to connect Google in Settings → Business." or "… needs to reconnect Google …" | The named admin (who linked the sheet) has no working Google connection. They connect it in **Settings** → **Business**, or another admin takes the link over (section 12, *Using it*). |
+| "Ask an admin to click Use my Google in Settings → Outreach." | Cortex doesn't know whose Google account to read the sheet with (the link was set outside the app, or that admin's account was deleted). An admin with Google connected clicks **Use my Google** in **Settings** → **Outreach**. |
+| "… is no longer active." or "… is no longer an admin." (… "Another admin can click Use my Google in Settings → Outreach.") | The admin who linked the sheet was deactivated or made staff, so Cortex stops using their Google account. Another admin with Google connected clicks **Use my Google** in **Settings** → **Outreach**. |
+| "… needs to connect Google in Settings → Business." or "… needs to reconnect Google …" | The named admin (who linked the sheet) has no working Google connection. They connect it in **Settings** → **Business**, or another admin clicks **Use my Google** in **Settings** → **Outreach**. |
+| **Use my Google**: "Connect Google in Settings → Business first." | Connect your own Google account there, then click it again. |
 | "The outreach sheet wasn't found or isn't shared with …" | The named admin's Google account can't open the sheet, or the link is wrong. Share the sheet with them as **Editor** (12.5), or paste the right link. |
 | "… can't edit the outreach sheet." | The named admin can read the sheet but not write the Summary and Notes tabs. Make them **Editor** on it. |
 | "The outreach sheet isn't a Google Sheets link." | Paste the sheet's own link (`docs.google.com/spreadsheets/d/…`) in **Settings** → **Outreach**. |
@@ -503,7 +508,7 @@ tab back into it. Cortex never sends outreach email and never changes the agent'
 | **Sync now** fails mentioning the Google Sheets API | It isn't enabled in the Google Cloud project (section 12.2). Enable it, wait a few minutes and sync again. |
 | **Sync now** fails with "Not found." | The `google` function still runs the old code. Redeploy it (section 12.3). |
 | Rows show under **Unassigned** | Their `sender` is blank or an address no mailbox lists. Add the address to its mailbox in **Settings** → **Outreach** (or fill `sender` in the sheet), then **Sync now**. |
-| Outreach's numbers differ from the sheet | Cortex shows the last sync (its time is on the page): **Sync now**. Then check the rules: an email counts as sent on its `sent_date`, a reply on its `reply_date` (with a `reply_status`), a meeting on its `meeting_booked_date`; drafts and skipped rows aren't sent. Dates must be `YYYY-MM-DD` (or `D/M/YYYY`). |
+| Outreach's numbers differ from the sheet | Cortex shows the last sync (its time is on the page): **Sync now**. Then check the rules: Cortex counts **emails, not rows**: rows with the same `sent_message_id` (one email to two people at an organisation) count once. An email counts as sent on its first `sent_date`, a reply on its first `reply_date` (with a `reply_status`), a meeting on its first `meeting_booked_date`; a row with no `sent_date` isn't sent. Dates must be `YYYY-MM-DD` (or `D/M/YYYY`). |
 | One field is blank on every email (no sent dates, no replies, …) | A header in row 1 of the agent's tab was renamed. Put back the name Cortex expects (`docs/PHASE2.md` §12), then **Sync now**. |
 | A sync reads the wrong tab after the agent's tab was re-created | Cortex reads the tab the link opens (`#gid=…`; renaming or moving it is fine), else the first tab that isn't Summary or Notes. A re-created tab is a new one: open it, copy its link and paste it in **Settings** → **Outreach**. |
 | The sheet's **Summary** or **Notes** is out of date, or a renamed copy stopped updating | They change only when someone opens Outreach or clicks **Sync now**. Cortex writes the tabs named **Summary** and **Notes** and adds them when missing, so a renamed copy is left behind: delete it. |

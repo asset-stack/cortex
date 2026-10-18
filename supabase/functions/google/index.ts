@@ -58,7 +58,7 @@ const RECONNECT = 'Reconnect your Google account in Settings.';
 const NOT_FOUND = 'Template or folder not found, or not shared with your Google account.';
 const NO_OUTREACH = 'You don’t have access to Outreach.';
 const NO_SHEET = 'Add the outreach sheet in Settings → Outreach.';
-const NO_SHEET_BY = 'Ask an admin to set the outreach sheet again in Settings → Outreach.';
+const NO_SHEET_BY = 'Ask an admin to click Use my Google in Settings → Outreach.';
 const SYNC_FAILED = 'Something went wrong with Google. Try again.';
 
 const str = (v) => String(v ?? '').trim();
@@ -831,8 +831,10 @@ async function rest(cfg, fetch, path, { method = 'GET', body, prefer = '' } = {}
 }
 
 // The sheet → outreach_emails (rows no longer in it keep their data, with in_sheet false) → the Summary and Notes tabs
-// → outreach_settings (synced_at, sync_stats). A failure after the settings are read is saved as sync_error. Upserts
-// are idempotent, so two syncs at once do no harm and there is no lock.
+// → outreach_settings (synced_at, sync_stats). A failure once a link and its admin are set is saved as sync_error.
+// There is no lock: two syncs can overlap (two people open Outreach at once). 0007's keep_newer_sync trigger skips an
+// older sync's writes over a newer one's rows, so neither flags rows the other read as gone; the results are saved
+// only when no newer sync has saved its own; and tabs the other one just added are found again.
 async function outreachSync(cfg, fetch) {
   const start = new Date().toISOString();
   const db = (path, init, fail) => rest(cfg, fetch, path, init, fail);
@@ -854,10 +856,10 @@ async function outreachSync(cfg, fetch) {
     const whom = who || 'the admin who set the sheet link';
     const Who = who || 'The admin who set the sheet link';
     if (admin?.active !== true) {
-      throw new HttpError(409, `${Who} is no longer active. Another admin needs to set the sheet link again in Settings → Outreach.`);
+      throw new HttpError(409, `${Who} is no longer active. Another admin can click Use my Google in Settings → Outreach.`);
     }
     if (admin.role !== 'superadmin' && admin.role !== 'admin') {
-      throw new HttpError(409, `${Who} is no longer an admin. Another admin needs to set the sheet link again in Settings → Outreach.`);
+      throw new HttpError(409, `${Who} is no longer an admin. Another admin can click Use my Google in Settings → Outreach.`);
     }
     const reconnect = `${Who} needs to reconnect Google in Settings → Business.`;
     ({ token } = await googleAccess(cfg, fetch, { uid: set.sheet_by }, {
@@ -906,9 +908,16 @@ async function outreachSync(cfg, fetch) {
     // Write back: Summary and Notes (added when missing), cleared and rewritten as plain values.
     const missingTabs = OWN_TABS.filter((t) => !tabNamed(t));
     if (missingTabs.length) {
-      await sheets(`${base}:batchUpdate`, {
-        method: 'POST', body: JSON.stringify({ requests: missingTabs.map((title) => ({ addSheet: { properties: { title } } })) }),
-      }, { forbidden: readOnly });
+      try {
+        await sheets(`${base}:batchUpdate`, {
+          method: 'POST', body: JSON.stringify({ requests: missingTabs.map((title) => ({ addSheet: { properties: { title } } })) }),
+        }, { forbidden: readOnly });
+      } catch (e) {
+        // Another sync running at the same time may have just added them: carry on if they're there now.
+        const again = await sheets(`${base}?fields=sheets.properties`, { method: 'GET' }, { notFound: unshared, forbidden: unshared });
+        const titles = (Array.isArray(again.sheets) ? again.sheets : []).map((x) => str(x?.properties?.title).trim().toLowerCase());
+        if (!missingTabs.every((t) => titles.includes(t.toLowerCase()))) throw e;
+      }
     }
     const notes = await db('outreach_notes?select=mailbox_id,pinned,body,author_id,created_at', {}, 'Could not read the outreach notes.');
     const noteList = Array.isArray(notes) ? notes : [];
@@ -940,7 +949,8 @@ async function outreachSync(cfg, fetch) {
       missing: Array.isArray(gone) ? gone.length : 0,
       tab: tab.title,
     };
-    await db('outreach_settings?id=eq.1', {
+    // Unless a newer sync has already saved its results.
+    await db(`outreach_settings?id=eq.1&or=(synced_at.is.null,synced_at.lt.${encodeURIComponent(start)})`, {
       method: 'PATCH', body: { synced_at: start, sync_error: '', sync_stats: stats }, prefer: 'return=minimal',
     }, 'Could not save the sync results.');
     return { ok: true, stats };

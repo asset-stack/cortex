@@ -992,7 +992,14 @@ function createActions(mutate, mode) {
     syncOutreach: async () => {
       const allowed = mode.read((st) => canView(st, 'outreach'));
       if (!allowed) return { ok: false, error: 'You don’t have access to Outreach.' };
+      await mode.flush(); // a sheet link just saved goes first
       return mode.invoke('google/outreach-sync', {});
+    },
+    // Outreach: read the sheet with my Google account from now on (admins; live mode). → { ok } | { ok: false, error }
+    takeOutreachSheet: async () => {
+      const allowed = mode.read((st) => isAdmin(st) && Boolean(st.outreachSheet));
+      if (!allowed) return { ok: false, error: 'Only an admin can do this, once the sheet is linked.' };
+      return mode.takeOutreachSheet();
     },
     disconnectGoogle: async () => {
       const ok = await mode.googleDisconnect();
@@ -1217,6 +1224,8 @@ function DemoProvider({ children }) {
     removeFile: (path) => { files.current.delete(path); },
     // Google (Gmail, Drive, Docs) needs the server function: live mode only.
     invoke: async () => ({ ok: false, error: 'Google works in live mode only.' }),
+    flush: async () => {},
+    takeOutreachSheet: async () => ({ ok: false, error: 'Syncing the sheet works in live mode only.' }),
     googleDisconnect: async () => false,
     refreshGoogle: async () => {},
   }), [mutate, commit]);
@@ -1235,7 +1244,8 @@ const DEMO_GOOGLE = { ready: true, demo: true, connected: false, email: '' };
 //   breakdown(from, to) → { rows: [{ mailbox, kind: 'status' | 'reply', value, n }] }
 //   emails({ mailbox, from, to, search, only, limit, offset }) → { rows, more }        (one per contact; mailbox null = all,
 //                                                                                    '' = Unassigned)
-//   status() → { sheetUrl, syncedAt, error, stats }   sync() → { stats } (live only: the google function)
+//   status() → { sheetUrl, sheetBy (the admin whose Google reads it), syncedAt, error, stats }
+//   sync() → { stats } (live only: the google function)
 function demoOutreach(state) {
   const rows = state?.outreachEmails || [];
   return {
@@ -1243,13 +1253,13 @@ function demoOutreach(state) {
     daily: async (from, to) => ({ ok: true, rows: outreachDaily(rows, from, to) }),
     breakdown: async (from, to) => ({ ok: true, rows: outreachBreakdown(rows, from, to) }),
     emails: async (opts = {}) => ({ ok: true, ...filterEmails(rows, opts) }),
-    status: async () => ({ ok: true, sheetUrl: state?.outreachSheet || '', syncedAt: '', error: '', stats: {} }),
+    status: async () => ({ ok: true, sheetUrl: state?.outreachSheet || '', sheetBy: '', syncedAt: '', error: '', stats: {} }),
     sync: async () => ({ ok: false, error: 'Syncing the sheet works in live mode only.' }),
   };
 }
 
 const OUTREACH_DAY = { sent: 'sent_on', replies: 'reply_on', logged: 'date_logged' };
-function liveOutreach(syncOutreach) {
+function liveOutreach(syncOutreach, flush) {
   const failed = (error) => ({ ok: false, error: error?.message || String(error || 'Request failed') });
   return {
     live: true,
@@ -1288,9 +1298,12 @@ function liveOutreach(syncOutreach) {
     },
     status: async () => {
       try {
-        const { data, error } = await supabase.from('outreach_settings').select('sheet_url, synced_at, sync_error, sync_stats').eq('id', 1).maybeSingle();
+        await flush(); // a sheet link just saved, first
+        const { data, error } = await supabase.from('outreach_settings').select('sheet_url, sheet_by, synced_at, sync_error, sync_stats')
+          .eq('id', 1).maybeSingle();
         if (error) return failed(error);
-        return { ok: true, sheetUrl: data?.sheet_url || '', syncedAt: data?.synced_at || '', error: data?.sync_error || '', stats: data?.sync_stats || {} };
+        return { ok: true, sheetUrl: data?.sheet_url || '', sheetBy: data?.sheet_by || '', syncedAt: data?.synced_at || '',
+          error: data?.sync_error || '', stats: data?.sync_stats || {} };
       } catch (e) { return failed(e); }
     },
     sync: async () => syncOutreach(),
@@ -1643,6 +1656,9 @@ function LiveProvider({ userId, children }) {
   const ready = phase.status === 'ready';
   useEffect(() => { if (ready) refreshGoogle(); }, [ready, refreshGoogle]);
 
+  // Edits waiting for the 400 ms debounce go now (at most 3 s), for reads and calls that need them saved.
+  const flushSoon = useCallback(() => Promise.race([engine.current?.flush(), wait(3000)]).catch(() => {}), []);
+
   const actions = useMemo(() => {
     const fail = (message) => { setSync({ state: 'error', message }); };
     return createActions(mutate, {
@@ -1709,11 +1725,24 @@ function LiveProvider({ userId, children }) {
           return false;
         }
       },
+      flush: flushSoon,
+      // Saving the same link again makes this admin the sheet's reader (0007's protect_outreach_settings).
+      takeOutreachSheet: async () => {
+        await flushSoon();
+        const url = engine.current?.read((st) => st.outreachSheet) || '';
+        try {
+          const { data, error } = await supabase.from('outreach_settings').update({ sheet_url: url }).eq('id', 1).select('id');
+          if (error) return { ok: false, error: error.message };
+          return data?.length ? { ok: true } : { ok: false, error: 'Only an admin can do this.' };
+        } catch (e) {
+          return { ok: false, error: e?.message || 'Request failed' };
+        }
+      },
       refreshGoogle,
     });
-  }, [mutate, refreshGoogle]);
+  }, [mutate, refreshGoogle, flushSoon]);
 
-  const outreach = useMemo(() => liveOutreach(actions.syncOutreach), [actions]);
+  const outreach = useMemo(() => liveOutreach(actions.syncOutreach, flushSoon), [actions, flushSoon]);
   const value = useMemo(() => ({ state, actions, sync, google, outreach }), [state, actions, sync, google, outreach]);
 
   if (phase.status === 'error') {

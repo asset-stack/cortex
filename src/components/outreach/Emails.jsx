@@ -54,7 +54,7 @@ function MailboxCard({ card, onPick }) {
   );
   const cls = 'block w-full min-w-0 rounded-[22px] glass glass-rim p-4 text-left';
   return onPick
-    ? <button type="button" onClick={onPick} aria-label={`Show ${card.name}`} className={cn(cls, 'float')}>{body}</button>
+    ? <button type="button" onClick={onPick} title={`Show ${card.name}`} className={cn(cls, 'float')}>{body}</button>
     : <div className={cls}>{body}</div>;
 }
 

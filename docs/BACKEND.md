@@ -204,8 +204,9 @@ Text columns default to `''` and are `not null` unless noted, so the state never
 - `handle_new_user` (after insert on `auth.users`, `security definer`): **raises an exception** when the email domain is not `assetstackai.com` (blocks the sign-up); otherwise inserts the profile (name from `raw_user_meta_data->>'full_name'` or the email's local part, two-letter initials, a colour from a fixed palette by hash, the role listed in `admin_emails`, else `'staff'` (0002)) and adds the user to the `general` channel.
 - `touch()` on every table; `protect_profile` on `profiles`. 0002 adds `protect_invoice_status` and `protect_todo`
   (`created_by` can't be forged), `contact_pipeline` on `contacts`, and the RPCs `ensure_todos` / `generate_due_invoices`.
-  0007 adds `protect_outreach_note` (a note's author and date) and `protect_outreach_settings` (the app changes only the
-  sheet's link; `sheet_by` follows whoever changes it).
+  0007 adds `protect_outreach_note` (a note's author and date), `protect_outreach_settings` (the app changes only the
+  sheet's link; `sheet_by` becomes whoever saves it, the same link included, and a save clears the last error) and
+  `keep_newer_sync` (an older sync never overwrites a newer one's `outreach_emails` rows).
 - Seed (empty start): `org_settings` row 1; board groups `projects`: Active, Backlog · `admin`: To do (0002 moves it to `projects` as *Admin*) · `marketing`: This month; channel `general`. 0006 adds the starting boards and puts the Projects groups on *General*, the Marketing ones on *Posting schedule*; triggers `add_personal_board` (new profiles) and `place_on_board` (fills a missing `board_id`).
 - `alter publication supabase_realtime add table …` for every synced table.
 - `supabase/setup-admins.sql` (run after 0002): `insert into public.admin_emails (email, role) values ('you@assetstackai.com', 'superadmin'), … on conflict (email) do update set role = excluded.role;` plus updates that promote people who already signed in to their listed role (never demote).
@@ -258,7 +259,7 @@ Text columns default to `''` and are `not null` unless noted, so the state never
   `outreach_daily`); `breakdown(from, to)` → `{ rows: [{ mailbox, kind: 'status' | 'reply', value, n }] }` (RPC
   `outreach_breakdown`); `emails({ mailbox /* null = all, '' = Unassigned */, from, to, search, only /* 'sent' |
   'replies' | 'logged' */, limit, offset })` → `{ rows, more }` (a paged select on `outreach_emails`, rows through
-  `emailFromRow()`); `status()` → `{ sheetUrl, syncedAt, error, stats }` (`outreach_settings`); `sync()` → the
+  `emailFromRow()`); `status()` → `{ sheetUrl, sheetBy, syncedAt, error, stats }` (`outreach_settings`, after saving any pending edit); `sync()` → the
   `google/outreach-sync` route (`actions.syncOutreach()`; refused in demo mode). Demo mode answers the same calls from
   `state.outreachEmails` with the same rules (`src/lib/outreach.js`).
 
