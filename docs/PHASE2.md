@@ -470,7 +470,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   2. Someone who can view Outreach opens it, or clicks **Sync now**: `actions.syncOutreach()` → the store's `invoke()`
      → `google/outreach-sync`. The function checks the caller with their own JWT (`outreach_access()`: view is
      enough), reads `outreach_settings` with the secret key, and reads the sheet **as the admin who set its link**
-     (`sheet_by`: their token from `private.google_accounts` through `google_token()`), with the Sheets API (the
+     (`sheet_by`: their token from `private.google_accounts` through `google_token()`, only while they are an active
+     admin; otherwise the sync stops and asks another admin to set the link again), with the Sheets API (the
      `drive` scope of §9 covers it). It reads the tab the link opens (`#gid=…`, `sheetFromUrl()`), else the first tab
      that isn't Summary or Notes.
   3. Each sheet row becomes an `outreach_emails` row, upserted with the secret key in batches. Headers are matched by

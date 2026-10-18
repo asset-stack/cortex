@@ -455,8 +455,8 @@ tab back into it. Cortex never sends outreach email and never changes the agent'
 - Syncs read the sheet as the admin who last set its link, whoever clicks **Sync now**. If that admin leaves or
   disconnects Google, another admin with Google connected and access to the sheet clears the link in **Settings** →
   **Outreach** (let it save), then pastes it again: syncs then read the sheet as them. Do this before deactivating the
-  admin who linked it: once they're inactive, syncs stop with "<name> is no longer active…" until another admin sets
-  the link again.
+  admin who linked it: once they're inactive or staff, syncs stop ("<name> is no longer active…" / "… an admin…")
+  until another admin sets the link again.
 
 ## Troubleshooting
 
@@ -494,7 +494,7 @@ tab back into it. Cortex never sends outreach email and never changes the agent'
 | "Couldn't load your workspace … outreach_mailboxes" after an update | `0007_outreach.sql` hasn't run yet (section 2). |
 | Outreach says "No sheet yet" or "Add the sheet in Settings → Outreach" | No sheet is linked yet. An admin pastes the agent's sheet link in **Settings** → **Outreach** (section 12.6). |
 | "Ask an admin to set the outreach sheet again in Settings → Outreach." | Cortex doesn't know whose Google account to read it with (the link was set outside the app, or that admin's account was deleted). An admin with Google connected clears the link, lets it save and pastes it again. |
-| "… is no longer active. Another admin needs to set the sheet link again in Settings → Outreach." | The admin who linked the sheet was deactivated, so Cortex stops using their Google account. Another admin with Google connected clears the link, lets it save and pastes it again. |
+| "… is no longer active." or "… is no longer an admin." (… "Another admin needs to set the sheet link again in Settings → Outreach.") | The admin who linked the sheet was deactivated or made staff, so Cortex stops using their Google account. Another admin with Google connected clears the link, lets it save and pastes it again. |
 | "… needs to connect Google in Settings → Business." or "… needs to reconnect Google …" | The named admin (who linked the sheet) has no working Google connection. They connect it in **Settings** → **Business**, or another admin takes the link over (section 12, *Using it*). |
 | "The outreach sheet wasn't found or isn't shared with …" | The named admin's Google account can't open the sheet, or the link is wrong. Share the sheet with them as **Editor** (12.5), or paste the right link. |
 | "… can't edit the outreach sheet." | The named admin can read the sheet but not write the Summary and Notes tabs. Make them **Editor** on it. |

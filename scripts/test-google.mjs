@@ -2,7 +2,8 @@
 // The function is plain JavaScript in a .ts file (so it can be pasted into the Supabase dashboard); a load hook hands it
 // to Node as an ES module. PostgREST and Google are a fake fetch that answers per URL and records every call.
 // Covers CORS, the caller check, connect / callback (signed state, your own account only), send (validation and the
-// MIME message Gmail gets) and contract (Drive copy, .docx conversion, placeholders). Exits non-zero when any check fails.
+// MIME message Gmail gets), contract (Drive copy, .docx conversion, placeholders) and outreach-sync (the agent's sheet
+// into outreach_emails, the Summary and Notes tabs back, sync_error). Exits non-zero when any check fails.
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
 
@@ -735,6 +736,650 @@ await check('contract: other Google errors → 502 with Google’s message; not 
   const none = await run('contract', { body: contract(), routes: { [`${RPC}/google_token`]: () => reply(200, null) } });
   assert.equal(none.status, 409);
   assert.equal(none.to(DRIVE).length, 0);
+});
+
+// ── Outreach sync ───────────────────────────────────────────────────────────────────────────────────────────────
+// Fictional prospects and mailboxes only (example.com / example.org).
+
+const REST = `${SUPABASE}/rest/v1`;
+const SHEET_ID = '1OutreachSheet_abcdefghijklmnopqrstuv';
+const SHEET = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}`;
+const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=777`;
+const ADMIN_ID = 'a0000000-0000-4000-8000-0000000000d1';
+const JOSH_ID = 'a0000000-0000-4000-8000-0000000000j2';
+const PEOPLE = [{ id: ADMIN_ID, name: 'David Example', active: true, role: 'superadmin' }, { id: JOSH_ID, name: 'Josh Example', active: true, role: 'admin' }];
+const MAILBOXES = [
+  { id: 'mb-david', name: 'David', addresses: ['david@example.com', 'david@old.example.com'] },
+  { id: 'mb-josh', name: 'Josh', addresses: ['josh@example.com'] },
+  { id: 'mb-sarah', name: 'Sarah', addresses: ['sarah@example.com'] },
+];
+const NO_OUTREACH = 'You don’t have access to Outreach.';
+const SYNC_FAILED = 'Something went wrong with Google. Try again.';
+// The agent's columns, in its order, plus `sender`.
+const AGENT = [
+  'date_logged', 'vertical', 'organisation', 'domain', 'location', 'kdm_name', 'kdm_role', 'kdm_email', 'apollo_email_status',
+  'gmail_check', 'apollo_history_check', 'tracker_check', 'eligible', 'tier', 'signal', 'research_hook', 'subject', 'variant',
+  'email_id', 'draft_status', 'gmail_draft_id', 'sent_date', 'sent_message_id', 'thread_id', 'sequence_status', 'followup_stage',
+  'next_followup_date', 'ooo_until', 'bounced', 'suppress_until', 'reply_status', 'reply_date', 'reply_summary', 'note',
+  'meeting_booked_date', 'sender',
+];
+const P = (o, headers = AGENT) => headers.map((h) => o[h] ?? '');
+const TRACKER = [
+  AGENT,
+  P({ date_logged: '2026-10-12', organisation: 'Example Shire Council', kdm_name: 'Alex Example', kdm_email: 'alex@example.org', draft_status: 'sent', sent_date: '2026-10-13', sent_message_id: 'A1B2C3D4E5F60001', reply_status: 'negative', reply_date: '2026-10-15', sender: 'David@Example.com' }),
+  P({ date_logged: '2026-10-12', organisation: 'Example Water', kdm_email: 'bo@example.org', draft_status: 'sent', sent_date: '2026-10-13', sent_message_id: 'a1b2c3d4e5f60002', bounced: 'yes', sender: 'david@example.com' }),
+  P({ date_logged: '2026-10-13', organisation: 'Example Ports', kdm_email: 'cy@example.org', draft_status: 'sent', sent_date: '14/10/2026', sent_message_id: 'a1b2c3d4e5f60003', reply_status: 'referral', reply_date: '2026-10-14', meeting_booked_date: '15/10/2026', sender: 'david@old.example.com' }),
+  P({ date_logged: '2026-10-13', organisation: 'Example Ports', kdm_email: 'cy2@example.org', draft_status: 'sent', sent_date: '2026-10-14', sent_message_id: 'a1b2c3d4e5f60003', reply_status: 'referral', reply_date: '2026-10-16', sender: 'david@old.example.com' }),
+  P({ date_logged: '2026-10-13', organisation: 'Example Rail', kdm_email: 'di@example.org', draft_status: 'sent', sent_date: '2026-10-14 09:30', sent_message_id: 'a1b2c3d4e5f60004', sender: 'josh@example.com' }),
+  P({ date_logged: '2026-10-13', organisation: 'Example Roads', kdm_email: 'ed@example.org', draft_status: 'sent', sent_date: '2026-10-14', sent_message_id: 'a1b2c3d4e5f60005', sender: 'old-box@example.com' }),
+  P({ date_logged: '2026-10-14', organisation: 'Example Energy', kdm_email: 'fi@example.org', draft_status: 'draft-saved', gmail_draft_id: 'r-555', sender: 'david@example.com' }),
+  P({ date_logged: '14/10/2026', organisation: 'Example Health', kdm_email: 'Pat@Example.org', draft_status: 'skipped-colleague' }),
+  [],
+  ['', '  ', ''],
+  P({ vertical: 'Water', note: 'No contact found' }),
+  P({ date_logged: '2026-10-12', organisation: 'Example Water Corp', kdm_name: 'Lee Example', draft_status: 'skipped-unverified' }),
+  P({ date_logged: '2026-10-12', organisation: 'Example Shire Council', kdm_name: 'Alex Example', kdm_email: 'alex@example.org', draft_status: 'sent', sent_date: '2026-10-13', sent_message_id: 'a1b2c3d4e5f60001', reply_status: 'negative', reply_date: '2026-10-15', reply_summary: 'Not this year', sender: 'david@example.com' }),
+];
+const NOTES = [
+  { mailbox_id: null, pinned: false, body: 'Short subject lines did better this week.', author_id: JOSH_ID, created_at: '2026-10-14T23:30:00+00:00' },
+  { mailbox_id: 'mb-david', pinned: true, body: 'Lead with the council’s own asset register.', author_id: ADMIN_ID, created_at: '2026-10-01T02:00:00+00:00' },
+  { mailbox_id: 'mb-josh', pinned: false, body: '=SUM(A1) stays text', author_id: 'a0000000-0000-4000-8000-00000000gone', created_at: '2026-10-10T05:15:00+00:00' },
+];
+
+// The range in a Sheets values URL → { title, a1, action }
+function sheetRange(url) {
+  const [path] = url.slice(`${SHEET}/values/`.length).split('?');
+  const [encoded, action = ''] = path.split(':');
+  const range = decodeURIComponent(encoded);
+  const m = /^'((?:[^']|'')*)'(?:!(.*))?$/.exec(range);
+  assert.ok(m, `a quoted range: ${range}`);
+  return { range, title: m[1].replace(/''/g, "'"), a1: m[2] || '', action };
+}
+
+// PostgREST and Sheets for outreach-sync, on top of the Google defaults (google_token, the token endpoint).
+function outreachRoutes({
+  access = { view: true, edit: false, admin: false }, settings = { sheet_url: SHEET_URL, sheet_by: ADMIN_ID },
+  tabs = [{ sheetId: 0, title: 'Summary', index: 0 }, { sheetId: 777, title: 'Tracker', index: 1 }], values = { Tracker: TRACKER },
+  mailboxes = MAILBOXES, notes = NOTES, people = PEOPLE, gone = ['e-gone-1', 'e-gone-2'],
+} = {}) {
+  return {
+    [`${RPC}/outreach_access`]: () => reply(200, access),
+    [`${REST}/outreach_settings`]: (c) => (c.method === 'GET' ? reply(200, settings ? [settings] : []) : new Response(null, { status: 204 })),
+    [`${REST}/profiles`]: (c) => {
+      const q = new URL(c.url).searchParams.get('id') || '';
+      const ids = q.startsWith('eq.') ? [q.slice(3)] : q.startsWith('in.(') ? q.slice(4, -1).split(',') : [];
+      return reply(200, people.filter((p) => ids.includes(p.id)));
+    },
+    [`${REST}/outreach_mailboxes`]: () => reply(200, mailboxes),
+    [`${REST}/outreach_emails`]: (c) => (c.method === 'POST' ? new Response(null, { status: 201 }) : reply(200, gone.map((id) => ({ id })))),
+    [`${REST}/outreach_notes`]: () => reply(200, notes),
+    [`${SHEET}?`]: () => reply(200, { sheets: tabs.map((properties) => ({ properties })) }),
+    [`${SHEET}:batchUpdate`]: (c) => reply(200, { spreadsheetId: SHEET_ID, replies: c.json().requests.map(() => ({ addSheet: {} })) }),
+    [`${SHEET}/values/`]: (c) => {
+      const { range, title, action } = sheetRange(c.url);
+      if (c.method === 'GET') return reply(200, { range, majorDimension: 'ROWS', ...(values[title] ? { values: values[title] } : {}) });
+      if (action === 'clear') return reply(200, { spreadsheetId: SHEET_ID, clearedRange: range });
+      return reply(200, { spreadsheetId: SHEET_ID, updatedRange: range, updatedRows: c.json().values.length });
+    },
+  };
+}
+
+/** One outreach-sync request. `routes` override single answers; console.error is captured (and returned as `logs`). */
+async function sync({ routes = {}, ...opts } = {}, runOpts = {}) {
+  const logs = [];
+  const original = console.error;
+  console.error = (...args) => logs.push(args.map(String).join(' '));
+  try {
+    const r = await run('outreach-sync', { body: {}, routes: { ...outreachRoutes(opts), ...routes }, ...runOpts });
+    const patches = r.to(`${REST}/outreach_settings`).filter((c) => c.method === 'PATCH');
+    const sheets = r.calls.filter((c) => c.url.startsWith(SHEET));
+    const upserts = r.to(`${REST}/outreach_emails`).filter((c) => c.method === 'POST');
+    return { ...r, logs, patches, sheets, upserts, rows: upserts.flatMap((c) => c.json()) };
+  } finally {
+    console.error = original;
+  }
+}
+const syncError = (r) => r.patches.map((c) => c.json());
+
+await check('outreach helpers: sheetFromUrl as src/lib/outreach.js; sheetDate reads ISO and Australian dates only', () => {
+  assert.deepEqual(g.sheetFromUrl(SHEET_URL), { id: SHEET_ID, gid: '777' });
+  assert.deepEqual(g.sheetFromUrl(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit?usp=sharing`), { id: SHEET_ID, gid: '' });
+  assert.deepEqual(g.sheetFromUrl(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit?gid=5#gid=5`), { id: SHEET_ID, gid: '5' });
+  for (const bad of ['', null, 'https://docs.google.com/spreadsheets/d/short/edit', `https://docs.google.com/document/d/${SHEET_ID}/edit`]) {
+    assert.deepEqual(g.sheetFromUrl(bad), { id: '', gid: '' }, String(bad));
+  }
+  const dates = {
+    '2026-10-14': '2026-10-14', ' 2026-10-14 ': '2026-10-14', '2026-10-14 09:30:00': '2026-10-14', '2026-10-14T09:30:00Z': '2026-10-14',
+    '14/10/2026': '2026-10-14', '4/3/2026': '2026-03-04', '04/03/2026': '2026-03-04', '4/03/2026 9:15:00': '2026-03-04',
+    '29/02/2028': '2028-02-29', '31/02/2026': null, '29/02/2026': null, '2026-13-01': null, '2026-02-30': null, '13/13/2026': null,
+    '2026-1-4': null, '14-10-2026': null, '2026/10/14': null, '10/14/26': null, 'Oct 14, 2026': null, 'yes': null, '': null,
+  };
+  for (const [input, want] of Object.entries(dates)) assert.equal(g.sheetDate(input), want, input);
+  assert.equal(g.sheetDate(null), null);
+});
+
+await check('outreach CORS: a preflight gets 204 and the origin; responses carry CORS; GET → 405', async () => {
+  const pre = await run('outreach-sync', { method: 'OPTIONS', auth: '' });
+  assert.equal(pre.status, 204);
+  assert.equal(pre.headers.get('access-control-allow-origin'), ORIGIN);
+  assert.equal(pre.headers.get('access-control-allow-methods'), 'POST, GET, OPTIONS');
+  assert.equal(pre.calls.length, 0);
+  const evil = await run('outreach-sync', { method: 'OPTIONS', auth: '', origin: 'https://evil.example.com' });
+  assert.equal(evil.headers.get('access-control-allow-origin'), null);
+  const ok = await sync();
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get('access-control-allow-origin'), ORIGIN);
+  assert.equal(ok.headers.get('content-type'), 'application/json');
+  const foreign = await sync({}, { origin: 'https://evil.example.com' });
+  assert.equal(foreign.headers.get('access-control-allow-origin'), null);
+  const get = await run('outreach-sync', { method: 'GET' });
+  assert.equal(get.status, 405);
+  assert.equal(get.headers.get('allow'), 'POST, OPTIONS');
+});
+
+await check('outreach access: rpc outreach_access with the caller’s JWT must say view; no view → 403 before anything else', async () => {
+  const ok = await sync({ access: { view: true, edit: false, admin: false } });
+  assert.equal(ok.status, 200, 'staff with view may sync (not only admins)');
+  const [acc] = ok.to(`${RPC}/outreach_access`);
+  assert.equal(acc.method, 'POST');
+  assert.equal(acc.headers.get('apikey'), 'sb_publishable_test');
+  assert.equal(acc.headers.get('authorization'), USER_JWT, 'the caller’s own JWT');
+  assert.equal(acc.body, '{}');
+  assert.equal(ok.to(`${RPC}/google_me`).length, 0, 'not the admins-only check');
+  for (const answer of [() => reply(200, { view: false, edit: false, admin: false }), () => reply(200, null), () => reply(403, { code: '42501', message: 'Not allowed' })]) {
+    const r = await sync({ routes: { [`${RPC}/outreach_access`]: answer } });
+    assert.equal(r.status, 403);
+    assert.deepEqual(r.data, { error: NO_OUTREACH });
+    assert.equal(r.calls.length, 1, 'nothing read or written');
+  }
+  const expired = await sync({ routes: { [`${RPC}/outreach_access`]: () => reply(401, { code: 'PGRST301', message: 'JWT expired' }) } });
+  assert.equal(expired.status, 401);
+  const anon = await sync({}, { auth: '' });
+  assert.equal(anon.status, 401);
+  assert.equal(anon.calls.length, 0);
+});
+
+await check('outreach settings: read with the secret key; no sheet or no sheet_by → 400, no sync_error, no Google', async () => {
+  const ok = await sync();
+  const [read] = ok.to(`${REST}/outreach_settings`);
+  assert.equal(read.method, 'GET');
+  assert.equal(read.url, `${REST}/outreach_settings?id=eq.1&select=sheet_url,sheet_by`);
+  assert.equal(read.headers.get('apikey'), 'sb_secret_test');
+  const cases = [
+    [{ sheet_url: '', sheet_by: ADMIN_ID }, 'Add the outreach sheet in Settings → Outreach.'],
+    [null, 'Add the outreach sheet in Settings → Outreach.'],
+    [{ sheet_url: SHEET_URL, sheet_by: null }, 'Ask an admin to set the outreach sheet again in Settings → Outreach.'],
+  ];
+  for (const [settings, error] of cases) {
+    const r = await sync({ settings });
+    assert.equal(r.status, 400, JSON.stringify(settings));
+    assert.deepEqual(r.data, { error });
+    assert.equal(r.patches.length, 0, 'no sync_error for a sheet that isn’t set');
+    assert.equal(r.to(`${RPC}/google_token`).length + r.sheets.length, 0);
+  }
+  const notSheets = await sync({ settings: { sheet_url: 'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWx/edit', sheet_by: ADMIN_ID } });
+  assert.equal(notSheets.status, 400);
+  assert.match(notSheets.data.error, /isn’t a Google Sheets link/);
+  assert.deepEqual(syncError(notSheets), [{ sync_error: notSheets.data.error }], 'saved as sync_error');
+  assert.equal(notSheets.to(`${RPC}/google_token`).length, 0);
+});
+
+await check('outreach Google: the token of the admin who set the sheet; not connected or revoked → 409 naming them', async () => {
+  const ok = await sync();
+  const [tok] = ok.to(`${RPC}/google_token`);
+  assert.deepEqual(tok.json(), { p_user: ADMIN_ID });
+  assert.equal(tok.headers.get('apikey'), 'sb_secret_test');
+  const [profile] = ok.to(`${REST}/profiles`);
+  assert.equal(profile.url, `${REST}/profiles?id=eq.${ADMIN_ID}&select=name,active,role`);
+  assert.equal(profile.headers.get('apikey'), 'sb_secret_test');
+  assert.ok(ok.calls.indexOf(profile) < ok.calls.indexOf(tok), 'checked before their token is read');
+  assert.ok(ok.sheets.every((c) => c.headers.get('authorization') === 'Bearer fresh-access-token'));
+
+  const none = await sync({ routes: { [`${RPC}/google_token`]: () => reply(200, null) } });
+  assert.equal(none.status, 409);
+  assert.deepEqual(none.data, { error: 'David Example needs to connect Google in Settings → Business.' });
+  assert.deepEqual(syncError(none), [{ sync_error: 'David Example needs to connect Google in Settings → Business.' }]);
+  assert.equal(none.to(TOKEN_URL).length + none.sheets.length + none.upserts.length, 0);
+
+  const nameless = await sync({ people: [{ id: ADMIN_ID, name: '', active: true, role: 'admin' }], routes: { [`${RPC}/google_token`]: () => reply(200, null) } });
+  assert.deepEqual(nameless.data, { error: 'The admin who set the sheet link needs to connect Google in Settings → Business.' });
+
+  const revoked = await sync({ routes: { [TOKEN_URL]: () => reply(400, { error: 'invalid_grant', error_description: 'Token has been expired or revoked.' }) } });
+  assert.equal(revoked.status, 409);
+  assert.deepEqual(revoked.data, { error: 'David Example needs to reconnect Google in Settings → Business.' });
+  assert.equal(revoked.sheets.length, 0);
+});
+
+await check('outreach admin: the admin who set the sheet must be an active admin; else 409 and their Google token is never read', async () => {
+  const inactive = 'David Example is no longer active. Another admin needs to set the sheet link again in Settings → Outreach.';
+  const unknown = 'The admin who set the sheet link is no longer active. Another admin needs to set the sheet link again in Settings → Outreach.';
+  const demoted = 'David Example is no longer an admin. Another admin needs to set the sheet link again in Settings → Outreach.';
+  for (const [people, error] of [
+    [[{ id: ADMIN_ID, name: 'David Example', active: false, role: 'admin' }], inactive],
+    [[{ id: ADMIN_ID, name: 'David Example', active: true, role: 'staff' }], demoted],
+    [[{ id: ADMIN_ID, name: 'David Example', active: true }], demoted], // no role at all
+    [[{ id: ADMIN_ID, name: 'David Example' }], inactive], // no active flag at all
+    [[], unknown], // the profile is gone
+    [[{ id: ADMIN_ID, name: '  ', active: false }], unknown],
+  ]) {
+    const r = await sync({ people });
+    assert.equal(r.status, 409, JSON.stringify(people));
+    assert.deepEqual(r.data, { error });
+    assert.deepEqual(syncError(r), [{ sync_error: error }], 'saved as sync_error');
+    assert.equal(r.to(`${RPC}/google_token`).length + r.to(TOKEN_URL).length + r.sheets.length + r.upserts.length, 0, 'no token, no Google, no rows');
+  }
+  const down = await sync({ routes: { [`${REST}/profiles`]: () => reply(500, { message: 'boom' }) } });
+  assert.equal(down.status, 502, 'can’t tell: refused');
+  assert.deepEqual(down.data, { error: 'Could not check who set the outreach sheet.' });
+  assert.deepEqual(syncError(down), [{ sync_error: 'Could not check who set the outreach sheet.' }]);
+  assert.equal(down.to(`${RPC}/google_token`).length, 0);
+});
+
+await check('outreach tab: the link’s gid, else the first tab that isn’t Summary or Notes; the range is quoted and encoded', async () => {
+  const tabs = [
+    { sheetId: 0, title: 'Summary' }, { sheetId: 1, title: 'notes' }, { sheetId: 5, title: 'Bob’s list' },
+    { sheetId: 777, title: "Ana's Tracker" }, { sheetId: 9, title: 'Other' },
+  ];
+  const values = { "Ana's Tracker": TRACKER, 'Bob’s list': TRACKER };
+  const byGid = await sync({ tabs, values });
+  assert.equal(byGid.status, 200);
+  const [meta, read] = byGid.sheets;
+  assert.equal(meta.method, 'GET');
+  assert.equal(meta.url, `${SHEET}?fields=sheets.properties`);
+  assert.equal(read.method, 'GET');
+  assert.equal(read.url, `${SHEET}/values/${encodeURIComponent("'Ana''s Tracker'!A1:AZ")}`);
+  assert.equal(byGid.data.stats.tab, "Ana's Tracker");
+
+  for (const url of [`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`, `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=404`,
+    `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=0`]) {
+    const r = await sync({ tabs, values, settings: { sheet_url: url, sheet_by: ADMIN_ID } });
+    assert.equal(r.status, 200, url);
+    assert.equal(sheetRange(r.sheets[1].url).title, 'Bob’s list', `${url}: the first tab that isn’t ours`);
+  }
+  const ours = await sync({ tabs: [{ sheetId: 0, title: 'Summary' }, { sheetId: 1, title: 'Notes' }] });
+  assert.equal(ours.status, 400);
+  assert.deepEqual(ours.data, { error: 'The outreach sheet has no tab to read.' });
+  assert.deepEqual(syncError(ours), [{ sync_error: 'The outreach sheet has no tab to read.' }]);
+  assert.equal(ours.upserts.length, 0);
+});
+
+await check('outreach rows: every column mapped by header name, with raw, dates, followup_stage, in_sheet and synced_at', async () => {
+  const full = {
+    date_logged: '12/10/2026', vertical: 'Local government', organisation: 'Example Shire Council', domain: 'example.org',
+    location: 'Bunbury WA', kdm_name: 'Alex Example', kdm_role: 'Asset Manager', kdm_email: 'Alex@Example.org',
+    apollo_email_status: 'verified', eligible: 'yes', tier: 'A', signal: 'New asset plan', research_hook: 'Their 2026 plan',
+    subject: 'Your asset register', variant: 'B', email_id: 'em-1', draft_status: 'sent', gmail_draft_id: 'r-1',
+    sent_date: '2026-10-13 08:01:00', sent_message_id: 'A1B2C3D4E5F6A7B8', thread_id: 'a1b2c3d4e5f6a7b8', sequence_status: 'replied-neutral',
+    followup_stage: '2', next_followup_date: '20/10/2026', ooo_until: '2026-10-19', bounced: 'no', reply_status: 'neutral',
+    reply_date: '2026-10-14', reply_summary: 'Ask again in Q1', note: 'Warm', meeting_booked_date: '2026-11-03', sender: ' David@Example.com ',
+  };
+  const r = await sync({ values: { Tracker: [AGENT, P(full)] } });
+  assert.equal(r.status, 200);
+  const [row] = r.rows;
+  const start = row.synced_at;
+  assert.match(start, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  const raw = Object.fromEntries(Object.entries(full).map(([k, v]) => [k, v.trim()]));
+  assert.deepEqual(row, {
+    row_key: 'alex@example.org|2026-10-12', sender: 'david@example.com', date_logged: '2026-10-12', vertical: 'Local government',
+    organisation: 'Example Shire Council', domain: 'example.org', location: 'Bunbury WA', contact_name: 'Alex Example',
+    contact_role: 'Asset Manager', contact_email: 'Alex@Example.org', tier: 'A', signal: 'New asset plan', subject: 'Your asset register',
+    variant: 'B', status: 'sent', sent_on: '2026-10-13', message_id: 'A1B2C3D4E5F6A7B8', thread_id: 'a1b2c3d4e5f6a7b8',
+    sequence_status: 'replied-neutral', followup_stage: 2, next_followup: '2026-10-20', bounced: false, reply_status: 'neutral',
+    reply_on: '2026-10-14', reply_summary: 'Ask again in Q1', note: 'Warm', meeting_on: '2026-11-03', raw,
+    mailbox_id: 'mb-david', in_sheet: true, synced_at: start,
+  });
+
+  const sparse = await sync({ values: { Tracker: [AGENT, P({ kdm_email: 'kim@example.org', date_logged: 'last week', sent_date: 'soon', followup_stage: 'two' })] } });
+  assert.deepEqual(sparse.rows[0], {
+    row_key: 'kim@example.org|', sender: '', date_logged: null, vertical: '', organisation: '', domain: '', location: '',
+    contact_name: '', contact_role: '', contact_email: 'kim@example.org', tier: '', signal: '', subject: '', variant: '', status: '',
+    sent_on: null, message_id: '', thread_id: '', sequence_status: '', followup_stage: 0, next_followup: null, bounced: false,
+    reply_status: '', reply_on: null, reply_summary: '', note: '', meeting_on: null,
+    raw: { date_logged: 'last week', kdm_email: 'kim@example.org', sent_date: 'soon', followup_stage: 'two' },
+    mailbox_id: null, in_sheet: true, synced_at: sparse.rows[0].synced_at,
+  }, 'unreadable dates → null (and \'\' in the key), a bad stage → 0, empty cells left out of raw');
+});
+
+await check('outreach rows: columns in any order and case; sender also from Mailbox, From or sent_from', async () => {
+  const head = ['Notes about it', ' KDM_EMAIL ', 'Sent_Message_ID', 'Organisation', 'SENT_DATE', '', 'Mailbox', 'note'];
+  const r = await sync({ values: { Tracker: [head, ['keep me', 'zoe@example.org', 'ABC1', 'Example Port Authority', '2026-10-14', 'loose', 'Josh <JOSH@example.com>', 'hello']] } });
+  assert.equal(r.status, 200);
+  const [row] = r.rows;
+  assert.deepEqual([row.row_key, row.contact_email, row.message_id, row.organisation, row.sent_on, row.sender, row.mailbox_id, row.note],
+    ['zoe@example.org|', 'zoe@example.org', 'ABC1', 'Example Port Authority', '2026-10-14', 'josh@example.com', 'mb-josh', 'hello']);
+  assert.deepEqual(row.raw, {
+    'Notes about it': 'keep me', KDM_EMAIL: 'zoe@example.org', Sent_Message_ID: 'ABC1', Organisation: 'Example Port Authority',
+    SENT_DATE: '2026-10-14', F: 'loose', Mailbox: 'Josh <JOSH@example.com>', note: 'hello',
+  }, 'every non-empty cell under its header (a column letter when the header is empty)');
+
+  for (const header of ['from', 'sent_from', 'Sender']) {
+    const s = await sync({ values: { Tracker: [['kdm_email', header], ['p@example.org', 'Sarah@Example.com']] } });
+    assert.equal(s.rows[0].sender, 'sarah@example.com', header);
+    assert.equal(s.rows[0].mailbox_id, 'mb-sarah', header);
+  }
+  const first = await sync({ values: { Tracker: [['kdm_email', 'from', 'sender'], ['p1@example.org', 'josh@example.com', 'david@example.com'], ['p2@example.org', 'josh@example.com', '']] } });
+  assert.deepEqual(first.rows.map((x) => x.sender), ['david@example.com', 'josh@example.com'], 'sender first, then the others');
+
+  const unknown = await sync({ values: { Tracker: [['Prospect', 'Email'], ['Example', 'x@example.org']] } });
+  assert.equal(unknown.status, 400);
+  assert.deepEqual(unknown.data, { error: 'The “Tracker” tab has no outreach columns in row 1.' });
+  assert.deepEqual(syncError(unknown), [{ sync_error: unknown.data.error }]);
+  assert.equal(unknown.upserts.length + unknown.to(`${REST}/outreach_emails`).length, 0, 'nothing marked missing either');
+  const empty = await sync({ values: {} });
+  assert.equal(empty.status, 400, 'an empty tab');
+});
+
+await check('outreach rows: bounced is yes / y / true / 1 (any case), anything else false', async () => {
+  const yes = ['yes', 'YES', ' y ', 'Y', 'true', 'TRUE', '1'];
+  const no = ['', 'no', 'n', '0', 'false', 'bounced', 'maybe'];
+  const values = [['kdm_email', 'bounced'], ...[...yes, ...no].map((v, i) => [`p${i}@example.org`, v])];
+  const r = await sync({ values: { Tracker: values } });
+  assert.deepEqual(r.rows.map((x) => x.bounced), [...yes.map(() => true), ...no.map(() => false)]);
+});
+
+await check('outreach rows: one row per contact, kdm_email|date else organisation|name|date; duplicates and keyless rows counted', async () => {
+  const head = ['sent_message_id', 'email_id', 'gmail_draft_id', 'kdm_email', 'date_logged', 'organisation', 'kdm_name', 'note'];
+  const rows = [
+    ['MSG-1', 'EM-1', 'R-1', 'Ann@Example.org', '2026-10-01', 'Org A', 'Ann', 'one email to two contacts: Ann'],
+    ['MSG-1', 'EM-1', 'R-1', 'ben@example.org', '2026-10-01', 'Org A', 'Ben', 'and Ben'],
+    ['', '', '', 'cat@example.org', '1/10/2026', 'Org C', 'Cat', 'logged, not drafted yet'],
+    ['', '', '', 'dan@example.org', '', 'Org D', 'Dan', 'no date'],
+    ['', '', '', 'eve@example.org', 'sometime', 'Org E', 'Eve', 'an unreadable date'],
+    ['', '', '', '', '2026-10-01', 'Org F', 'Fay', 'no email'],
+    ['', '', '', '', '', '', 'Gus', 'a name alone'],
+    ['', '', '', '', '', 'Org H', '', 'an organisation alone'],
+    ['MSG-9', 'EM-9', 'R-9', '', '2026-10-01', '', '', 'ids but no contact: skipped'],
+    ['', '', '', '', '2026-10-01', '', '', 'a date alone: skipped'],
+    ['MSG-1', 'EM-1', 'R-1', 'ann@example.org', '01/10/2026', 'Org A', 'Ann', 'Ann again: the later row wins'],
+    ['', 'EM-3', 'R-3', 'cat@example.org', '2026-10-01', 'Org C', 'Cat', 'Cat, now drafted: the same key'],
+  ];
+  const r = await sync({ values: { Tracker: [head, ...rows] } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.rows.map((x) => [x.row_key, x.note]), [
+    ['ben@example.org|2026-10-01', 'and Ben'],
+    ['dan@example.org|', 'no date'],
+    ['eve@example.org|', 'an unreadable date'],
+    ['org f|fay|2026-10-01', 'no email'],
+    ['|gus|', 'a name alone'],
+    ['org h||', 'an organisation alone'],
+    ['ann@example.org|2026-10-01', 'Ann again: the later row wins'],
+    ['cat@example.org|2026-10-01', 'Cat, now drafted: the same key'],
+  ], 'two contacts of one email stay two rows; a row keeps its key as ids appear');
+  assert.equal(r.data.stats.duplicates, 2);
+  assert.equal(r.data.stats.skipped, 2);
+  assert.equal(r.data.stats.rows, 8);
+});
+
+await check('outreach counts: emails, not rows (sent_message_id, else the contact, per mailbox), on the Summary and in the stats', async () => {
+  const head = ['kdm_email', 'date_logged', 'sent_message_id', 'sent_date', 'bounced', 'reply_status', 'reply_date', 'meeting_booked_date', 'sender'];
+  const r = await sync({
+    values: {
+      Tracker: [
+        head,
+        // One email (M1) to two contacts: 1 sent, 1 bounce (only the first row bounced), 1 reply on the earliest reply day
+        // (the later row's).
+        ['a@example.org', '2026-10-10', 'M1', '2026-10-12', 'yes', 'neutral', '2026-10-15', '', 'david@example.com'],
+        ['b@example.org', '2026-10-10', 'M1', '2026-10-12', '', 'neutral', '2026-10-14', '2026-10-20', 'david@example.com'],
+        // M2: sent on the earliest sent day; a reply date without a reply_status isn't a reply.
+        ['c@example.org', '2026-10-10', 'M2', '2026-10-13', '', '', '2026-10-13', '', 'david@example.com'],
+        ['d@example.org', '2026-10-10', 'M2', '2026-10-11', '', 'negative', '2026-10-16', '', 'david@example.com'],
+        // The same id from another mailbox is another email.
+        ['e@example.org', '2026-10-10', 'M2', '2026-10-13', '', '', '', '', 'josh@example.com'],
+        // No id: the contact is the email.
+        ['f@example.org', '2026-10-10', '', '2026-10-13', '', '', '', '', 'david@example.com'],
+        ['g@example.org', '2026-10-10', '', '', '', '', '', '', 'david@example.com'],
+      ],
+    },
+  });
+  assert.equal(r.status, 200);
+  const summary = r.sheets.find((c) => c.method === 'PUT' && sheetRange(c.url).title === 'Summary').json().values;
+  assert.deepEqual(summary, [
+    ['Date', 'Mailbox', 'Sent', 'Replies', 'Reply rate', 'Bounces', 'Meetings'],
+    ['2026-10-20', 'David', 0, 0, '', 0, 1],
+    ['2026-10-16', 'David', 0, 1, '', 0, 0],
+    ['2026-10-14', 'David', 0, 1, '', 0, 0],
+    ['2026-10-13', 'David', 1, 0, '0%', 0, 0],
+    ['2026-10-13', 'Josh', 1, 0, '0%', 0, 0],
+    ['2026-10-12', 'David', 1, 0, '0%', 1, 0],
+    ['2026-10-11', 'David', 1, 0, '0%', 0, 0],
+    [],
+    ['Total', 'David', 3, 2, '67%', 1, 1],
+    ['Total', 'Josh', 1, 0, '0%', 0, 0],
+    ['Total', 'Sarah', 0, 0, '', 0, 0],
+    ['Total', 'All mailboxes', 4, 2, '50%', 1, 1],
+  ]);
+  assert.deepEqual(r.data.stats, {
+    rows: 7, contacts: 6, sent: 4, replies: 2, bounced: 1, meetings: 1, unassigned: 0, duplicates: 0, skipped: 0, missing: 2, tab: 'Tracker',
+  });
+  assert.equal(r.rows.length, 7, 'every contact is still its own row in outreach_emails');
+
+  // Both rows carry the same reply: still one reply; a bounced email with no sent day isn't counted as a bounce.
+  const two = await sync({
+    values: {
+      Tracker: [head,
+        ['a@example.org', '2026-10-10', 'M1', '2026-10-12', '', 'neutral', '2026-10-14', '', 'david@example.com'],
+        ['b@example.org', '2026-10-10', 'M1', '2026-10-12', '', 'neutral', '2026-10-14', '', 'david@example.com'],
+        ['h@example.org', '2026-10-10', 'M3', '', 'yes', '', '', '', 'david@example.com']],
+    },
+  });
+  const t = two.data.stats;
+  assert.deepEqual([t.rows, t.contacts, t.sent, t.replies, t.bounced], [3, 2, 1, 1, 0]);
+});
+
+await check('outreach upsert: 1,201 rows → 3 requests of 500 / 500 / 201 with the secret key, then the missing-rows PATCH', async () => {
+  const many = [['kdm_email', 'sent_message_id', 'sent_date', 'sender'], ...Array.from({ length: 1201 }, (_, i) => [`p${i}@example.org`, `m-${i}`, '2026-10-14', 'david@example.com'])];
+  const r = await sync({ values: { Tracker: many }, gone: ['e-1', 'e-2', 'e-3'] });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.upserts.map((c) => c.json().length), [500, 500, 201]);
+  const start = r.rows[0].synced_at;
+  for (const c of r.upserts) {
+    assert.equal(c.url, `${REST}/outreach_emails?on_conflict=row_key`);
+    assert.equal(c.headers.get('prefer'), 'resolution=merge-duplicates,return=minimal');
+    assert.equal(c.headers.get('apikey'), 'sb_secret_test');
+    assert.equal(c.headers.get('authorization'), null);
+    assert.equal(c.headers.get('content-type'), 'application/json');
+  }
+  assert.equal(new Set(r.rows.map((x) => x.row_key)).size, 1201);
+  assert.ok(r.rows.every((x) => x.in_sheet === true && x.synced_at === start), 'in_sheet and this sync’s start on every row');
+  const keys = JSON.stringify(Object.keys(r.rows[0]).sort());
+  assert.ok(r.rows.every((x) => JSON.stringify(Object.keys(x).sort()) === keys), 'the same columns in every row (PostgREST bulk insert)');
+
+  const [patch] = r.to(`${REST}/outreach_emails`).filter((c) => c.method === 'PATCH');
+  assert.ok(r.calls.indexOf(patch) > r.calls.indexOf(r.upserts.at(-1)), 'after every upsert');
+  assert.equal(patch.url, `${REST}/outreach_emails?synced_at=lt.${start}&in_sheet=eq.true&select=id`);
+  assert.deepEqual(patch.json(), { in_sheet: false });
+  assert.equal(patch.headers.get('apikey'), 'sb_secret_test');
+  assert.equal(patch.headers.get('prefer'), 'return=representation');
+  assert.equal(r.data.stats.missing, 3);
+  assert.equal(r.data.stats.unassigned, 0);
+
+  const none = await sync({ values: { Tracker: [['kdm_email']] } });
+  assert.equal(none.status, 200);
+  assert.equal(none.upserts.length, 0, 'no rows → no upsert');
+  assert.equal(none.to(`${REST}/outreach_emails`).filter((c) => c.method === 'PATCH').length, 1, 'but every old row is marked missing');
+});
+
+await check('outreach mailboxes: the sender’s mailbox (any of its addresses, any case), else Unassigned', async () => {
+  const r = await sync();
+  assert.equal(r.status, 200);
+  assert.equal(r.to(`${REST}/outreach_mailboxes`)[0].url, `${REST}/outreach_mailboxes?select=id,name,addresses&order=position.asc`);
+  assert.equal(r.to(`${REST}/outreach_mailboxes`)[0].headers.get('apikey'), 'sb_secret_test');
+  const by = Object.fromEntries(r.rows.map((x) => [x.row_key, x.mailbox_id]));
+  assert.deepEqual(by, {
+    'alex@example.org|2026-10-12': 'mb-david', 'bo@example.org|2026-10-12': 'mb-david', 'cy@example.org|2026-10-13': 'mb-david',
+    'cy2@example.org|2026-10-13': 'mb-david', 'di@example.org|2026-10-13': 'mb-josh', 'ed@example.org|2026-10-13': null,
+    'fi@example.org|2026-10-14': 'mb-david', 'pat@example.org|2026-10-14': null, 'example water corp|lee example|2026-10-12': null,
+  });
+  assert.equal(r.rows.find((x) => x.row_key === 'alex@example.org|2026-10-12').reply_summary, 'Not this year', 'the later duplicate');
+  const caps = await sync({ mailboxes: [{ id: 'mb-x', name: 'X', addresses: ['Old-Box@Example.com'] }] });
+  assert.equal(caps.rows.find((x) => x.row_key === 'ed@example.org|2026-10-13').mailbox_id, 'mb-x');
+});
+
+await check('outreach Summary: per day × mailbox, newest first, reply rates, then the all-time totals block', async () => {
+  // TRACKER: Example Ports' two contacts share one email (one sent, the earlier reply day only).
+  const r = await sync();
+  assert.equal(r.status, 200);
+  const [update] = r.sheets.filter((c) => c.method === 'PUT' && sheetRange(c.url).title === 'Summary');
+  assert.equal(update.url, `${SHEET}/values/${encodeURIComponent("'Summary'!A1")}?valueInputOption=RAW`);
+  assert.equal(update.headers.get('content-type'), 'application/json');
+  assert.deepEqual(update.json(), {
+    majorDimension: 'ROWS',
+    values: [
+      ['Date', 'Mailbox', 'Sent', 'Replies', 'Reply rate', 'Bounces', 'Meetings'],
+      ['2026-10-15', 'David', 0, 1, '', 0, 1],
+      ['2026-10-14', 'David', 1, 1, '100%', 0, 0],
+      ['2026-10-14', 'Josh', 1, 0, '0%', 0, 0],
+      ['2026-10-14', 'Unassigned', 1, 0, '0%', 0, 0],
+      ['2026-10-13', 'David', 2, 0, '0%', 1, 0],
+      [],
+      ['Total', 'David', 3, 2, '67%', 1, 1],
+      ['Total', 'Josh', 1, 0, '0%', 0, 0],
+      ['Total', 'Sarah', 0, 0, '', 0, 0],
+      ['Total', 'Unassigned', 1, 0, '0%', 0, 0],
+      ['Total', 'All mailboxes', 5, 2, '40%', 1, 1],
+    ],
+  });
+  // Rounding: 1 of 3 → 33%, 1 of 8 → 13% (half up), 7 of 40 → 18%; a reply without a reply_status isn't one.
+  const rows = (n, replied) => Array.from({ length: n }, (_, i) => [`p${n}-${i}@example.org`, '2026-10-14', i < replied ? 'negative' : '', i < replied ? '2026-10-14' : '', 'david@example.com']);
+  const rated = await sync({
+    mailboxes: [MAILBOXES[0]],
+    values: { Tracker: [['kdm_email', 'sent_date', 'reply_status', 'reply_date', 'sender'], ...rows(3, 1), ...rows(8, 1), ...rows(40, 7), ['px@example.org', '2026-10-14', '', '2026-10-14', 'david@example.com']] },
+  });
+  const values = rated.sheets.find((c) => c.method === 'PUT' && sheetRange(c.url).title === 'Summary').json().values;
+  assert.deepEqual(values.at(-1), ['Total', 'All mailboxes', 52, 9, '17%', 0, 0]);
+  const A = [{ id: 'a', name: 'A' }];
+  assert.deepEqual(g.summaryValues([{ row_key: 'k1', mailbox_id: 'a', sent_on: '2026-10-01', reply_on: '2026-10-01', reply_status: 'neutral' }, { row_key: 'k2', mailbox_id: 'a', sent_on: '2026-10-01' }, { row_key: 'k3', mailbox_id: 'a', sent_on: '2026-10-01' }], A)[1],
+    ['2026-10-01', 'A', 3, 1, '33%', 0, 0]);
+  assert.equal(g.summaryValues(Array.from({ length: 8 }, (_, i) => ({ row_key: `k${i}`, mailbox_id: 'a', sent_on: '2026-10-01', reply_on: i ? null : '2026-10-01', reply_status: i ? '' : 'negative' })), A)[1][4], '13%');
+  assert.equal(g.summaryValues(Array.from({ length: 40 }, (_, i) => ({ row_key: `k${i}`, mailbox_id: 'a', sent_on: '2026-10-01', reply_on: '2026-10-01', reply_status: i < 7 ? 'negative' : '' })), A)[1][4], '18%');
+  assert.deepEqual(g.summaryValues([], []), [['Date', 'Mailbox', 'Sent', 'Replies', 'Reply rate', 'Bounces', 'Meetings'], [], ['Total', 'All mailboxes', 0, 0, '', 0, 0]]);
+});
+
+await check('outreach Notes: pinned first then newest, with mailbox and author names, Sydney time, as plain values', async () => {
+  const r = await sync();
+  const [notes] = r.to(`${REST}/outreach_notes`);
+  assert.equal(notes.url, `${REST}/outreach_notes?select=mailbox_id,pinned,body,author_id,created_at`);
+  assert.equal(notes.headers.get('apikey'), 'sb_secret_test');
+  const authors = r.to(`${REST}/profiles`).find((c) => c.url.includes('id=in.'));
+  const ids = new URL(authors.url).searchParams.get('id');
+  assert.deepEqual(ids.slice(4, -1).split(',').sort(), [JOSH_ID, ADMIN_ID, NOTES[2].author_id].sort());
+  const [update] = r.sheets.filter((c) => c.method === 'PUT' && sheetRange(c.url).title === 'Notes');
+  assert.equal(update.url, `${SHEET}/values/${encodeURIComponent("'Notes'!A1")}?valueInputOption=RAW`);
+  assert.deepEqual(update.json(), {
+    majorDimension: 'ROWS',
+    values: [
+      ['Created', 'Mailbox', 'Pinned', 'Author', 'Note'],
+      ['2026-10-01 12:00', 'David', 'Yes', 'David Example', 'Lead with the council’s own asset register.'],
+      ['2026-10-15 10:30', 'All mailboxes', '', 'Josh Example', 'Short subject lines did better this week.'],
+      ['2026-10-10 16:15', 'Josh', '', '', '=SUM(A1) stays text'],
+    ],
+  });
+  const empty = await sync({ notes: [] });
+  assert.equal(empty.to(`${REST}/profiles`).filter((c) => c.url.includes('id=in.')).length, 0, 'no authors → no lookup');
+  assert.deepEqual(empty.sheets.find((c) => c.method === 'PUT' && sheetRange(c.url).title === 'Notes').json().values, [['Created', 'Mailbox', 'Pinned', 'Author', 'Note']]);
+});
+
+await check('outreach write-back: addSheet only for missing tabs; each tab cleared, then written (RAW)', async () => {
+  const both = await sync({ tabs: [{ sheetId: 777, title: 'Tracker' }] });
+  const add = both.sheets.filter((c) => c.url.startsWith(`${SHEET}:batchUpdate`));
+  assert.equal(add.length, 1);
+  assert.equal(add[0].method, 'POST');
+  assert.deepEqual(add[0].json(), { requests: [{ addSheet: { properties: { title: 'Summary' } } }, { addSheet: { properties: { title: 'Notes' } } }] });
+  const steps = both.sheets.map((c) => {
+    if (c.url.startsWith(`${SHEET}/values/`)) {
+      const { title, a1, action } = sheetRange(c.url);
+      return `${c.method} ${title}${a1 ? `!${a1}` : ''}${action ? `:${action}` : ''}`;
+    }
+    return `${c.method} ${c.url.slice(SHEET.length)}`;
+  });
+  assert.deepEqual(steps, [
+    'GET ?fields=sheets.properties', 'GET Tracker!A1:AZ', 'POST :batchUpdate',
+    'POST Summary:clear', 'PUT Summary!A1', 'POST Notes:clear', 'PUT Notes!A1',
+  ]);
+  const clear = both.sheets.find((c) => c.url.endsWith(':clear'));
+  assert.equal(clear.url, `${SHEET}/values/${encodeURIComponent("'Summary'")}:clear`);
+  assert.equal(clear.body, '{}');
+  assert.ok(both.calls.indexOf(add[0]) > both.calls.indexOf(both.upserts.at(-1)), 'written back after the database');
+
+  const present = await sync({ tabs: [{ sheetId: 777, title: 'Tracker' }, { sheetId: 1, title: 'summary' }, { sheetId: 2, title: 'Notes' }] });
+  assert.equal(present.status, 200);
+  assert.equal(present.sheets.filter((c) => c.url.startsWith(`${SHEET}:batchUpdate`)).length, 0, 'nothing added');
+  assert.deepEqual(present.sheets.filter((c) => c.method === 'PUT').map((c) => sheetRange(c.url).title), ['summary', 'Notes'], 'the existing tab’s own title');
+
+  const one = await sync();
+  assert.deepEqual(one.sheets.find((c) => c.url.startsWith(`${SHEET}:batchUpdate`)).json(), { requests: [{ addSheet: { properties: { title: 'Notes' } } }] });
+});
+
+await check('outreach settings: synced_at, an empty sync_error and the stats; returns { ok, stats }', async () => {
+  const r = await sync();
+  assert.equal(r.status, 200);
+  const stats = {
+    rows: 9, contacts: 6, sent: 5, replies: 2, bounced: 1, meetings: 1, unassigned: 3, duplicates: 1, skipped: 1, missing: 2, tab: 'Tracker',
+  };
+  assert.deepEqual(r.data, { ok: true, stats });
+  assert.equal(r.patches.length, 1);
+  const [patch] = r.patches;
+  assert.equal(patch.url, `${REST}/outreach_settings?id=eq.1`);
+  assert.equal(patch.headers.get('apikey'), 'sb_secret_test');
+  assert.equal(patch.headers.get('prefer'), 'return=minimal');
+  assert.deepEqual(patch.json(), { synced_at: r.rows[0].synced_at, sync_error: '', sync_stats: stats });
+  assert.ok(r.calls.indexOf(patch) === r.calls.length - 1, 'the last call');
+  assert.ok(!/access-token|refresh-token/.test(r.text), 'no token in the response');
+});
+
+await check('outreach errors: saved as sync_error and returned; never a token; the database keeps the emails', async () => {
+  const unshared = 'The outreach sheet wasn’t found or isn’t shared with David Example.';
+  const cases = [
+    ['meta 404', { [`${SHEET}?`]: () => reply(404, { error: { code: 404, message: 'Requested entity was not found.', status: 'NOT_FOUND' } }) }, 404, unshared],
+    ['read 403', { [`${SHEET}/values/`]: () => reply(403, { error: { code: 403, message: 'The caller does not have permission', status: 'PERMISSION_DENIED' } }) }, 403, unshared],
+    ['scope', { [`${SHEET}?`]: () => reply(403, { error: { code: 403, message: 'Request had insufficient authentication scopes.', details: [{ reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' }] } }) },
+      409, 'David Example needs to reconnect Google in Settings → Business.'],
+    ['API off', { [`${SHEET}?`]: () => reply(403, { error: { code: 403, message: 'Google Sheets API has not been used in project 123 before or it is disabled.', details: [{ reason: 'SERVICE_DISABLED' }] } }) },
+      502, 'Google Sheets API has not been used in project 123 before or it is disabled.'],
+    ['mailboxes', { [`${REST}/outreach_mailboxes`]: () => reply(500, { code: 'XX000', message: 'boom' }) }, 502, 'Could not read the outreach mailboxes.'],
+    ['upsert', { [`${REST}/outreach_emails`]: () => reply(400, { code: '22007', message: 'invalid input syntax for type date' }) }, 502, 'Could not save the outreach emails.'],
+    ['network', { [`${SHEET}?`]: () => { throw new TypeError('fetch failed'); } }, 500, SYNC_FAILED],
+  ];
+  for (const [name, routes, status, error] of cases) {
+    const r = await sync({ routes });
+    assert.equal(r.status, status, name);
+    assert.deepEqual(r.data, { error }, name);
+    assert.deepEqual(syncError(r), [{ sync_error: error }], `${name}: sync_error only (no synced_at or stats)`);
+    assert.equal(r.headers.get('access-control-allow-origin'), ORIGIN, name);
+    const everything = [r.text, ...r.patches.map((c) => c.body), ...r.logs].join('\n');
+    assert.ok(!/access-token|refresh-token/.test(everything), `${name}: no token in the response, sync_error or logs`);
+  }
+  const upsert = await sync({ routes: { [`${REST}/outreach_emails`]: () => reply(500, {}) } });
+  assert.equal(upsert.upserts.length, 1, 'stops at the first failed batch');
+  assert.equal(upsert.to(`${REST}/outreach_emails`).filter((c) => c.method === 'PATCH').length, 0, 'nothing marked missing');
+  assert.equal(upsert.sheets.length, 2, 'no write-back');
+
+  const readOnly = await sync({ routes: { [`${SHEET}:batchUpdate`]: () => reply(403, { error: { code: 403, message: 'The caller does not have permission', status: 'PERMISSION_DENIED' } }) } });
+  assert.equal(readOnly.status, 403);
+  assert.deepEqual(readOnly.data, { error: 'David Example can’t edit the outreach sheet.' });
+  assert.equal(readOnly.upserts.length, 1, 'the emails were saved before the write-back');
+  assert.deepEqual(syncError(readOnly), [{ sync_error: 'David Example can’t edit the outreach sheet.' }]);
+
+  // Google echoing the access token in a message: hidden in the response and in sync_error.
+  const echo = await sync({ routes: { [`${SHEET}/values/`]: () => reply(400, { error: { code: 400, message: 'Bad token fresh-access-token in\nrequest' } }) } });
+  assert.equal(echo.status, 502);
+  assert.deepEqual(echo.data, { error: 'Bad token … in request' });
+  assert.deepEqual(syncError(echo), [{ sync_error: 'Bad token … in request' }]);
+
+  // The sync_error write failing doesn't hide the error.
+  const both = await sync({
+    routes: {
+      [`${RPC}/google_token`]: () => reply(200, null),
+      [`${REST}/outreach_settings`]: (c) => (c.method === 'GET' ? reply(200, [{ sheet_url: SHEET_URL, sheet_by: ADMIN_ID }]) : reply(500, { message: 'down' })),
+    },
+  });
+  assert.equal(both.status, 409);
+  assert.deepEqual(both.data, { error: 'David Example needs to connect Google in Settings → Business.' });
+
+  const settingsDown = await sync({ routes: { [`${REST}/outreach_settings`]: () => reply(500, { message: 'down' }) } });
+  assert.equal(settingsDown.status, 502);
+  assert.deepEqual(settingsDown.data, { error: 'Could not read the outreach settings.' });
+  assert.equal(settingsDown.patches.length, 0);
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');

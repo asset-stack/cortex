@@ -8,10 +8,14 @@
 //   GET  callback ?code&state                            → 302 to <origin>/#/settings?tab=business&google=…
 //   POST send     {to, subject, text, attachment?}       → {id, from}: sent from the caller's own Gmail
 //   POST contract {template, folder, name, replacements} → {id, name, url}: the template copied into the folder, filled in
+//   POST outreach-sync {}                                → {ok, stats}: the outreach agent's sheet into outreach_emails,
+//                                                          then its Summary and Notes tabs written back (docs/PHASE2.md §12)
 //
 // JWT verification is OFF for this function (Google's callback carries no JWT), so it checks callers itself: the
-// caller's JWT goes to rpc google_me, and PostgREST decides who that is. Refresh tokens are read and saved with the
-// secret key (rpc google_token / google_save), which exists only in the function runtime.
+// caller's JWT goes to rpc google_me (admins only), or rpc outreach_access for outreach-sync (anyone who can see
+// Outreach; the sheet is read with the Google account of the admin who set its link), and PostgREST decides who that
+// is. Refresh tokens are read and saved with the secret key (rpc google_token / google_save), which exists only in the
+// function runtime; so are the outreach tables the sync writes.
 //
 // Env (Supabase injects the first three): SUPABASE_URL; SUPABASE_PUBLISHABLE_KEYS (JSON, .default) or
 // SUPABASE_ANON_KEY; SUPABASE_SECRET_KEYS (JSON, .default) or SUPABASE_SERVICE_ROLE_KEY; function secrets
@@ -30,6 +34,7 @@ const GOOGLE_TOKEN = 'https://oauth2.googleapis.com/token';
 const GMAIL_SEND = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
 const DRIVE_FILES = 'https://www.googleapis.com/drive/v3/files';
 const DOCS = 'https://docs.googleapis.com/v1/documents';
+const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets'; // the drive scope covers the Sheets API
 export const SCOPES = 'openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/drive';
 const DOMAIN = 'assetstackai.com';
 const STATE_TTL = 600; // seconds to finish Google's consent screen
@@ -43,11 +48,18 @@ const MAX_PDF = 2 * 1024 * 1024;
 const MAX_BODY = 4 * 1024 * 1024; // the request itself: a 2 MB PDF is ~2.8 MB of base64
 const MAX_REPLACEMENTS = 100;
 
-const ROUTES = { connect: 'POST', callback: 'GET', send: 'POST', contract: 'POST' };
+const SYNC_BATCH = 500; // outreach_emails rows per upsert
+const MAX_CELL = 50000; // Google Sheets' limit per cell
+
+const ROUTES = { connect: 'POST', callback: 'GET', send: 'POST', contract: 'POST', 'outreach-sync': 'POST' };
 const EXPIRED = 'This sign-in link has expired. Go back to Cortex and try again.';
 const NOT_CONNECTED = 'Connect your Google account in Settings first.';
 const RECONNECT = 'Reconnect your Google account in Settings.';
 const NOT_FOUND = 'Template or folder not found, or not shared with your Google account.';
+const NO_OUTREACH = 'You don’t have access to Outreach.';
+const NO_SHEET = 'Add the outreach sheet in Settings → Outreach.';
+const NO_SHEET_BY = 'Ask an admin to set the outreach sheet again in Settings → Outreach.';
+const SYNC_FAILED = 'Something went wrong with Google. Try again.';
 
 const str = (v) => String(v ?? '').trim();
 const utf8 = (s) => new TextEncoder().encode(String(s));
@@ -391,9 +403,9 @@ async function readBody(req) {
 
 const googleMessage = (data) => str(data?.error?.message || data?.error_description || (typeof data?.error === 'string' ? data.error : ''));
 
-// A Google API call → its JSON, or an HttpError: missing scope → 409 (reconnect), 404 → `notFound` when given,
-// anything else → 502 with Google's message.
-async function google(fetch, url, init, notFound = '') {
+// A Google API call → its JSON, or an HttpError: missing scope → 409 (reconnect), 404 → `notFound` and any other 403
+// (not shared; but not an API that is turned off) → `forbidden` when given, anything else → 502 with Google's message.
+async function google(fetch, url, init, notFound = '', forbidden = '') {
   const res = await fetch(url, init);
   const data = await readJson(res);
   if (res.ok) return data || {};
@@ -404,16 +416,19 @@ async function google(fetch, url, init, notFound = '') {
     throw new HttpError(409, 'Reconnect your Google account in Settings and allow Gmail and Drive.');
   }
   if (res.status === 404 && notFound) throw new HttpError(404, notFound);
+  if (res.status === 403 && forbidden && !reasons.includes('SERVICE_DISABLED') && !reasons.includes('accessNotConfigured')) {
+    throw new HttpError(403, forbidden);
+  }
   throw new HttpError(502, msg || `Google returned ${res.status}.`);
 }
 
 // ── Who is calling ──────────────────────────────────────────────────────────────────────────────────────────────
 
-// The caller's own JWT goes to rpc google_me, so PostgREST verifies it. → { uid, name, email, admin, google_email }
-async function caller(req, cfg, fetch) {
+// rpc `name` with the caller's own JWT, so PostgREST verifies it. → its JSON. A refusal (42501 / 403) → 403 `refused`.
+async function callerRpc(req, cfg, fetch, name, refused) {
   const auth = str(req.headers.get('authorization'));
   if (!auth) throw new HttpError(401, 'Sign in to Cortex first.');
-  const res = await fetch(`${cfg.url}/rest/v1/rpc/google_me`, {
+  const res = await fetch(`${cfg.url}/rest/v1/rpc/${name}`, {
     method: 'POST',
     headers: { apikey: cfg.publishableKey, Authorization: auth, 'Content-Type': 'application/json' },
     body: '{}',
@@ -423,26 +438,41 @@ async function caller(req, cfg, fetch) {
     const code = str(data?.code);
     const jwtError = /jwt|jws/i.test(`${data?.message ?? ''} ${data?.msg ?? ''}`) || code.startsWith('PGRST3');
     if (res.status === 401 || (res.status === 403 && code !== '42501' && jwtError)) throw new HttpError(401, 'Sign in to Cortex again.');
-    if (code === '42501' || res.status === 403) throw new HttpError(403, 'Your Cortex account can’t use Google.');
+    if (code === '42501' || res.status === 403) throw new HttpError(403, refused);
     throw new HttpError(502, 'Could not check your Cortex account.');
   }
+  return data;
+}
+
+// Admins, through rpc google_me. → { uid, name, email, admin, google_email }
+async function caller(req, cfg, fetch) {
+  const data = await callerRpc(req, cfg, fetch, 'google_me', 'Your Cortex account can’t use Google.');
   if (!data || !str(data.uid)) throw new HttpError(403, 'Your Cortex account can’t use Google.');
   if (data.admin !== true) throw new HttpError(403, 'Only admins can use Google from Cortex.');
   return data;
 }
 
-// The caller's stored refresh token → a fresh access token. → { token, email }
-async function googleAccess(cfg, fetch, me) {
+// Anyone who can see Outreach, through rpc outreach_access (can_view('outreach'): active staff with view or edit).
+async function outreachCaller(req, cfg, fetch) {
+  const data = await callerRpc(req, cfg, fetch, 'outreach_access', NO_OUTREACH);
+  if (data?.view !== true) throw new HttpError(403, NO_OUTREACH);
+  return data;
+}
+
+// A user's stored refresh token (the caller's, or for outreach-sync the admin who set the sheet) → a fresh access
+// token. `text` rewords the failures for someone else's account. → { token, email }
+async function googleAccess(cfg, fetch, me, text = {}) {
+  const say = { unread: 'Could not read your Google connection.', notConnected: NOT_CONNECTED, reconnect: RECONNECT, ...text };
   const stored = await fetch(`${cfg.url}/rest/v1/rpc/google_token`, {
     method: 'POST',
     headers: { ...keyHeaders(cfg.secretKey), 'Content-Type': 'application/json' },
     body: JSON.stringify({ p_user: me.uid }),
   });
-  if (!stored.ok) throw new HttpError(502, 'Could not read your Google connection.');
+  if (!stored.ok) throw new HttpError(502, say.unread);
   const account = await readJson(stored);
-  if (!str(account?.refresh_token)) throw new HttpError(409, NOT_CONNECTED);
+  if (!str(account?.refresh_token)) throw new HttpError(409, say.notConnected);
   const email = str(account.email).toLowerCase();
-  if (!EMAIL.test(email) || !ASCII.test(email)) throw new HttpError(409, RECONNECT);
+  if (!EMAIL.test(email) || !ASCII.test(email)) throw new HttpError(409, say.reconnect);
 
   const res = await fetch(GOOGLE_TOKEN, {
     method: 'POST',
@@ -452,7 +482,7 @@ async function googleAccess(cfg, fetch, me) {
     }).toString(),
   });
   const data = await readJson(res);
-  if (data?.error === 'invalid_grant') throw new HttpError(409, RECONNECT);
+  if (data?.error === 'invalid_grant') throw new HttpError(409, say.reconnect);
   if (!res.ok || !str(data?.access_token)) throw new HttpError(502, googleMessage(data) || 'Google sign-in failed.');
   return { token: data.access_token, email };
 }
@@ -580,6 +610,354 @@ async function contract(body, me, cfg, fetch) {
   return { id, name: str(copy.name) || name, url: str(copy.webViewLink) || `https://docs.google.com/document/d/${id}/edit` };
 }
 
+// ── Outreach sync ───────────────────────────────────────────────────────────────────────────────────────────────
+
+// The agent's columns (row 1, any order or case) → outreach_emails columns.
+const SHEET_TEXT = {
+  vertical: 'vertical', organisation: 'organisation', domain: 'domain', location: 'location', kdm_name: 'contact_name',
+  kdm_role: 'contact_role', kdm_email: 'contact_email', tier: 'tier', signal: 'signal', subject: 'subject', variant: 'variant',
+  draft_status: 'status', sent_message_id: 'message_id', thread_id: 'thread_id', sequence_status: 'sequence_status',
+  reply_status: 'reply_status', reply_summary: 'reply_summary', note: 'note',
+};
+const SHEET_DATES = {
+  date_logged: 'date_logged', sent_date: 'sent_on', next_followup_date: 'next_followup', reply_date: 'reply_on',
+  meeting_booked_date: 'meeting_on',
+};
+const SENDER_HEADERS = ['sender', 'mailbox', 'from', 'sent_from']; // the first one with a value
+const ID_HEADERS = ['sent_message_id', 'email_id', 'gmail_draft_id']; // the agent's; only for recognising its tab
+const KNOWN_HEADERS = new Set([
+  ...Object.keys(SHEET_TEXT), ...Object.keys(SHEET_DATES), ...SENDER_HEADERS, ...ID_HEADERS, 'followup_stage', 'bounced',
+]);
+const YES = new Set(['yes', 'y', 'true', '1']);
+const OWN_TABS = ['Summary', 'Notes']; // written by the sync, never read as the agent's rows
+const SUMMARY_HEAD = ['Date', 'Mailbox', 'Sent', 'Replies', 'Reply rate', 'Bounces', 'Meetings'];
+const NOTES_HEAD = ['Created', 'Mailbox', 'Pinned', 'Author', 'Note'];
+const TEAM_TIMEZONE = 'Australia/Sydney'; // as src/lib/format.js
+
+/** The Google Sheet's id and tab (gid) from its link; '' when it isn't a Sheets link. As sheetFromUrl() in src/lib/outreach.js. */
+export function sheetFromUrl(url) {
+  const m = /docs\.google\.com\/spreadsheets\/d\/([A-Za-z0-9_-]{20,})/.exec(str(url));
+  if (!m) return { id: '', gid: '' };
+  const gid = /[#&?]gid=(\d+)/.exec(str(url));
+  return { id: m[1], gid: gid ? gid[1] : '' };
+}
+
+/** A sheet date → YYYY-MM-DD: YYYY-MM-DD (a time after it is ignored) or Australian D/M/YYYY; anything else → null. */
+export function sheetDate(value) {
+  const s = str(value);
+  let m = /^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/.exec(s);
+  let y, mo, d;
+  if (m) [, y, mo, d] = m.map(Number);
+  else if ((m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[T\s,].*)?$/.exec(s))) [, d, mo, y] = m.map(Number);
+  else return null;
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  if (t.getUTCFullYear() !== y || t.getUTCMonth() !== mo - 1 || t.getUTCDate() !== d) return null; // 31/02, 2026-13-01
+  return t.toISOString().slice(0, 10);
+}
+
+// A column's letter (0 → A, 26 → AA), for a value under an empty header.
+function columnName(i) {
+  let s = '';
+  for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
+}
+
+// "Name <a@x.com>" or "A@X.com" → a@x.com
+function senderAddress(value) {
+  const s = str(value);
+  return str(/<([^<>]*)>/.exec(s)?.[1] ?? s).toLowerCase();
+}
+
+const followupStage = (value) => {
+  const n = Number.parseInt(str(value), 10);
+  return Number.isInteger(n) && n >= 0 && n <= 1000 ? n : 0;
+};
+
+/**
+ * The agent's tab (rows of cells; row 1 = headers, matched by name) → outreach_emails rows (without mailbox_id,
+ * in_sheet and synced_at). One row per contact: row_key = kdm_email|date_logged, else organisation|kdm_name|date_logged
+ * (lower case, the date as YYYY-MM-DD or '' when it can't be read). Not the Gmail ids: one email often goes to two
+ * contacts at an organisation (two rows, the same ids), and the ids only appear as a row goes from logged to drafted to
+ * sent. Rows with no email, organisation or name are skipped; of two rows with the same key the later one wins.
+ * → { rows, duplicates, skipped, known (row 1 has at least one of the agent's columns) }
+ */
+export function sheetRows(values) {
+  const [head, ...body] = Array.isArray(values) && values.length ? values : [[]];
+  const headers = (Array.isArray(head) ? head : []).map(str);
+  const col = new Map();
+  headers.forEach((h, i) => {
+    const k = h.toLowerCase();
+    if (k && !col.has(k)) col.set(k, i);
+  });
+  const byKey = new Map();
+  let duplicates = 0;
+  let skipped = 0;
+  for (const line of body) {
+    const cells = (Array.isArray(line) ? line : []).map(str);
+    if (!cells.some(Boolean)) continue;
+    const get = (h) => (col.has(h) ? cells[col.get(h)] || '' : '');
+    const row = { row_key: '', sender: senderAddress(SENDER_HEADERS.map(get).find(Boolean)) };
+    for (const [h, c] of Object.entries(SHEET_TEXT)) row[c] = get(h);
+    for (const [h, c] of Object.entries(SHEET_DATES)) row[c] = sheetDate(get(h));
+    row.followup_stage = followupStage(get('followup_stage'));
+    row.bounced = YES.has(get('bounced').toLowerCase());
+    row.raw = {};
+    cells.forEach((v, i) => {
+      if (v) row.raw[headers[i] || columnName(i)] = v;
+    });
+
+    const logged = row.date_logged || '';
+    const key = row.contact_email ? `${row.contact_email}|${logged}`
+      : row.organisation || row.contact_name ? `${row.organisation}|${row.contact_name}|${logged}` : '';
+    if (!key) {
+      skipped++;
+      continue;
+    }
+    row.row_key = key.toLowerCase();
+    if (byKey.has(row.row_key)) {
+      duplicates++;
+      byKey.delete(row.row_key);
+    }
+    byKey.set(row.row_key, row);
+  }
+  return { rows: [...byKey.values()], duplicates, skipped, known: headers.some((h) => KNOWN_HEADERS.has(h.toLowerCase())) };
+}
+
+/** The mailbox that sends as `sender` (its id), or null (Unassigned). As mailboxFor() in src/lib/outreach.js. */
+export function mailboxIdFor(mailboxes, sender) {
+  const s = str(sender).toLowerCase();
+  return (s && (mailboxes || []).find((m) => (m.addresses || []).some((a) => str(a).toLowerCase() === s))?.id) || null;
+}
+
+const replyRate = (t) => (t.sent ? `${Math.round((t.replies * 100) / t.sent)}%` : '');
+const zero = () => ({ sent: 0, replies: 0, bounces: 0, meetings: 0 });
+const earliest = (a, b) => (a && b ? (a < b ? a : b) : a || b || null);
+
+/**
+ * Emails, not rows (one email to two contacts is two rows): mapped rows grouped by email (sent_message_id, else the
+ * row_key) and mailbox → [{ mailbox ('' = Unassigned), sent, bounced, reply, meeting }]: the earliest sent day, bounced
+ * when any row is, the earliest reply day of the rows with a reply_status, the earliest meeting day. Same rules as
+ * outreach_daily() in 0007 and outreachDaily() in src/lib/outreach.js.
+ */
+export function outreachEmailGroups(rows) {
+  const groups = new Map();
+  for (const r of rows || []) {
+    const mailbox = r.mailbox_id || '';
+    const k = JSON.stringify([str(r.message_id) || r.row_key, mailbox]);
+    const e = groups.get(k) || { mailbox, sent: null, bounced: false, reply: null, meeting: null };
+    e.sent = earliest(e.sent, r.sent_on);
+    e.bounced = e.bounced || r.bounced === true;
+    if (str(r.reply_status)) e.reply = earliest(e.reply, r.reply_on);
+    e.meeting = earliest(e.meeting, r.meeting_on);
+    groups.set(k, e);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * The Summary tab: emails per day and mailbox, newest day first (mailboxes in their order, Unassigned last): sent on
+ * the sent day (and bounced, when the email bounced), replies on the reply day, meetings on the meeting day; then a
+ * blank row and the all-time totals per mailbox and for all of them.
+ */
+export function summaryValues(rows, mailboxes) {
+  const list = mailboxes || [];
+  const rank = (id) => (id ? list.findIndex((m) => m.id === id) + 1 || list.length + 1 : list.length + 2);
+  const name = (id) => (id ? str(list.find((m) => m.id === id)?.name) || 'Mailbox' : 'Unassigned');
+  const days = new Map();
+  const totals = new Map(list.map((m) => [m.id, zero()]));
+  const add = (day, id, field) => {
+    const k = `${day}|${id}`;
+    if (!days.has(k)) days.set(k, { day, id, ...zero() });
+    days.get(k)[field]++;
+    if (!totals.has(id)) totals.set(id, zero());
+    totals.get(id)[field]++;
+  };
+  for (const e of outreachEmailGroups(rows)) {
+    if (e.sent) {
+      add(e.sent, e.mailbox, 'sent');
+      if (e.bounced) add(e.sent, e.mailbox, 'bounces');
+    }
+    if (e.reply) add(e.reply, e.mailbox, 'replies');
+    if (e.meeting) add(e.meeting, e.mailbox, 'meetings');
+  }
+  const line = (first, label, t) => [first, label, t.sent, t.replies, replyRate(t), t.bounces, t.meetings];
+  const daily = [...days.values()].sort((a, b) => (a.day !== b.day ? (a.day < b.day ? 1 : -1) : rank(a.id) - rank(b.id)));
+  const all = zero();
+  const block = [...totals.entries()].sort((a, b) => rank(a[0]) - rank(b[0])).map(([id, t]) => {
+    for (const k of Object.keys(all)) all[k] += t[k];
+    return line('Total', name(id), t);
+  });
+  return [SUMMARY_HEAD, ...daily.map((d) => line(d.day, name(d.id), d)), [], ...block, line('Total', 'All mailboxes', all)];
+}
+
+// An ISO time → "YYYY-MM-DD HH:MM" in Sydney.
+function teamTime(iso) {
+  const t = new Date(str(iso));
+  if (Number.isNaN(t.getTime())) return '';
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-AU', {
+    timeZone: TEAM_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(t).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
+}
+
+/** The Notes tab: pinned first, then newest first. `names`: { profile id: name }. */
+export function notesValues(notes, mailboxes, names = {}) {
+  const time = (n) => Date.parse(str(n.created_at)) || 0;
+  const sorted = [...(notes || [])].sort((a, b) => (b.pinned === true) - (a.pinned === true) || time(b) - time(a));
+  const mailbox = (id) => (id ? str((mailboxes || []).find((m) => m.id === id)?.name) || 'Mailbox' : 'All mailboxes');
+  return [NOTES_HEAD, ...sorted.map((n) => [
+    teamTime(n.created_at), mailbox(n.mailbox_id), n.pinned === true ? 'Yes' : '', str(names[n.author_id]), String(n.body ?? '').slice(0, MAX_CELL),
+  ])];
+}
+
+// 'Tab' for an A1 range ('' doubled).
+const quoteTab = (title) => `'${String(title).replace(/'/g, "''")}'`;
+
+// PostgREST with the secret key (no RLS). → its JSON; a failure → 502 `fail` (PostgREST's own message is only logged).
+async function rest(cfg, fetch, path, { method = 'GET', body, prefer = '' } = {}, fail = 'Could not reach the database.') {
+  const res = await fetch(`${cfg.url}/rest/v1/${path}`, {
+    method,
+    headers: {
+      ...keyHeaders(cfg.secretKey), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(prefer ? { Prefer: prefer } : {}),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const data = await readJson(res);
+  if (!res.ok) {
+    console.error(`google/outreach-sync: ${method} ${path.split('?')[0]} → ${res.status}`, str(data?.code), str(data?.message).slice(0, 200));
+    throw new HttpError(502, fail);
+  }
+  return data;
+}
+
+// The sheet → outreach_emails (rows no longer in it keep their data, with in_sheet false) → the Summary and Notes tabs
+// → outreach_settings (synced_at, sync_stats). A failure after the settings are read is saved as sync_error. Upserts
+// are idempotent, so two syncs at once do no harm and there is no lock.
+async function outreachSync(cfg, fetch) {
+  const start = new Date().toISOString();
+  const db = (path, init, fail) => rest(cfg, fetch, path, init, fail);
+  const settings = await db('outreach_settings?id=eq.1&select=sheet_url,sheet_by', {}, 'Could not read the outreach settings.');
+  const set = Array.isArray(settings) ? settings[0] : null;
+  if (!str(set?.sheet_url)) throw new HttpError(400, NO_SHEET);
+  if (!str(set?.sheet_by)) throw new HttpError(400, NO_SHEET_BY);
+
+  let token = '';
+  try {
+    const sheet = sheetFromUrl(set.sheet_url);
+    if (!sheet.id) throw new HttpError(400, 'The outreach sheet isn’t a Google Sheets link. Check it in Settings → Outreach.');
+
+    // The admin who set the link: the sheet is read and written with their Google account, while they are an active admin.
+    const found = await db(`profiles?id=eq.${encodeURIComponent(set.sheet_by)}&select=name,active,role`, {},
+      'Could not check who set the outreach sheet.');
+    const admin = Array.isArray(found) ? found[0] : null;
+    const who = str(admin?.name);
+    const whom = who || 'the admin who set the sheet link';
+    const Who = who || 'The admin who set the sheet link';
+    if (admin?.active !== true) {
+      throw new HttpError(409, `${Who} is no longer active. Another admin needs to set the sheet link again in Settings → Outreach.`);
+    }
+    if (admin.role !== 'superadmin' && admin.role !== 'admin') {
+      throw new HttpError(409, `${Who} is no longer an admin. Another admin needs to set the sheet link again in Settings → Outreach.`);
+    }
+    const reconnect = `${Who} needs to reconnect Google in Settings → Business.`;
+    ({ token } = await googleAccess(cfg, fetch, { uid: set.sheet_by }, {
+      unread: 'Could not read the Google connection for the outreach sheet.',
+      notConnected: `${Who} needs to connect Google in Settings → Business.`,
+      reconnect,
+    }));
+    const sheets = async (url, init, { notFound = '', forbidden = '' } = {}) => {
+      const headers = { Authorization: `Bearer ${token}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}) };
+      try {
+        return await google(fetch, url, { ...init, headers }, notFound, forbidden);
+      } catch (e) {
+        if (e instanceof HttpError && e.status === 409) throw new HttpError(409, reconnect);
+        throw e;
+      }
+    };
+    const base = `${SHEETS}/${sheet.id}`;
+    const unshared = `The outreach sheet wasn’t found or isn’t shared with ${whom}.`;
+    const readOnly = `${Who} can’t edit the outreach sheet.`;
+
+    // The agent's tab: the one in the link, else the first that isn't Summary or Notes.
+    const meta = await sheets(`${base}?fields=sheets.properties`, { method: 'GET' }, { notFound: unshared, forbidden: unshared });
+    const tabs = (Array.isArray(meta.sheets) ? meta.sheets : []).map((s) => s?.properties).filter((p) => p && typeof p.title === 'string');
+    const tabNamed = (title) => tabs.find((p) => p.title.trim().toLowerCase() === title.toLowerCase());
+    const own = (p) => OWN_TABS.some((t) => tabNamed(t) === p);
+    const tab = (sheet.gid && tabs.find((p) => String(p.sheetId) === sheet.gid && !own(p))) || tabs.find((p) => !own(p));
+    if (!tab) throw new HttpError(400, 'The outreach sheet has no tab to read.');
+    const read = await sheets(`${base}/values/${encodeURIComponent(`${quoteTab(tab.title)}!A1:AZ`)}`, { method: 'GET' },
+      { notFound: unshared, forbidden: unshared });
+    const parsed = sheetRows(read.values);
+    if (!parsed.known) throw new HttpError(400, `The “${tab.title}” tab has no outreach columns in row 1.`);
+
+    const mailboxes = await db('outreach_mailboxes?select=id,name,addresses&order=position.asc', {}, 'Could not read the outreach mailboxes.');
+    const boxes = Array.isArray(mailboxes) ? mailboxes : [];
+    const rows = parsed.rows.map((r) => ({ ...r, mailbox_id: mailboxIdFor(boxes, r.sender), in_sheet: true, synced_at: start }));
+    for (let i = 0; i < rows.length; i += SYNC_BATCH) {
+      await db('outreach_emails?on_conflict=row_key', {
+        method: 'POST', body: rows.slice(i, i + SYNC_BATCH), prefer: 'resolution=merge-duplicates,return=minimal',
+      }, 'Could not save the outreach emails.');
+    }
+    // Every row this sync didn't write is no longer in the sheet.
+    const gone = await db(`outreach_emails?synced_at=lt.${start}&in_sheet=eq.true&select=id`, {
+      method: 'PATCH', body: { in_sheet: false }, prefer: 'return=representation',
+    }, 'Could not update the outreach emails.');
+
+    // Write back: Summary and Notes (added when missing), cleared and rewritten as plain values.
+    const missingTabs = OWN_TABS.filter((t) => !tabNamed(t));
+    if (missingTabs.length) {
+      await sheets(`${base}:batchUpdate`, {
+        method: 'POST', body: JSON.stringify({ requests: missingTabs.map((title) => ({ addSheet: { properties: { title } } })) }),
+      }, { forbidden: readOnly });
+    }
+    const notes = await db('outreach_notes?select=mailbox_id,pinned,body,author_id,created_at', {}, 'Could not read the outreach notes.');
+    const noteList = Array.isArray(notes) ? notes : [];
+    const authors = [...new Set(noteList.map((n) => str(n.author_id)).filter(Boolean))];
+    const people = authors.length
+      ? await db(`profiles?select=id,name&id=in.(${authors.map(encodeURIComponent).join(',')})`, {}, 'Could not read the note authors.')
+      : [];
+    const names = Object.fromEntries((Array.isArray(people) ? people : []).map((p) => [p.id, str(p.name)]));
+    for (const [title, values] of [['Summary', summaryValues(rows, boxes)], ['Notes', notesValues(noteList, boxes, names)]]) {
+      const range = quoteTab(tabNamed(title)?.title ?? title);
+      await sheets(`${base}/values/${encodeURIComponent(range)}:clear`, { method: 'POST', body: '{}' }, { forbidden: readOnly });
+      await sheets(`${base}/values/${encodeURIComponent(`${range}!A1`)}?valueInputOption=RAW`, {
+        method: 'PUT', body: JSON.stringify({ majorDimension: 'ROWS', values }),
+      }, { forbidden: readOnly });
+    }
+
+    // Stats: sent, replies, bounced and meetings are emails, as on the Summary (all time); contacts = rows sent to.
+    const emails = outreachEmailGroups(rows);
+    const stats = {
+      rows: rows.length,
+      contacts: rows.filter((r) => r.sent_on).length,
+      sent: emails.filter((e) => e.sent).length,
+      replies: emails.filter((e) => e.reply).length,
+      bounced: emails.filter((e) => e.sent && e.bounced).length,
+      meetings: emails.filter((e) => e.meeting).length,
+      unassigned: rows.filter((r) => !r.mailbox_id).length,
+      duplicates: parsed.duplicates,
+      skipped: parsed.skipped,
+      missing: Array.isArray(gone) ? gone.length : 0,
+      tab: tab.title,
+    };
+    await db('outreach_settings?id=eq.1', {
+      method: 'PATCH', body: { synced_at: start, sync_error: '', sync_stats: stats }, prefer: 'return=minimal',
+    }, 'Could not save the sync results.');
+    return { ok: true, stats };
+  } catch (e) {
+    // Saved for Settings → Outreach: a short message of ours, never a token or Google's payload.
+    let message = e instanceof HttpError ? e.message : SYNC_FAILED;
+    if (token) message = message.split(token).join('…');
+    message = message.replace(/\s+/g, ' ').trim().slice(0, 500) || SYNC_FAILED;
+    try {
+      await db('outreach_settings?id=eq.1', { method: 'PATCH', body: { sync_error: message }, prefer: 'return=minimal' }, '');
+    } catch {
+      // the caller gets the error either way
+    }
+    throw e instanceof HttpError ? new HttpError(e.status, message) : e;
+  }
+}
+
 // ── Entry ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function handle(req, { env = {}, fetch = globalThis.fetch } = {}) {
@@ -601,6 +979,11 @@ export async function handle(req, { env = {}, fetch = globalThis.fetch } = {}) {
 
   try {
     if (route === 'callback') return await callback(url, cfg, fetch);
+    if (route === 'outreach-sync') {
+      await outreachCaller(req, cfg, fetch);
+      await readBody(req);
+      return json(200, await outreachSync(cfg, fetch), origin);
+    }
     const me = await caller(req, cfg, fetch);
     const body = await readBody(req);
     if (route === 'connect') return json(200, await connect(body, me, cfg), origin);
