@@ -16,7 +16,7 @@ import {
   PLAN_MONTHS, addDays, addMonths, clientCreatedLocal, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isPlanDate,
   isYmd, makeTodo, mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
 } from '@/lib/automations';
-import { TEAM_TIMEZONE, browserTimezone, daysBetween, emailSnippet, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
+import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
 import { mentionedUserIds } from '@/lib/mentions';
 import { cleanTool } from '@/lib/tools';
 import { emailFromRow, filterEmails, outreachBreakdown, outreachDaily, parseAddresses } from '@/lib/outreach';
@@ -95,15 +95,6 @@ const readDataUrl = (file) => new Promise((resolve, reject) => {
   reader.onerror = () => reject(reader.error);
   reader.readAsDataURL(file);
 });
-
-// A send moves a New / No reply contact to Sent (never downgrading Opened or Replied). Found by id;
-// entries from older builds only carry the name.
-function markContactSent(d, entry) {
-  const c = entry.contactId ? d.contacts.find((x) => x.id === entry.contactId) : d.contacts.find((x) => x.name === entry.contact);
-  if (!c) return;
-  if (c.status === 'New' || c.status === 'No reply') c.status = 'Sent';
-  c.last = nowIso();
-}
 
 // Another channel, one this user can't see, has the name: the next -2, -3 … instead.
 function nextChannelName(d, name) {
@@ -614,11 +605,13 @@ function createActions(mutate, mode) {
       if ('active' in patch) m.active = patch.active !== false;
       return true;
     }),
-    // With its notes (as the database does: on delete cascade). Its emails stay, as Unassigned.
+    // With its notes (as the database does: on delete cascade). Its emails stay, as Unassigned (on delete set null; the
+    // demo's emails are in state, live mode's aren't).
     removeMailbox: (id) => admin((d) => {
       if (!(d.mailboxes || []).some((x) => x.id === id)) return false;
       d.mailboxes = d.mailboxes.filter((x) => x.id !== id);
       d.outreachNotes = (d.outreachNotes || []).filter((x) => x.mailbox !== id);
+      (d.outreachEmails || []).forEach((e) => { if (e.mailbox === id) e.mailbox = ''; });
       return true;
     }),
     moveMailbox: (id, dir) => admin((d) => step(d.mailboxes || [], (d.mailboxes || []).findIndex((x) => x.id === id), dir)),
@@ -1101,30 +1094,7 @@ function createActions(mutate, mode) {
       return path ? mode.fileUrl(path) : '';
     },
 
-    // ── Outreach: edit access to outreach ──
-
-    logEmail: (entry) => editing('outreach', (d) => {
-      d.emails.unshift({ id: uid(), ts: nowIso(), ...entry });
-      if (entry.kind === 'sent') markContactSent(d, entry);
-      return true;
-    }),
-    queueApproval: (entry) => editing('outreach', (d) => {
-      d.approvals.unshift({ id: uid(), ts: nowIso(), by: d.me, ...entry });
-      return true;
-    }),
-    approveApproval: (apId) => editing('outreach', (d) => {
-      const a = d.approvals.find((x) => x.id === apId);
-      if (!a) return false; // already handled
-      d.approvals = d.approvals.filter((x) => x.id !== apId);
-      const entry = { kind: 'sent', contactId: a.contactId, contact: a.contact, subject: a.subject, snippet: emailSnippet(a.body) };
-      d.emails.unshift({ id: uid(), ts: nowIso(), ...entry });
-      markContactSent(d, entry);
-      return true;
-    }),
-    discardApproval: (apId) => editing('outreach', (d) => {
-      d.approvals = d.approvals.filter((x) => x.id !== apId);
-      return true;
-    }),
+    // ── Outreach contacts: edit access to outreach ──
     // A contact that is (or becomes) Replied or Meeting booked gets a deal and its owner a follow-up to-do: the
     // contact_pipeline trigger in live mode (never client-side there), the same rules here in demo mode.
     addContact: (contact = {}) => editing('outreach', (d) => {

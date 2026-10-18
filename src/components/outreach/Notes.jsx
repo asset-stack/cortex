@@ -88,6 +88,7 @@ function AddNote({ filter, mailboxes }) {
     if (actions.addOutreachNote({ body: body.trim(), mailbox, pinned }) === false) return;
     setBody('');
     setPinned(false);
+    setMailbox(fallback);
   };
   return (
     <form onSubmit={submit} className="mt-3">

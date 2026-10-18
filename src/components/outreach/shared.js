@@ -46,8 +46,12 @@ export function statusColor(v) {
 const REPLY_COLORS = { positive: '#0f9f6f', referral: '#7c3aed', neutral: '#64748b', negative: '#be123c' };
 export const replyColor = (v) => REPLY_COLORS[v] || '#475569';
 
-// "Mon 12 Oct" for a YYYY-MM-DD.
-export const dayLabel = (ymd) => new Date(`${ymd}T00:00:00`).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
+// "Mon 12 Oct" for a YYYY-MM-DD (`withMonth` false: "Mon 12").
+export function dayLabel(ymd, withMonth = true) {
+  const d = new Date(`${ymd}T00:00:00`);
+  const part = (o) => d.toLocaleDateString('en-AU', o);
+  return [part({ weekday: 'short' }), d.getDate(), withMonth && part({ month: 'short' })].filter(Boolean).join(' ');
+}
 
 // 0.043 → "4.3%", 0.25 → "25%".
 export const pct = (rate) => `${Number(((rate || 0) * 100).toFixed(1))}%`;

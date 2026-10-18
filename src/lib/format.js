@@ -84,13 +84,6 @@ export function chatTime(iso) {
   return `${d.toLocaleDateString('en-AU', opts)}, ${clockTime(iso)}`;
 }
 
-// One-line preview of an email body; skips a leading greeting when there is more to show.
-export function emailSnippet(body) {
-  const lines = String(body || '').split('\n').map((s) => s.trim()).filter(Boolean);
-  const skip = lines.length > 1 && /^(hi|hello|hey|dear)\b/i.test(lines[0]);
-  return (skip ? lines[1] : lines[0]) || '';
-}
-
 // Accepts '1,000', '$1,200' or '1 000'. Blank counts as 0; anything else that doesn't parse is NaN.
 export const parseAmount = (v) => Number(String(v ?? '').trim().replace(/[$,\s]/g, ''));
 export const isBadAmount = (v) => String(v ?? '').trim() !== '' && !Number.isFinite(parseAmount(v));

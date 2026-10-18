@@ -5,12 +5,12 @@ import { dayLabel, mailboxColor, mailboxName } from './shared';
 const PLOT = 160; // px from the baseline to the top tick
 const LABEL = 18; // room above the tallest bar for its value
 
-// A clean top for the axis: two even steps of 1, 2 or 5 × 10^k.
+// A clean top for the axis: two equal whole-number steps (1, 1.5, 2, 2.5, 3, 4, 5, 6 or 8 × 10^k) just above the max.
 function niceTop(max) {
   if (max <= 2) return 2;
   const half = max / 2;
   const p = 10 ** Math.floor(Math.log10(half));
-  const step = [1, 2, 5, 10].map((m) => m * p).find((s) => s >= half);
+  const step = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map((m) => m * p).filter(Number.isInteger).find((s) => s >= half);
   return step * 2;
 }
 
@@ -112,7 +112,7 @@ export default function SentChart({ daily, days, mailbox, mailboxes }) {
                 const edge = i === 0 ? 'left-0' : i === cols.length - 1 ? 'right-0' : 'left-1/2 -translate-x-1/2';
                 return (
                   <div key={c.day} className="relative min-w-0 flex-1">
-                    {show && <span className={cn('absolute top-0 whitespace-nowrap', edge)}>{few ? dayLabel(c.day).split(' ').slice(0, 2).join(' ') : shortDay(c.day)}</span>}
+                    {show && <span className={cn('absolute top-0 whitespace-nowrap', edge)}>{few ? dayLabel(c.day, false) : shortDay(c.day)}</span>}
                   </div>
                 );
               })}
