@@ -864,6 +864,21 @@ export function notesValues(notes, mailboxes, names = {}) {
 // 'Tab' for an A1 range ('' doubled).
 const quoteTab = (title) => `'${String(title).replace(/'/g, "''")}'`;
 
+// Tab grids: Google refuses a values write past a tab's rowCount × columnCount, so each tab Cortex writes is first made
+// big enough. A new tab gets at least Google's default; an existing one is only ever grown, never shrunk.
+const NEW_TAB_GRID = { rowCount: 1000, columnCount: 26 };
+const GRID_FIELDS = 'gridProperties.rowCount,gridProperties.columnCount';
+// What `values` needs: as many rows, and as many columns as its longest row.
+const gridNeeded = (values) => ({ rows: values.length, columns: values.reduce((n, v) => Math.max(n, v.length), 0) });
+// Whether tab `p` holds `need`. A tab whose grid Google didn't give (not a grid tab) counts as big enough: its size is
+// unknown, so it is never resized.
+function gridFits(p, need) {
+  const g = p?.gridProperties;
+  if (!Number.isInteger(g?.rowCount) || !Number.isInteger(g?.columnCount)) return true;
+  return g.rowCount >= need.rows && g.columnCount >= need.columns;
+}
+const grownGrid = (g, need) => ({ rowCount: Math.max(g.rowCount, need.rows), columnCount: Math.max(g.columnCount, need.columns) });
+
 // PostgREST with the secret key (no RLS). → its JSON; a failure → 502 `fail` (PostgREST's own message is only logged).
 async function rest(cfg, fetch, path, { method = 'GET', body, prefer = '' } = {}, fail = 'Could not reach the database.') {
   const res = await fetch(`${cfg.url}/rest/v1/${path}`, {
@@ -881,14 +896,15 @@ async function rest(cfg, fetch, path, { method = 'GET', body, prefer = '' } = {}
   return data;
 }
 
-// The sheet → outreach_emails (rows no longer in it keep their data, with in_sheet false) → Cortex's tabs in the same
-// spreadsheet: Summary, Notes and one tab per mailbox (titled with its name: the agent's header row and that mailbox's
-// rows as saved, see mailboxTabs()) → outreach_settings (synced_at, sync_stats). The agents keep writing their one
-// shared tab; the sync never writes it (a mailbox named like it gets no tab) and never deletes a tab (a renamed or
-// removed mailbox's old tab stays). A failure once a link and its admin are set is saved as sync_error.
+// The sheet's tab in the link (the agents' one shared tab) → outreach_emails (rows no longer in it keep their data,
+// with in_sheet false) → Cortex's tabs in the same spreadsheet: Summary, Notes and one tab per mailbox (titled with its
+// name: the agent's header row and that mailbox's rows as saved, see mailboxTabs()), added or grown when needed →
+// outreach_settings (synced_at, sync_stats). The sync never writes the agent's tab (a mailbox named like it gets no
+// tab) and never deletes a tab (a renamed or removed mailbox's old tab stays). A failure once a link and its admin are
+// set is saved as sync_error.
 // There is no lock: two syncs can overlap (two people open Outreach at once). 0007's keep_newer_sync trigger skips an
 // older sync's writes over a newer one's rows, so neither flags rows the other read as gone; the results are saved
-// only when no newer sync has saved its own; and tabs the other one just added are found again.
+// only when no newer sync has saved its own; and tabs the other one just added or grew are found again.
 async function outreachSync(cfg, fetch) {
   const start = new Date().toISOString();
   const db = (path, init, fail) => rest(cfg, fetch, path, init, fail);
@@ -897,6 +913,11 @@ async function outreachSync(cfg, fetch) {
   if (!str(set?.sheet_url)) throw new HttpError(400, NO_SHEET);
   if (!str(set?.sheet_by)) throw new HttpError(400, NO_SHEET_BY);
 
+  // The results (or the error) are saved only while the link and its reader are still the ones this sync read and no
+  // newer sync has saved its own: an older sync finishing or failing late never overwrites a newer one's, a new link's
+  // or a takeover's (Use my Google).
+  const current = `id=eq.1&sheet_url=eq.${encodeURIComponent(set.sheet_url)}&sheet_by=eq.${encodeURIComponent(set.sheet_by)}`
+    + `&or=(synced_at.is.null,synced_at.lt.${encodeURIComponent(start)})`;
   let token = '';
   try {
     const sheet = sheetFromUrl(set.sheet_url);
@@ -963,9 +984,10 @@ async function outreachSync(cfg, fetch) {
         method: 'POST', body: rows.slice(i, i + SYNC_BATCH), prefer: 'resolution=merge-duplicates,return=minimal',
       }, 'Could not save the outreach emails.');
     }
-    // Every row this sync didn't write is no longer in the sheet.
+    // Every row this sync didn't write is no longer in the sheet. Stamped with this sync's start too, so an older sync
+    // finishing late can't put it back (0007's keep_newer_sync skips its write).
     const gone = await db(`outreach_emails?synced_at=lt.${start}&in_sheet=eq.true&select=id`, {
-      method: 'PATCH', body: { in_sheet: false }, prefer: 'return=representation',
+      method: 'PATCH', body: { in_sheet: false, synced_at: start }, prefer: 'return=representation',
     }, 'Could not update the outreach emails.');
 
     // Write back: Summary, Notes and the mailbox tabs, in three requests however many mailboxes there are. First one
@@ -1029,8 +1051,7 @@ async function outreachSync(cfg, fetch) {
       tabs: targets.slice(OWN_TABS.length).map((w) => w.title), // the mailbox tabs written, in mailbox order
       noTab: boxTabs.noTab, // [{ mailbox, why }]: the mailboxes that got no tab
     };
-    // Unless a newer sync has already saved its results.
-    await db(`outreach_settings?id=eq.1&or=(synced_at.is.null,synced_at.lt.${encodeURIComponent(start)})`, {
+    await db(`outreach_settings?${current}`, {
       method: 'PATCH', body: { synced_at: start, sync_error: '', sync_stats: stats }, prefer: 'return=minimal',
     }, 'Could not save the sync results.');
     return { ok: true, stats };
@@ -1040,7 +1061,7 @@ async function outreachSync(cfg, fetch) {
     if (token) message = message.split(token).join('…');
     message = message.replace(/\s+/g, ' ').trim().slice(0, 500) || SYNC_FAILED;
     try {
-      await db('outreach_settings?id=eq.1', { method: 'PATCH', body: { sync_error: message }, prefer: 'return=minimal' }, '');
+      await db(`outreach_settings?${current}`, { method: 'PATCH', body: { sync_error: message }, prefer: 'return=minimal' }, '');
     } catch {
       // the caller gets the error either way
     }

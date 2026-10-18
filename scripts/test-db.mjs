@@ -3089,35 +3089,41 @@ async function phase7(ctx) {
 
   // 57. Two syncs at once -------------------------------------------------------------------------------------------------
 
-  // Sync B (started later, read the sheet later) has written its rows when the older sync A's upsert of the same rows
-  // lands: keep_newer_sync skips A's writes, so B's "not in the sheet any more" step doesn't flag them.
+  // Sync A started first; sync B started later (read the sheet later), after race-3 was deleted from it. B writes its rows
+  // and flags race-3 as gone (stamping it with its start, as the function does); then A's upsert of all three lands late.
+  // keep_newer_sync skips every A write, so B's rows stay B's and race-3 stays gone; A's own flagging touches nothing.
+  const t0 = '2026-10-18T01:00:00.000Z';
   const tA = '2026-10-18T02:00:00.000Z';
   const tB = '2026-10-18T02:00:05.000Z';
   const raceRow = (key, at, subject) => ({ row_key: key, sender: 'david@example.com', subject, sent_on: '2026-10-17', in_sheet: true, synced_at: at });
+  const flagGone = (at) => affected(`update public.outreach_emails set in_sheet = false, synced_at = $1
+    where synced_at < $1 and in_sheet and row_key like 'race-%'`, [at]);
   await asSecretKey();
+  const earlier = await postgrestUpsert('outreach_emails', [raceRow('race-3', t0, 'Old')], { onConflict: 'row_key' });
   const bUpsert = await postgrestUpsert('outreach_emails', [raceRow('race-1', tB, 'B'), raceRow('race-2', tB, 'B')], { onConflict: 'row_key' });
+  const goneB = await flagGone(tB);
   const aUpsert = await postgrestUpsert('outreach_emails', [raceRow('race-1', tA, 'A'), raceRow('race-2', tA, 'A'), raceRow('race-3', tA, 'A')],
     { onConflict: 'row_key' });
-  const goneB = await affected("update public.outreach_emails set in_sheet = false where synced_at < $1 and in_sheet and row_key like 'race-%'", [tB]);
-  const goneA = await affected("update public.outreach_emails set in_sheet = false where synced_at < $1 and in_sheet and row_key like 'race-%'", [tA]);
+  const goneA = await flagGone(tA);
   await as(null);
   const raced = await rows("select row_key, subject, in_sheet, synced_at from public.outreach_emails where row_key like 'race-%' order by row_key");
   const later = await (async () => {
     await asSecretKey();
-    const n = await postgrestUpsert('outreach_emails', [raceRow('race-1', '2026-10-18T03:00:00.000Z', 'C')], { onConflict: 'row_key' });
+    const n = await postgrestUpsert('outreach_emails', [raceRow('race-3', '2026-10-18T03:00:00.000Z', 'C')], { onConflict: 'row_key' });
     await as(null);
-    return { n, row: await one("select subject, synced_at from public.outreach_emails where row_key = 'race-1'") };
+    return { n, row: await one("select subject, in_sheet, synced_at from public.outreach_emails where row_key = 'race-3'") };
   })();
   await asSecretKey();
   await db.query("delete from public.outreach_emails where row_key like 'race-%'");
   await as(null);
-  check('57. two syncs at once: an older sync\'s upsert never overwrites a newer sync\'s rows (keep_newer_sync), so the newer one '
-    + 'flags only rows it didn\'t read; a later sync still writes',
-    bUpsert === null && aUpsert === null && goneB === 1 && goneA === 0
+  check('57. two syncs at once: an older sync\'s late upsert never overwrites a newer sync\'s rows nor brings back a row it flagged '
+    + 'as gone (keep_newer_sync; flagged rows carry the newer start); a later sync still writes (and restores a row back in the sheet)',
+    earlier === null && bUpsert === null && goneB === 1 && aUpsert === null && goneA === 0
       && stable(raced.map((r) => [r.row_key, r.subject, r.in_sheet, r.synced_at.toISOString()])) === stable([
-        ['race-1', 'B', true, tB], ['race-2', 'B', true, tB], ['race-3', 'A', false, tA]])
-      && later.n === null && later.row.subject === 'C' && later.row.synced_at.toISOString() === '2026-10-18T03:00:00.000Z',
-    { bUpsert, aUpsert, goneB, goneA, raced, later });
+        ['race-1', 'B', true, tB], ['race-2', 'B', true, tB], ['race-3', 'Old', false, tB]])
+      && later.n === null && later.row.subject === 'C' && later.row.in_sheet === true
+      && later.row.synced_at.toISOString() === '2026-10-18T03:00:00.000Z',
+    { earlier, bUpsert, goneB, aUpsert, goneA, raced, later });
 
   await as(null);
   return ctx;

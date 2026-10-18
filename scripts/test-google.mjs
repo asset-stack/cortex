@@ -823,10 +823,19 @@ function cleared(r) {
   assert.ok(calls.length <= 1, 'at most one values:batchClear');
   return calls.length ? calls[0].json().ranges.map((x) => { const p = parseRange(x); assert.equal(p.a1, '', 'the whole tab'); return p.title; }) : [];
 }
+// The requests of one sync's spreadsheet batchUpdate(s): addSheet and updateSheetProperties.
+const sizeRequests = (r) => r.sheets.filter((c) => c.url === `${SHEET}:batchUpdate`).flatMap((c) => c.json().requests);
 // The tabs one sync added (its addSheet requests) → titles in order.
-const added = (r) => r.sheets.filter((c) => c.url === `${SHEET}:batchUpdate`).flatMap((c) => c.json().requests.map((q) => q.addSheet.properties.title));
+const added = (r) => sizeRequests(r).filter((q) => q.addSheet).map((q) => q.addSheet.properties.title);
+// The tabs one sync grew (its updateSheetProperties requests) → sheet ids in order.
+const grown = (r) => sizeRequests(r).filter((q) => q.updateSheetProperties).map((q) => q.updateSheetProperties.properties.sheetId);
 // Every Sheets call that writes (adds, clears or updates), as "title" lists: never the agent's tab.
 const touched = (r) => [...added(r), ...cleared(r), ...writes(r).map((w) => w.title)];
+// A tab as Google lists it: a 1,000 × 26 grid (a new tab's) unless given; gridProperties: undefined → none (not a grid).
+const gridTab = (p) => ({ gridProperties: { rowCount: 1000, columnCount: 26 }, ...p });
+const GRID_FIELDS = 'gridProperties.rowCount,gridProperties.columnCount';
+const NO_GID = 'Paste the link of the agent’s tab in Settings → Outreach (open the tab, then copy the address: it ends in #gid=…).';
+const GID_GONE = 'The tab in the outreach sheet link isn’t in the sheet any more. Paste the agent’s tab link in Settings → Outreach.';
 
 // PostgREST and Sheets for outreach-sync, on top of the Google defaults (google_token, the token endpoint).
 function outreachRoutes({
@@ -845,7 +854,7 @@ function outreachRoutes({
     [`${REST}/outreach_mailboxes`]: () => reply(200, mailboxes),
     [`${REST}/outreach_emails`]: (c) => (c.method === 'POST' ? new Response(null, { status: 201 }) : reply(200, gone.map((id) => ({ id })))),
     [`${REST}/outreach_notes`]: () => reply(200, notes),
-    [`${SHEET}?`]: () => reply(200, { sheets: tabs.map((properties) => ({ properties })) }),
+    [`${SHEET}?`]: () => reply(200, { sheets: tabs.map((p) => ({ properties: gridTab(p) })) }),
     [`${SHEET}:batchUpdate`]: (c) => reply(200, { spreadsheetId: SHEET_ID, replies: c.json().requests.map(() => ({ addSheet: {} })) }),
     [`${SHEET}/values:batchClear`]: (c) => reply(200, { spreadsheetId: SHEET_ID, clearedRanges: c.json().ranges }),
     [`${SHEET}/values:batchUpdate`]: (c) => reply(200, { spreadsheetId: SHEET_ID, totalUpdatedSheets: c.json().data.length }),
@@ -1008,7 +1017,7 @@ await check('outreach admin: the admin who set the sheet must be an active admin
   assert.equal(down.to(`${RPC}/google_token`).length, 0);
 });
 
-await check('outreach tab: the link’s gid, else the first tab that isn’t Summary or Notes; the range is quoted and encoded', async () => {
+await check('outreach tab: the link’s tab (its gid), never a guess; the range is quoted and encoded', async () => {
   const tabs = [
     { sheetId: 0, title: 'Summary' }, { sheetId: 1, title: 'notes' }, { sheetId: 5, title: 'Bob’s list' },
     { sheetId: 777, title: "Ana's Tracker" }, { sheetId: 9, title: 'Other' },
@@ -1023,17 +1032,33 @@ await check('outreach tab: the link’s gid, else the first tab that isn’t Sum
   assert.equal(read.url, `${SHEET}/values/${encodeURIComponent("'Ana''s Tracker'!A1:AZ")}`);
   assert.equal(byGid.data.stats.tab, "Ana's Tracker");
 
-  for (const url of [`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`, `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=404`,
-    `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=0`]) {
-    const r = await sync({ tabs, values, settings: { sheet_url: url, sheet_by: ADMIN_ID } });
-    assert.equal(r.status, 200, url);
-    assert.equal(sheetRange(r.sheets[1].url).title, 'Bob’s list', `${url}: the first tab that isn’t ours`);
+  // The link's tab wherever it is (?gid= works too); never the first other tab.
+  const query = await sync({ tabs, values, settings: { sheet_url: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit?gid=5`, sheet_by: ADMIN_ID } });
+  assert.equal(query.status, 200);
+  assert.equal(sheetRange(query.sheets[1].url).title, 'Bob’s list');
+});
+
+await check('outreach tab errors: no gid, a gid no longer in the sheet, or Summary / Notes → 400 and sync_error; nothing saved or written', async () => {
+  const at = (rest) => ({ sheet_url: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit${rest}`, sheet_by: ADMIN_ID });
+  const tabs = [{ sheetId: 0, title: 'Summary' }, { sheetId: 1, title: ' notes ' }, { sheetId: 777, title: 'Tracker' }, { sheetId: 5, title: 'Josh' }];
+  const ours = (title) => `The outreach sheet link opens Cortex’s ${title} tab. Paste the agent’s tab link in Settings → Outreach.`;
+  for (const [rest, error, google] of [
+    ['', NO_GID, false], ['?usp=sharing', NO_GID, false], ['#gid=', NO_GID, false],
+    ['#gid=404', GID_GONE, true], ['?gid=7770#gid=7770', GID_GONE, true],
+    ['#gid=0', ours('Summary'), true], ['?gid=1#gid=1', ours('notes'), true],
+  ]) {
+    const r = await sync({ tabs, values: { Tracker: TRACKER, Summary: TRACKER, ' notes ': TRACKER }, settings: at(rest) });
+    assert.equal(r.status, 400, rest);
+    assert.deepEqual(r.data, { error }, rest);
+    assert.deepEqual(syncError(r), [{ sync_error: error }], `${rest}: saved as sync_error (no synced_at or stats)`);
+    assert.equal(r.to(`${REST}/outreach_emails`).length + r.to(`${REST}/outreach_mailboxes`).length, 0, `${rest}: nothing saved`);
+    assert.deepEqual(r.sheets.map((c) => `${c.method} ${c.url.slice(SHEET.length)}`), google ? ['GET ?fields=sheets.properties'] : [],
+      `${rest}: ${google ? 'the tab list only' : 'no Google at all'}`);
+    if (!google) assert.equal(r.to(`${RPC}/google_token`).length, 0, `${rest}: not even a token`);
   }
-  const ours = await sync({ tabs: [{ sheetId: 0, title: 'Summary' }, { sheetId: 1, title: 'Notes' }] });
-  assert.equal(ours.status, 400);
-  assert.deepEqual(ours.data, { error: 'The outreach sheet has no tab to read.' });
-  assert.deepEqual(syncError(ours), [{ sync_error: 'The outreach sheet has no tab to read.' }]);
-  assert.equal(ours.upserts.length, 0);
+  // A mailbox-named tab (no tab of its own then) stays a valid link: covered under the mailbox tabs.
+  const old = await sync({ tabs: [{ sheetId: 0, title: 'Summary' }, { sheetId: 1, title: 'Notes' }] });
+  assert.deepEqual([old.status, old.data], [400, { error: GID_GONE }], 'only Cortex’s tabs left: the link’s tab is gone');
 });
 
 await check('outreach rows: every column mapped by header name, with raw, dates, followup_stage, in_sheet and synced_at', async () => {
@@ -1221,7 +1246,7 @@ await check('outreach upsert: 1,201 rows → 3 requests of 500 / 500 / 201 with 
   const [patch] = r.to(`${REST}/outreach_emails`).filter((c) => c.method === 'PATCH');
   assert.ok(r.calls.indexOf(patch) > r.calls.indexOf(r.upserts.at(-1)), 'after every upsert');
   assert.equal(patch.url, `${REST}/outreach_emails?synced_at=lt.${start}&in_sheet=eq.true&select=id`);
-  assert.deepEqual(patch.json(), { in_sheet: false });
+  assert.deepEqual(patch.json(), { in_sheet: false, synced_at: start }, 'stamped, so an older sync finishing late can’t put them back');
   assert.equal(patch.headers.get('apikey'), 'sb_secret_test');
   assert.equal(patch.headers.get('prefer'), 'return=representation');
   assert.equal(r.data.stats.missing, 3);
@@ -1407,35 +1432,37 @@ await check('outreach mailbox tabs: never the agent’s tab; Summary / Notes nam
   const by = Object.fromEntries(r.rows.map((x) => [x.row_key, x.mailbox_id]));
   assert.deepEqual([by['di@example.org|2026-10-13'], by['ed@example.org|2026-10-13']], ['mb-trk', 'mb-dup'], 'their rows are still saved, in no tab');
 
-  // The link's gid on a mailbox-named tab: that tab is read, and that mailbox gets no tab, so it is never written.
-  const josh = await sync({ tabs: [{ sheetId: 0, title: 'Summary' }, { sheetId: 4, title: 'Tracker' }, { sheetId: 777, title: 'Josh' }], values: { Josh: TRACKER } });
+  // The link's gid on a mailbox-named tab: that tab is read, and that mailbox gets no tab, so it is never written (nor
+  // grown, however small its grid).
+  const josh = await sync({
+    tabs: [{ sheetId: 0, title: 'Summary' }, { sheetId: 4, title: 'Tracker' }, { sheetId: 777, title: 'Josh', gridProperties: { rowCount: 2, columnCount: 2 } }],
+    values: { Josh: TRACKER },
+  });
   assert.equal(josh.status, 200);
   assert.equal(sheetRange(josh.sheets[1].url).title, 'Josh', 'read');
   assert.equal(josh.data.stats.tab, 'Josh');
   assert.deepEqual([josh.data.stats.tabs, josh.data.stats.noTab], [['David', 'Sarah'], [{ mailbox: 'Josh', why: 'agent tab' }]]);
   assert.ok(!touched(josh).includes('Josh'), 'the agent’s tab is never written');
-  assert.ok(!touched(josh).includes('Tracker'), 'nor a tab that is nobody’s');
+  assert.ok(!grown(josh).includes(777), 'nor resized');
+  assert.ok(!touched(josh).includes('Tracker') && !grown(josh).includes(4), 'nor a tab that is nobody’s');
 
-  // Without a usable gid, a tab titled like a mailbox (any case) is Cortex's, never the agent's, even placed first.
-  for (const url of [`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`, `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=404`,
-    `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit#gid=0`]) {
-    const settings = { sheet_url: url, sheet_by: ADMIN_ID };
-    const first = await sync({ settings, tabs: [{ sheetId: 3, title: 'josh' }, { sheetId: 0, title: 'Summary' }, { sheetId: 5, title: 'Tracker' }], values: { josh: TRACKER, Tracker: TRACKER } });
-    assert.equal(first.status, 200, url);
-    assert.equal(sheetRange(first.sheets[1].url).title, 'Tracker', `${url}: not the mailbox-named tab, though it comes first`);
-    assert.ok(!touched(first).includes('Tracker'), `${url}: the agent’s tab is never written`);
-    assert.deepEqual(writes(first).map((w) => w.title), ['Summary', 'Notes', 'David', 'josh', 'Sarah'], `${url}: the mailbox-named tab is Josh’s`);
-    assert.deepEqual(first.data.stats.noTab, []);
+  // The gid wins over a mailbox-named tab placed first; that one is Josh's tab, rewritten.
+  const first = await sync({
+    tabs: [{ sheetId: 3, title: 'josh' }, { sheetId: 0, title: 'Summary' }, { sheetId: 777, title: 'Tracker', gridProperties: { rowCount: 2, columnCount: 2 } }],
+    values: { josh: TRACKER, Tracker: TRACKER },
+  });
+  assert.equal(first.status, 200);
+  assert.equal(sheetRange(first.sheets[1].url).title, 'Tracker', 'the link’s tab, though a mailbox-named tab comes first');
+  assert.ok(!touched(first).includes('Tracker') && !grown(first).includes(777), 'the agent’s tab is never written or resized');
+  assert.deepEqual(writes(first).map((w) => w.title), ['Summary', 'Notes', 'David', 'josh', 'Sarah']);
+  assert.deepEqual(first.data.stats.noTab, []);
 
-    // A mailbox named like the agent's only tab: no tab to read, so nothing is saved, added, cleared or written.
-    const only = await sync({ settings, mailboxes: [...MAILBOXES, { id: 'mb-trk', name: 'tracker', addresses: [] }] });
-    assert.equal(only.status, 400, url);
-    assert.deepEqual(only.data, { error: 'The outreach sheet has no tab to read.' });
-    assert.deepEqual(syncError(only), [{ sync_error: 'The outreach sheet has no tab to read.' }]);
-    assert.deepEqual(only.sheets.map((c) => c.method), ['GET'], `${url}: the tab list only`);
-    assert.equal(only.upserts.length, 0);
-  }
-  // ... while with the link's gid on it, it is read and that mailbox gets no tab.
+  // No gid, even with a mailbox named like the agent's tab: refused before Google, nothing saved or written.
+  const noGid = { sheet_url: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`, sheet_by: ADMIN_ID };
+  const only = await sync({ settings: noGid, mailboxes: [...MAILBOXES, { id: 'mb-trk', name: 'tracker', addresses: [] }] });
+  assert.deepEqual([only.status, only.data, syncError(only)], [400, { error: NO_GID }, [{ sync_error: NO_GID }]]);
+  assert.equal(only.sheets.length + only.upserts.length, 0);
+  // With the link's gid on it, it is read and that mailbox gets no tab.
   const withGid = await sync({ mailboxes: [...MAILBOXES, { id: 'mb-trk', name: 'tracker', addresses: [] }] });
   assert.equal(withGid.status, 200);
   assert.deepEqual([withGid.data.stats.tabs, withGid.data.stats.noTab], [['David', 'Josh', 'Sarah'], [{ mailbox: 'tracker', why: 'agent tab' }]]);
@@ -1447,15 +1474,18 @@ await check('outreach mailbox tabs: never the agent’s tab; Summary / Notes nam
   assert.deepEqual(writes(twice).map((w) => w.title), ['Summary', 'Notes']);
 });
 
-await check('outreach write-back: one addSheet for every missing tab; then one batchClear and one RAW batchUpdate, after the database', async () => {
+await check('outreach write-back: one addSheet (sized) for every missing tab; then one batchClear and one RAW batchUpdate, after the database', async () => {
+  const W = AGENT.length; // a mailbox tab is as wide as the agent's row 1
   const all = await sync({ tabs: [{ sheetId: 777, title: 'Tracker' }] });
   assert.equal(all.status, 200);
   const add = all.sheets.filter((c) => c.url.startsWith(`${SHEET}:batchUpdate`));
   assert.equal(add.length, 1, 'one request, however many tabs are missing');
   assert.equal(add[0].method, 'POST');
+  const grid = (rowCount, columnCount) => ({ rowCount, columnCount });
   assert.deepEqual(add[0].json(), {
-    requests: ['Summary', 'Notes', 'David', 'Josh', 'Sarah'].map((title) => ({ addSheet: { properties: { title } } })),
-  });
+    requests: [['Summary', grid(1000, 26)], ['Notes', grid(1000, 26)], ['David', grid(1000, W)], ['Josh', grid(1000, W)], ['Sarah', grid(1000, W)]]
+      .map(([title, gridProperties]) => ({ addSheet: { properties: { title, gridProperties } } })),
+  }, 'at least Google’s 1,000 × 26, and as wide as the agent’s tab');
   const steps = all.sheets.map((c) => {
     if (c.url.startsWith(`${SHEET}/values/`)) {
       const { title, a1, action } = sheetRange(c.url);
@@ -1481,36 +1511,90 @@ await check('outreach write-back: one addSheet for every missing tab; then one b
     ["'Summary'!A1", 'ROWS'], ["'Notes'!A1", 'ROWS'], ["'David'!A1", 'ROWS'], ["'Josh'!A1", 'ROWS'], ["'Sarah'!A1", 'ROWS'],
   ]);
   const [gone] = all.to(`${REST}/outreach_emails`).filter((c) => c.method === 'PATCH');
-  const after = Math.max(all.calls.indexOf(all.upserts.at(-1)), all.calls.indexOf(gone));
-  assert.ok([add[0], clear, update].every((c) => all.calls.indexOf(c) > after), 'written back after the database');
+  const after = Math.max(all.calls.indexOf(all.upserts.at(-1)), all.calls.indexOf(gone), ...all.to(`${REST}/outreach_notes`).map((c) => all.calls.indexOf(c)));
+  assert.ok([add[0], clear, update].every((c) => all.calls.indexOf(c) > after), 'written back after the database (and the notes are read first)');
   assert.ok(all.calls.indexOf(clear) < all.calls.indexOf(update), 'cleared, then written');
   assert.ok(all.calls.indexOf(add[0]) < all.calls.indexOf(clear), 'added, then cleared');
 
-  // Every tab there already (in any case, with spaces): nothing added, and each keeps its own title.
+  // Every tab there already, big enough (in any case, with spaces): no batchUpdate, and each keeps its own title.
+  const wide = { rowCount: 1000, columnCount: 40 };
   const present = await sync({ tabs: [
-    { sheetId: 777, title: 'Tracker' }, { sheetId: 1, title: 'summary' }, { sheetId: 2, title: 'Notes' }, { sheetId: 3, title: 'JOSH' },
-    { sheetId: 4, title: 'david' }, { sheetId: 5, title: ' Sarah ' },
+    { sheetId: 777, title: 'Tracker' }, { sheetId: 1, title: 'summary' }, { sheetId: 2, title: 'Notes' }, { sheetId: 3, title: 'JOSH', gridProperties: wide },
+    { sheetId: 4, title: 'david', gridProperties: wide }, { sheetId: 5, title: ' Sarah ', gridProperties: wide },
   ] });
   assert.equal(present.status, 200);
-  assert.deepEqual(added(present), [], 'nothing added');
-  assert.equal(present.sheets.filter((c) => c.url.startsWith(`${SHEET}:batchUpdate`)).length, 0, 'no addSheet request at all');
+  assert.equal(present.sheets.filter((c) => c.url.startsWith(`${SHEET}:batchUpdate`)).length, 0, 'no batchUpdate at all');
   assert.deepEqual(cleared(present), ['summary', 'Notes', 'david', 'JOSH', ' Sarah '], 'the existing tabs’ own titles');
   assert.deepEqual(writes(present).map((w) => w.title), ['summary', 'Notes', 'david', 'JOSH', ' Sarah ']);
   assert.deepEqual(present.data.stats.tabs, ['david', 'JOSH', ' Sarah '], 'the titles written');
 
-  const some = await sync({ tabs: [{ sheetId: 0, title: 'Summary' }, { sheetId: 777, title: 'Tracker' }, { sheetId: 3, title: 'Josh' }] });
-  assert.deepEqual(some.sheets.find((c) => c.url.startsWith(`${SHEET}:batchUpdate`)).json(), {
-    requests: ['Notes', 'David', 'Sarah'].map((title) => ({ addSheet: { properties: { title } } })),
-  }, 'only the missing ones');
+  const some = await sync({ tabs: [{ sheetId: 0, title: 'Summary' }, { sheetId: 777, title: 'Tracker' }, { sheetId: 3, title: 'Josh', gridProperties: wide }] });
+  assert.deepEqual(added(some), ['Notes', 'David', 'Sarah'], 'only the missing ones');
+  assert.deepEqual(grown(some), [], 'and nothing that fits');
   assert.deepEqual(cleared(some), ['Summary', 'Notes', 'David', 'Josh', 'Sarah']);
 });
 
-await check('outreach write-back: another sync added the tabs first → found again and written; still missing → the error', async () => {
+await check('outreach write-back: an existing tab too small is grown (never shrunk) in the same batchUpdate; one that fits is left alone', async () => {
+  const W = AGENT.length;
+  const grow = (sheetId, rowCount, columnCount) => ({ updateSheetProperties: { properties: { sheetId, gridProperties: { rowCount, columnCount } }, fields: GRID_FIELDS } });
+  // TRACKER needs: Summary 12 rows × 7, Notes 4 × 5, David 6 × W, Josh 2 × W, Sarah 1 × W.
+  const r = await sync({ tabs: [
+    { sheetId: 777, title: 'Tracker', gridProperties: { rowCount: 1, columnCount: 1 } }, // the agent's: never resized
+    { sheetId: 1, title: 'Summary', gridProperties: { rowCount: 5, columnCount: 100 } }, // rows grown, its 100 columns kept
+    { sheetId: 2, title: 'Notes', gridProperties: { rowCount: 2, columnCount: 3 } }, // both grown
+    { sheetId: 3, title: 'David' }, // 1,000 × 26: as wide as the agent's tab, its 1,000 rows kept
+    { sheetId: 4, title: 'Josh', gridProperties: { rowCount: 5000, columnCount: 60 } }, // big enough: untouched
+  ] });
+  assert.equal(r.status, 200);
+  assert.deepEqual([tabValues(r, 'Summary').length, tabValues(r, 'Notes').length, tabValues(r, 'David').length], [12, 4, 6]);
+  const calls = r.sheets.filter((c) => c.url === `${SHEET}:batchUpdate`);
+  assert.equal(calls.length, 1, 'adding and growing in one request');
+  assert.deepEqual(calls[0].json(), {
+    requests: [grow(1, 12, 100), grow(2, 4, 5), grow(3, 1000, W), { addSheet: { properties: { title: 'Sarah', gridProperties: { rowCount: 1000, columnCount: W } } } }],
+  });
+  assert.ok(r.calls.indexOf(calls[0]) < r.calls.indexOf(r.sheets.find((c) => c.url === `${SHEET}/values:batchUpdate`)), 'grown before the write');
+
+  // Exactly big enough → no batchUpdate.
+  const fit = await sync({ tabs: [
+    { sheetId: 777, title: 'Tracker', gridProperties: { rowCount: 1, columnCount: 1 } }, { sheetId: 1, title: 'Summary', gridProperties: { rowCount: 12, columnCount: 7 } },
+    { sheetId: 2, title: 'Notes', gridProperties: { rowCount: 4, columnCount: 5 } }, { sheetId: 3, title: 'David', gridProperties: { rowCount: 6, columnCount: W } },
+    { sheetId: 4, title: 'Josh', gridProperties: { rowCount: 2, columnCount: W } }, { sheetId: 5, title: 'Sarah', gridProperties: { rowCount: 1, columnCount: W } },
+  ] });
+  assert.equal(fit.status, 200);
+  assert.equal(fit.sheets.filter((c) => c.url === `${SHEET}:batchUpdate`).length, 0);
+  // A tab Google gives no grid for (not a grid tab): its size is unknown, so it is never resized.
+  const odd = await sync({ tabs: [
+    { sheetId: 777, title: 'Tracker' }, { sheetId: 1, title: 'Summary' }, { sheetId: 2, title: 'Notes' }, { sheetId: 3, title: 'David', gridProperties: undefined },
+    { sheetId: 4, title: 'Josh', gridProperties: { rowCount: 2, columnCount: W } }, { sheetId: 5, title: 'Sarah', gridProperties: { rowCount: 1, columnCount: W } },
+  ] });
+  assert.equal(odd.status, 200);
+  assert.equal(odd.sheets.filter((c) => c.url === `${SHEET}:batchUpdate`).length, 0);
+
+  // Summary past 1,000 rows (1,001 sent days): grown when there, added that big when not.
+  const days = [['kdm_email', 'sent_date', 'sender'],
+    ...Array.from({ length: 1001 }, (_, i) => [`p${i}@example.org`, new Date(Date.UTC(2023, 0, 1 + i)).toISOString().slice(0, 10), 'david@example.com'])];
+  const long = await sync({ values: { Tracker: days } }); // Summary there (1,000 × 26)
+  assert.equal(long.status, 200);
+  assert.equal(tabValues(long, 'Summary').length, 1007, 'row 1, 1,001 days, a blank row, 3 mailboxes and all');
+  assert.deepEqual(sizeRequests(long), [
+    grow(0, 1007, 26),
+    ...[['Notes', 1000], ['David', 1002], ['Josh', 1000], ['Sarah', 1000]].map(([title, rowCount]) => ({ addSheet: { properties: { title, gridProperties: { rowCount, columnCount: 26 } } } })),
+  ]);
+  const fresh = await sync({ tabs: [{ sheetId: 777, title: 'Tracker' }], values: { Tracker: days } });
+  assert.deepEqual(sizeRequests(fresh)[0], { addSheet: { properties: { title: 'Summary', gridProperties: { rowCount: 1007, columnCount: 26 } } } });
+});
+
+await check('outreach write-back: another sync added or grew the tabs first → found again and written; still missing or small → the error', async () => {
+  const W = AGENT.length;
+  const wide = { rowCount: 1000, columnCount: W };
   const taken = () => reply(400, { error: { code: 400, message: 'Invalid requests[0].addSheet: A sheet with the name "Summary" already exists.', status: 'INVALID_ARGUMENT' } });
-  const metaThen = (later) => { let n = 0; return () => reply(200, { sheets: (n++ ? later : [{ sheetId: 777, title: 'Tracker' }]).map((properties) => ({ properties })) }); };
+  const metaThen = (later, first = [{ sheetId: 777, title: 'Tracker' }]) => {
+    let n = 0;
+    return () => reply(200, { sheets: (n++ ? later : first).map((p) => ({ properties: gridTab(p) })) });
+  };
   const theirs = [
     { sheetId: 777, title: 'Tracker' }, { sheetId: 8, title: 'Summary' }, { sheetId: 9, title: 'Notes' },
-    { sheetId: 10, title: 'David' }, { sheetId: 11, title: 'josh' }, { sheetId: 12, title: 'Sarah' },
+    { sheetId: 10, title: 'David', gridProperties: wide }, { sheetId: 11, title: 'josh', gridProperties: wide }, { sheetId: 12, title: 'Sarah', gridProperties: wide },
   ];
   const raced = await sync({ routes: { [`${SHEET}?`]: metaThen(theirs), [`${SHEET}:batchUpdate`]: taken } });
   assert.equal(raced.status, 200, JSON.stringify(raced.data));
@@ -1519,8 +1603,18 @@ await check('outreach write-back: another sync added the tabs first → found ag
   assert.deepEqual(cleared(raced), ['Summary', 'Notes', 'David', 'josh', 'Sarah']);
   assert.equal(raced.patches.at(-1).json().sync_error, '');
 
-  for (const later of [theirs.slice(0, 2), theirs.filter((t) => t.title !== 'Sarah')]) {
-    const still = await sync({ routes: { [`${SHEET}?`]: metaThen(later), [`${SHEET}:batchUpdate`]: taken } });
+  // Only growing to do, and the other sync grew it first.
+  const small = theirs.map((t) => (t.title === 'David' ? { ...t, gridProperties: { rowCount: 1000, columnCount: 26 } } : t));
+  const grewFirst = await sync({ routes: { [`${SHEET}?`]: metaThen(theirs, small), [`${SHEET}:batchUpdate`]: taken } });
+  assert.equal(grewFirst.status, 200, JSON.stringify(grewFirst.data));
+  assert.deepEqual(grown(grewFirst), [10]);
+  assert.deepEqual(writes(grewFirst).map((w) => w.title), ['Summary', 'Notes', 'David', 'josh', 'Sarah']);
+
+  for (const [later, first] of [
+    [theirs.slice(0, 2)], [theirs.filter((t) => t.title !== 'Sarah')], [small], // missing, or there but too small
+    [small, small],
+  ]) {
+    const still = await sync({ routes: { [`${SHEET}?`]: metaThen(later, first), [`${SHEET}:batchUpdate`]: taken } });
     assert.equal(still.status, 502, JSON.stringify(later));
     assert.match(still.data.error, /already exists/);
     assert.deepEqual([...cleared(still), ...writes(still)], [], 'nothing cleared or written');
@@ -1538,9 +1632,13 @@ await check('outreach settings: synced_at, an empty sync_error and the stats; re
   assert.deepEqual(r.data, { ok: true, stats });
   assert.equal(r.patches.length, 1);
   const [patch] = r.patches;
-  // Only when no newer sync has saved its results since this one started.
-  assert.equal(patch.url, `${REST}/outreach_settings?id=eq.1&or=(synced_at.is.null,synced_at.lt.${encodeURIComponent(r.rows[0].synced_at)})`);
-  assert.equal(new URL(patch.url).searchParams.get('or'), `(synced_at.is.null,synced_at.lt.${r.rows[0].synced_at})`);
+  // Only while the link and its reader are the ones this sync read, and no newer sync has saved its results.
+  assert.equal(patch.url, `${REST}/outreach_settings?id=eq.1&sheet_url=eq.${encodeURIComponent(SHEET_URL)}&sheet_by=eq.${ADMIN_ID}`
+    + `&or=(synced_at.is.null,synced_at.lt.${encodeURIComponent(r.rows[0].synced_at)})`);
+  const q = new URL(patch.url).searchParams;
+  assert.equal(q.get('sheet_url'), `eq.${SHEET_URL}`);
+  assert.equal(q.get('sheet_by'), `eq.${ADMIN_ID}`);
+  assert.equal(q.get('or'), `(synced_at.is.null,synced_at.lt.${r.rows[0].synced_at})`);
   assert.equal(patch.headers.get('apikey'), 'sb_secret_test');
   assert.equal(patch.headers.get('prefer'), 'return=minimal');
   assert.deepEqual(patch.json(), { synced_at: r.rows[0].synced_at, sync_error: '', sync_stats: stats });
@@ -1566,6 +1664,9 @@ await check('outreach errors: saved as sync_error and returned; never a token; t
     assert.equal(r.status, status, name);
     assert.deepEqual(r.data, { error }, name);
     assert.deepEqual(syncError(r), [{ sync_error: error }], `${name}: sync_error only (no synced_at or stats)`);
+    const guard = new URL(r.patches[0].url).searchParams;
+    assert.ok(guard.get('sheet_url') === `eq.${SHEET_URL}` && guard.get('sheet_by') === `eq.${ADMIN_ID}` && /^\(synced_at\.is\.null,synced_at\.lt\./.test(guard.get('or')),
+      `${name}: only while the link, its reader and the last results are the ones this sync started with`);
     assert.equal(r.headers.get('access-control-allow-origin'), ORIGIN, name);
     const everything = [r.text, ...r.patches.map((c) => c.body), ...r.logs].join('\n');
     assert.ok(!/access-token|refresh-token/.test(everything), `${name}: no token in the response, sync_error or logs`);
@@ -1581,8 +1682,10 @@ await check('outreach errors: saved as sync_error and returned; never a token; t
   assert.deepEqual(readOnly.data, { error: 'David Example can’t edit the outreach sheet.' });
   assert.equal(readOnly.upserts.length, 1, 'the emails were saved before the write-back');
   assert.deepEqual(syncError(readOnly), [{ sync_error: 'David Example can’t edit the outreach sheet.' }]);
-  // Every tab there already (no addSheet): the batchClear or the values batchUpdate refused → the same message.
-  const allTabs = [{ sheetId: 777, title: 'Tracker' }, ...['Summary', 'Notes', 'David', 'Josh', 'Sarah'].map((title, i) => ({ sheetId: i + 1, title }))];
+  // Every tab there already and big enough (no batchUpdate): the batchClear or the values batchUpdate refused → the same message.
+  const allTabs = [{ sheetId: 777, title: 'Tracker' }, ...['Summary', 'Notes', 'David', 'Josh', 'Sarah'].map((title, i) => ({
+    sheetId: i + 1, title, gridProperties: { rowCount: 1000, columnCount: 40 },
+  }))];
   for (const path of ['/values:batchClear', '/values:batchUpdate']) {
     const r = await sync({ tabs: allTabs, routes: { [`${SHEET}${path}`]: denied } });
     assert.equal(r.status, 403, path);

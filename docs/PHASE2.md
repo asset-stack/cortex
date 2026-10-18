@@ -514,15 +514,19 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   5. It records `synced_at`, `sync_error` (cleared when it works) and `sync_stats` (`{ rows, contacts, sent, replies,
      bounced, meetings, unassigned, duplicates, skipped, missing, tab, tabs, noTab }`, all time; `tab` = the agent's tab,
      `tabs` = the mailbox tabs written, `noTab` = `[{ mailbox, why }]`; `contacts` = rows with a sent date,
-     the rest counted as under *Numbers*) in `outreach_settings` and returns
-     `{ ok, stats }`, unless a newer sync has saved its results meanwhile. A failure once a link and its admin are set
-     (that admin no longer an active admin, their Google not connected or without access to the sheet, the Sheets API
-     off, …) is saved as `sync_error`, which Outreach shows to everyone; the messages name the admin whose Google
-     account is used. No link, or no admin for it, is only returned to the caller (Outreach then says so).
-  6. There is no lock: two syncs can overlap (two people open Outreach at once). Each stamps its rows with its start
-     time and then flags the rows it didn't write as gone, so 0007's `keep_newer_sync` trigger skips an older sync's
-     writes over a newer one's rows (the newer one read the sheet later): neither flags rows the other read. If both
-     add Cortex's tabs, the second finds them again and carries on.
+     the rest counted as under *Numbers*) in `outreach_settings` and returns `{ ok, stats }`. A failure once a link and
+     its admin are set (the link not to a tab, that admin no longer an active admin, their Google not connected or
+     without access to the sheet, the Sheets API off, …) is saved as `sync_error`, which Outreach shows to everyone; the
+     messages name the admin whose Google account is used. No link, or no admin for it, is only returned to the caller
+     (Outreach then says so). Results and errors are saved only while the link and its admin are still the ones the
+     sync read and no newer sync has saved its own, so a sync finishing or failing late never overwrites a newer
+     sync's results, a new link's, or a takeover (Use my Google).
+  6. There is no lock: two syncs can overlap (two people open Outreach at once). Each stamps the rows it writes, and
+     the rows it flags as gone, with its start time, and 0007's `keep_newer_sync` trigger skips an older sync's update
+     of a row a newer sync (one that started later) has stamped: an older sync landing late neither overwrites the
+     newer one's rows nor brings back a row it flagged. (A row new to the database that the older sync adds after the
+     newer one's flagging stays until the next sync.) If both add Cortex's tabs, the second finds them again and
+     carries on.
 - **When the sheet is read**: when someone opens Outreach and the last sync is more than 10 minutes old, and on **Sync
   now**. There is no cron: when nobody is looking nothing needs to be fresh, and the sheet stays the record in between
   (its Summary, Notes and mailbox tabs are as of the last sync).
