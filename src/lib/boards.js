@@ -1,17 +1,27 @@
-// The boards under Projects and Marketing (state.boards, docs/PHASE2.md §11): team boards (Landing Page, Posting
-// schedule …) and each person's own Projects page (`owner` set). Pure helpers; access rules are in src/lib/access.js.
+// The boards under Projects, Marketing, Outreach and Clients (state.boards, docs/PHASE2.md §11): team boards (Landing
+// Page, Posting schedule, Sales Tasks, Demos …) and each person's own Projects page (`owner` set). Pure helpers; access
+// rules are in src/lib/access.js.
 // Relative imports with extensions, so scripts/test-sync.mjs can load this file in Node.
 
-export const BOARD_MODULES = ['projects', 'marketing'];
+export const BOARD_MODULES = ['projects', 'marketing', 'outreach', 'clients'];
 
-// What 0006 starts each module with. `existing`: where the module's groups from before sub-boards go.
+// What each module starts with: 0006 for Projects and Marketing, 0007 for Outreach and Clients. `existing`: where the
+// module's groups from before sub-boards go.
 export const STARTING_BOARDS = {
   projects: ['Landing Page', 'Tender Portal', 'General'],
   marketing: ['Daily Automation', 'Posting schedule', 'Campaigns', 'Events'],
+  outreach: ['Sales Tasks'],
+  clients: ['Demos', 'Previews'],
 };
 export const EXISTING_BOARD = { projects: 'General', marketing: 'Posting schedule' };
 // The group a new board starts with, so it has somewhere to add tasks.
-export const FIRST_GROUP = { projects: 'Active', marketing: 'To do' };
+export const FIRST_GROUP = { projects: 'Active', marketing: 'To do', outreach: 'To do', clients: 'To do' };
+// Modules whose menu starts with their own page (#/outreach: the email dashboard; #/clients: the client list), then
+// their boards (#/<module>/<board id>). `id` is the menu entry's, unique across modules.
+export const MODULE_HOMES = {
+  outreach: { id: 'outreach:home', href: '#/outreach', title: 'Email dashboard' },
+  clients: { id: 'clients:home', href: '#/clients', title: 'Clients' },
+};
 export const FIRST_GROUP_COLOR = '#c9ffe6';
 export const GROUP_COLORS = ['#c9ffe6', '#bfe9ff', '#ead9ff', '#ffe6b0', '#ffd6e0', '#e6eaf2', '#d6e4ff'];
 
@@ -45,7 +55,9 @@ export const boardHref = (board, itemId) => (board
 /**
  * The board a #/<module>/<sub> address shows, from the boards `visible` to the signed-in user (in state order):
  * the board named by `sub`; else the one holding `itemId` (old #/projects?item= links); else the module's default
- * (your own page for Projects, the first team board otherwise). null when there is none.
+ * (your own page for Projects, the first team board otherwise). null when there is none. A module with its own page
+ * (MODULE_HOMES: Outreach, Clients) has no default board: #/<module> is that page, so only a named board (or the one
+ * holding `itemId`) is shown.
  */
 export function resolveBoard(state, visible, module, sub, itemId) {
   const mine = visible.filter((b) => b.module === module);
@@ -54,5 +66,6 @@ export function resolveBoard(state, visible, module, sub, itemId) {
   if (named) return named;
   const holding = itemId && mine.find((b) => b.groups.some((g) => g.items.some((i) => i.id === itemId)));
   if (holding) return holding;
+  if (MODULE_HOMES[module]) return null;
   return (module === 'projects' && mine.find((b) => b.owner === state?.me)) || mine.find((b) => !b.owner) || mine[0];
 }

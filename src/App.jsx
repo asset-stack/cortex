@@ -17,8 +17,9 @@ function Page({ route, sub }) {
     case 'marketing':
       return <BoardPage module={route} sub={sub} />;
     case 'pipeline': return <Pipeline />;
-    case 'clients': return <Clients />;
-    case 'outreach': return <Outreach />;
+    case 'clients': return sub ? <BoardPage module="clients" sub={sub} /> : <Clients />;
+    // #/outreach and #/clients are their own pages; #/outreach/<board id> and #/clients/<board id> their boards.
+    case 'outreach': return sub ? <BoardPage module="outreach" sub={sub} /> : <Outreach />;
     case 'settings': return <Settings />;
     default: return <MyWork />;
   }
@@ -35,7 +36,7 @@ export default function App() {
   const at = useRoute();
   const ok = allowed(at.route, access);
   const route = ok ? at.route : 'work';
-  const sub = ok ? at.sub : ''; // the board id under Projects / Marketing
+  const sub = ok ? at.sub : ''; // the board id under Projects / Marketing / Outreach / Clients
   const scroller = useRef(null);
   const dock = useRef(null);
   const [dockH, setDockH] = useState(0);

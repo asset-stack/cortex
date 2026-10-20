@@ -128,6 +128,11 @@ again. Afterwards:
 - **Table Editor** lists `outreach_mailboxes`, `outreach_emails`, `outreach_notes` and `outreach_settings`, none of
   them **Unrestricted**. **Database** → **Publications** → `supabase_realtime` lists the mailboxes, notes and settings
   tables, not `outreach_emails` (only the sheet sync writes it, and the app reads it on demand).
+- **Table Editor** → `boards` has the new team boards **Sales Tasks** (module `outreach`) and **Demos** and
+  **Previews** (module `clients`), each with a *To do* group. In the app they sit under **Outreach** (after the
+  **Email dashboard**) and **Clients** (after the client list) and follow each person's Outreach / Clients access in
+  **Settings** → **Team**: staff see Outreach's boards only once given View or Edit, and read Clients' boards (View by
+  default) until given Edit.
 - Then redeploy the `google` function, deploy the new app and set up Outreach (section 12).
 
 ### Upgrading an existing project

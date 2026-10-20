@@ -12,6 +12,8 @@
 -- - outreach_notes: what the team knows (the current strategy that works), pinned first; mirrored to the sheet.
 -- - outreach_settings (one row): the sheet's link, set by an admin, and the last sync's time, error and counts.
 -- - Everything is read with Outreach view access (can_view('outreach')); notes are written with edit access.
+-- - Outreach and Clients also get team boards, like Marketing (Outreach: Sales Tasks; Clients: Demos, Previews), on
+--   0006's boards: they follow the Outreach / Clients access level as every team board follows its module's.
 
 begin;
 
@@ -312,5 +314,39 @@ create policy outreach_select on public.outreach_settings for select to authenti
   using (public.can_view('outreach'));
 create policy admin_update on public.outreach_settings for update to authenticated
   using (public.is_admin()) with check (public.is_admin());
+
+-- 6. Outreach and Clients boards ---------------------------------------------------------------------------------
+
+-- Team boards under Outreach (Sales Tasks first) and Clients (Demos, Previews), on 0006's boards: its access functions,
+-- policies and triggers already work per module (a team board follows its module's level), so only the three checks
+-- that list the board modules change. The first time (the boards check doesn't list them yet) the checks widen and
+-- each module gets its starting boards with one group, all in this one statement, so a re-run never brings back a
+-- starting board someone deleted.
+do $$
+declare
+  v_def text := coalesce((select pg_get_constraintdef(oid) from pg_constraint
+                          where conrelid = 'public.boards'::regclass and conname = 'boards_module_check'), '');
+begin
+  if v_def not like '%outreach%' or v_def not like '%clients%' then
+    alter table public.boards drop constraint if exists boards_module_check;
+    alter table public.boards add constraint boards_module_check
+      check (module in ('projects', 'marketing', 'outreach', 'clients'));
+    alter table public.board_groups drop constraint if exists board_groups_board_key_check;
+    alter table public.board_groups add constraint board_groups_board_key_check
+      check (board_key in ('projects', 'marketing', 'outreach', 'clients'));
+    alter table public.items drop constraint if exists items_board_key_check;
+    alter table public.items add constraint items_board_key_check
+      check (board_key in ('projects', 'marketing', 'outreach', 'clients'));
+    with b as (
+      insert into public.boards (module, name, position)
+      select x.module, x.name, x.position
+      from (values ('outreach', 'Sales Tasks', 0), ('clients', 'Demos', 0), ('clients', 'Previews', 1)) as x (module, name, position)
+      where v_def not like '%' || x.module || '%'
+      returning id, module
+    )
+    insert into public.board_groups (board_key, board_id, name, color, position)
+    select b.module, b.id, 'To do', '#c9ffe6', 0 from b;
+  end if;
+end $$;
 
 commit;

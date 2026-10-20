@@ -354,7 +354,7 @@ version that uses it.
   Staff edit the team Projects boards too (0003 had made Projects view-only for staff; 0006 redefines `module_level()`
   with the Projects default back to `edit`, and `STAFF_DEFAULTS` to match; per-person overrides still win). Tasks
   move between team boards, never onto, off or between personal pages (see *Moving a task*).
-- **Table** `boards (module check in ('projects','marketing'), name, owner_id uuid null → profiles cascade, position)`:
+- **Table** `boards (module check in ('projects','marketing'); 0007 adds 'outreach','clients' (§13), name, owner_id uuid null → profiles cascade, position)`:
   touch, realtime. A **team board** has no owner. A **personal board** has `owner_id` set, one per person (unique
   index), Projects only (check), and a blank name (the app shows *<first name>’s Projects*, `boardTitle()`).
   `board_groups.board_id` and `items.board_id` (not null) say which board a group or task is on; `board_key` stays the
@@ -633,3 +633,29 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   the two guards, the RPCs against the JS rules, re-run, realtime); `scripts/test-sync.mjs` (mapping, the store actions
   refused as in RLS, `src/lib/outreach.js`, seed and `migrate`); `scripts/test-google.mjs` (`outreach-sync` with
   Google and Supabase mocked).
+
+## 13. 0007: boards under Outreach and Clients
+
+- **Owner's ask**: Outreach and Clients get sub-menus like Marketing's, with the standard board layout (Table / Kanban /
+  Calendar; groups; People, Status, Priority, Due). Outreach: the email dashboard, then **Sales Tasks**; Clients: the
+  client list, then **Demos** and **Previews**. Admins add, rename, order and delete their team boards as on Marketing.
+- **Owner's decisions**: each module's own page stays first in its menu (**Email dashboard**, **Clients**); the boards
+  follow the module's access level in Settings → Team, with no setting of their own (Outreach: staff None by default;
+  Clients: staff View, so they read Demos and Previews until given Edit).
+- **Database** (in `0007_outreach.sql`, before it first ran): the three checks that list the board modules
+  (`boards_module_check`, `board_groups_board_key_check`, `items_board_key_check`) gain `outreach` and `clients`, and
+  the starting boards (Sales Tasks; Demos, Previews), each with a *To do* group, are made in the same statement, only
+  while the boards check doesn't list them yet: a re-run never brings back a starting board someone renamed or deleted.
+  Nothing else changes: 0006's `board_level()`, policies and triggers already work per module, so a team board has
+  its module's level and a task or group stays within its module (`same_audience`).
+- **App**: `BOARD_MODULES`, `STARTING_BOARDS`, `FIRST_GROUP` (`src/lib/boards.js`), `BOARD_SCHEMAS` (the standard
+  columns, `src/data/boards.js`), `BOARD_KEYS` (`schema.js`) and the timesheet categories gain both modules.
+  `MODULE_HOMES` names each module's own page: `#/outreach` is the email dashboard and `#/clients` the client list
+  (with their tabs as before); `#/outreach/<board id>` and `#/clients/<board id>` are boards, and a board that's gone
+  leads back to the module's page (`resolveBoard()` gives them no default board). The sidebar lists the page, then
+  the boards, then **New board** (admins); the mobile bar shows the same chips.
+- **Demo**: Sales Tasks, Demos and Previews with example tasks; `migrate()` adds a module's starting boards to older
+  saved demo data once (`seededBoards` remembers it, so a deleted one stays deleted).
+- **Tests**: `scripts/test-db.mjs` check 58 (the starting boards once, the widened checks, who reads and writes, tasks
+  staying in their module, re-runs); `scripts/test-sync.mjs` (the starting boards against 0006 and 0007, no default
+  board for Outreach and Clients, the seed and `migrate()`, access by module level).

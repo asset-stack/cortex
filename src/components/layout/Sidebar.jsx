@@ -4,7 +4,7 @@ import { useStore, useUsers } from '@/data/store';
 import { Avatar, Modal, Popover } from '@/components/ui';
 import NewBoardModal from '@/components/board/NewBoard';
 import { ROLE_LABELS, roleOf, useAccess } from '@/lib/access';
-import { BOARD_MODULES, boardHref, boardTitle, personalBoard, resolveBoard } from '@/lib/boards';
+import { BOARD_MODULES, MODULE_HOMES, boardHref, boardTitle, personalBoard, resolveBoard } from '@/lib/boards';
 import { hashParam } from '@/lib/router';
 import { cn } from '@/lib/cn';
 
@@ -30,8 +30,9 @@ export function useNav() {
 }
 
 /**
- * The boards listed under Projects and Marketing (Projects: your own page, then the team boards; Marketing: its team
- * boards), only those you can open, and the id of the board on screen (`current`, '' off the board pages).
+ * What's listed under the board modules (Projects: your own page, then the team boards; Marketing: its team boards;
+ * Outreach and Clients: their own page, then their team boards), only the boards you can open, and the id of the entry
+ * on screen (`current`: a board's id, a MODULE_HOMES id on #/outreach or #/clients, '' elsewhere).
  */
 function useBoardNav(route, sub) {
   const { state } = useStore();
@@ -39,11 +40,15 @@ function useBoardNav(route, sub) {
   const visible = (state.boards || []).filter(access.canViewBoard);
   const own = personalBoard(state, state.me);
   const lists = Object.fromEntries(BOARD_MODULES.map((m) => [m, [
-    ...(m === 'projects' && own && visible.includes(own) ? [own] : []),
-    ...visible.filter((b) => b.module === m && !b.owner),
-  ].map((b) => ({ id: b.id, href: boardHref(b), title: boardTitle(state, b) }))]));
-  const current = BOARD_MODULES.includes(route) ? resolveBoard(state, visible, route, sub, hashParam('item')) : null;
-  return { lists, current: current?.id || '', isAdmin: access.isAdmin };
+    ...(MODULE_HOMES[m] ? [MODULE_HOMES[m]] : []),
+    ...[
+      ...(m === 'projects' && own && visible.includes(own) ? [own] : []),
+      ...visible.filter((b) => b.module === m && !b.owner),
+    ].map((b) => ({ id: b.id, href: boardHref(b), title: boardTitle(state, b) })),
+  ]]));
+  const home = !sub && MODULE_HOMES[route];
+  const current = home || !BOARD_MODULES.includes(route) ? null : resolveBoard(state, visible, route, sub, hashParam('item'));
+  return { lists, current: home ? home.id : current?.id || '', isAdmin: access.isAdmin };
 }
 
 // SuperAdmin / Admin / Staff (phase 1's 'member' reads as Staff).
@@ -161,9 +166,9 @@ function ResetDemo() {
   );
 }
 
-/** A board module's nav row: the link to its default board, a toggle, and (open) its boards plus admins' New board. */
+/** A board module's nav row: the link to its default page, a toggle, and (open) its boards plus admins' New board. */
 function BoardSection({ item, route, boards, current, open, onToggle, onNew }) {
-  const { id, label, icon: Icon } = item;
+  const { id, label, icon: Icon, badge } = item;
   const here = route === id;
   const lit = open && boards.some((b) => b.id === current); // a child carries the highlight
   const listId = `nav-${id}-boards`;
@@ -173,6 +178,7 @@ function BoardSection({ item, route, boards, current, open, onToggle, onNew }) {
         <a href={`#/${id}`} aria-current={here && !lit ? 'page' : undefined} className="flex min-w-0 flex-1 items-center gap-3 rounded-full py-2.5 pl-3.5 pr-1">
           <Icon className="h-[18px] w-[18px] shrink-0" />
           <span className="min-w-0 flex-1 truncate">{label}</span>
+          {badge && <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-bold', here && !lit ? 'bg-[#1a2340]/10' : 'bg-white/20')}>{badge}</span>}
         </a>
         <button type="button" onClick={onToggle} aria-expanded={open} aria-controls={listId} aria-label={`${open ? 'Hide' : 'Show'} ${label} boards`}
           className={cn('mr-1.5 grid h-7 w-7 shrink-0 place-items-center rounded-full', here && !lit ? 'hover:bg-[#1a2340]/10' : 'hover:bg-white/15')}>

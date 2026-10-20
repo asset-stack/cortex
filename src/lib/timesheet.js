@@ -7,8 +7,8 @@ import { CATEGORIES } from '../data/boards.js';
 export const TIMESHEET_HOURS = { start: '09:00', end: '17:00' };
 export const PROMPT_AT = '16:30'; // weekdays, in the person's own time zone
 export const EMAIL_MINUTES = 10; // per email sent → Email marketing
-export const ITEM_MINUTES = 30; // per board item worked on → Projects / Marketing
-const BOARD_CATEGORY = { projects: 'Projects', marketing: 'Marketing' };
+export const ITEM_MINUTES = 30; // per board item worked on → its module's category (Projects, Marketing, …)
+const BOARD_CATEGORY = { projects: 'Projects', marketing: 'Marketing', outreach: 'Outreach', clients: 'Clients' };
 
 const pad = (n) => String(n).padStart(2, '0');
 const toMin = (hhmm) => { const m = /^(\d{1,2}):(\d{2})/.exec(String(hhmm ?? '')); return m ? +m[1] * 60 + +m[2] : NaN; };

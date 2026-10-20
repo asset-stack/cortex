@@ -323,7 +323,7 @@ function createActions(mutate, mode) {
       return result;
     }),
 
-    // ── Boards (Projects, Marketing): team boards are the admins'; groups and tasks need edit access to the board ──
+    // ── Boards (Projects, Marketing, Outreach): team boards are the admins'; groups and tasks need edit access to the board ──
 
     // A new team board at the end of its module, with one group. → id
     addBoard: (module, name) => admin((d) => {

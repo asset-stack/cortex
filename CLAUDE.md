@@ -30,8 +30,9 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
   `board_level()` / `can_view_board()` / `can_edit_board()` ⇄ `boardLevel` / `canViewBoard` / `canEditBoard`, and
   `sees_person()` ⇄ `seesPerson` (whose personal Projects page you may open).
 - **Boards are records**, not code: `state.boards` is an array of team boards and personal Projects pages
-  (`docs/PHASE2.md` §11), and board store actions take a board id. Admins add new team boards in the app; personal
-  pages come and go with their person.
+  (`docs/PHASE2.md` §11, §13), and board store actions take a board id. Board modules are Projects, Marketing, Outreach
+  and Clients (`BOARD_MODULES`); Outreach's and Clients' menus start with their own page (`MODULE_HOMES`). Admins add
+  new team boards in the app; personal pages come and go with their person.
 - **A new module gets a module key**: add it to `MODULES` and `STAFF_DEFAULTS` in `src/lib/access.js`, to the
   `module_access.module` check and the defaults in `public.module_level()` (in a new migration), give its tables
   `can_view` / `can_edit` policies on that key, and set `module` on its `NAV` entry in `Sidebar.jsx`.

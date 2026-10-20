@@ -1673,24 +1673,55 @@ await check('boards: resolveBoard — the addressed board, else the one holding 
   assert.equal(at([all[1]], 'projects'), 'stus', "only someone else's page: that one");
   assert.equal(at([], 'projects'), null);
   assert.equal(at(all.filter((x) => x.module === 'projects'), 'marketing'), null, 'nothing visible in the module');
+  // Outreach and Clients open on their own page (MODULE_HOMES): no default board, only a named one or a task's.
+  const homes = [
+    { id: 'sales', module: 'outreach', name: 'Sales Tasks', owner: '', groups: [{ id: 'g-s', items: [{ id: 'it-s' }] }] },
+    { id: 'demos', module: 'clients', name: 'Demos', owner: '', groups: [] },
+  ];
+  assert.deepEqual(Object.keys(boardsLib.MODULE_HOMES), ['outreach', 'clients']);
+  assert.deepEqual(Object.values(boardsLib.MODULE_HOMES).map((h) => [h.href, new Set(Object.values(boardsLib.MODULE_HOMES).map((x) => x.id)).size]),
+    [['#/outreach', 2], ['#/clients', 2]], 'their own addresses; menu ids unique');
+  assert.equal(at(homes, 'outreach'), null, '#/outreach is the email dashboard');
+  assert.equal(at(homes, 'clients'), null, '#/clients is the client list');
+  assert.equal(at(homes, 'outreach', 'sales'), 'sales');
+  assert.equal(at(homes, 'clients', 'nope'), null, 'a board that is gone: back to the page');
+  assert.equal(at(homes, 'outreach', '', 'it-s'), 'sales', 'a task link still finds its board');
 });
 
-// The starting boards and first group the app uses are the ones 0006 makes in the database.
-const boardsSql = existsSync(migrationsDir) && readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort()
-  .map((f) => [f, readFileSync(new URL(f, migrationsDir), 'utf8')]).filter(([, sql]) => sql.includes('insert into public.boards (module, name, position)')).at(-1);
-if (boardsSql) {
-  await check(`boards: STARTING_BOARDS, EXISTING_BOARD and FIRST_GROUP match ${boardsSql[0]}`, () => {
+// The starting boards and first group the app uses are the ones the database makes: 0006 for Projects and Marketing,
+// 0007 for Outreach and Clients (which also widens the checks that list the board modules).
+const migrationFile = (prefix) => {
+  const f = existsSync(migrationsDir) && readdirSync(migrationsDir).find((x) => x.startsWith(prefix) && x.endsWith('.sql'));
+  return f ? [f, readFileSync(new URL(f, migrationsDir), 'utf8')] : null;
+};
+const boardsSql = migrationFile('0006_');
+const outreachBoardsSql = migrationFile('0007_');
+if (boardsSql && outreachBoardsSql) {
+  await check(`boards: STARTING_BOARDS, EXISTING_BOARD and FIRST_GROUP match ${boardsSql[0]} and ${outreachBoardsSql[0]}`, () => {
     const sql = boardsSql[1];
     const starting = {};
     [...sql.matchAll(/\('(projects|marketing)', '([^']+)', (\d+)\)/g)].forEach(([, module, name, pos]) => { (starting[module] ||= [])[+pos] = name; });
-    assert.deepEqual(starting, boardsLib.STARTING_BOARDS);
     const existing = /case g\.board_key when 'projects' then '([^']+)' else '([^']+)' end/.exec(sql);
     assert.ok(existing, 'where the existing groups go: not found');
     assert.deepEqual({ projects: existing[1], marketing: existing[2] }, boardsLib.EXISTING_BOARD);
     const first = /case b\.module when 'projects' then '([^']+)' else '([^']+)' end, '(#[0-9a-f]{6})'/.exec(sql);
     assert.ok(first, 'first group: not found');
-    assert.deepEqual([{ projects: first[1], marketing: first[2] }, first[3]], [boardsLib.FIRST_GROUP, boardsLib.FIRST_GROUP_COLOR]);
-    assert.deepEqual(boardsLib.BOARD_MODULES, ['projects', 'marketing']);
+    // 0007: Outreach's and Clients' starting boards, each with one group, made once with the checks that list the
+    // board modules.
+    const sql7 = outreachBoardsSql[1];
+    const values = /from \(values ([^\n]+)\) as x \(module, name, position\)/.exec(sql7);
+    assert.ok(values, "0007's starting boards: not found");
+    [...values[1].matchAll(/\('(outreach|clients)', '([^']+)', (\d+)\)/g)].forEach(([, module, name, pos]) => { (starting[module] ||= [])[+pos] = name; });
+    const group7 = /select b\.module, b\.id, '([^']+)', '(#[0-9a-f]{6})', 0 from b/.exec(sql7);
+    assert.ok(group7, "0007's first group: not found");
+    assert.deepEqual(starting, boardsLib.STARTING_BOARDS);
+    assert.deepEqual([{ projects: first[1], marketing: first[2], outreach: group7[1], clients: group7[1] }, first[3], group7[2]],
+      [boardsLib.FIRST_GROUP, boardsLib.FIRST_GROUP_COLOR, boardsLib.FIRST_GROUP_COLOR]);
+    assert.deepEqual(boardsLib.BOARD_MODULES, ['projects', 'marketing', 'outreach', 'clients']);
+    const lists = [...outreachBoardsSql[1].matchAll(/check \((module|board_key) in \(([^)]*)\)\)/g)]
+      .map(([, col, list]) => [col, list.replace(/['\s]/g, '').split(',')]);
+    assert.deepEqual(lists.map(([col]) => col), ['module', 'board_key', 'board_key'], 'boards, board_groups and items');
+    lists.forEach(([, list]) => assert.deepEqual(list, boardsLib.BOARD_MODULES));
     assert.ok(boardsLib.GROUP_COLORS.includes(boardsLib.FIRST_GROUP_COLOR));
   });
 }
@@ -2012,11 +2043,14 @@ if (createSeed) {
       [['projects', '', 'david'], ['projects', '', 'josh'], ['projects', '', 'hello']]);
     assert.deepEqual(s.boards.filter((b) => b.owner).map((b) => boardTitle(s, b)), ['David’s Projects', 'Josh’s Projects', 'Hello’s Projects']);
     BOARD_MODULES.forEach((module) => assert.deepEqual(teamBoards(s, module).map((b) => b.name), STARTING_BOARDS[module], module));
-    // Projects (own pages first) then Marketing, as the live order has them; every board has somewhere to add tasks.
+    // Projects (own pages first), Marketing, then Outreach, as the live order has them; every board has somewhere to add
+    // tasks.
     assert.deepEqual(s.boards.map((b) => `${b.module}:${b.owner ? 'own' : 'team'}`), [
       ...Array(3).fill('projects:own'), ...Array(STARTING_BOARDS.projects.length).fill('projects:team'),
-      ...Array(STARTING_BOARDS.marketing.length).fill('marketing:team'),
+      ...Array(STARTING_BOARDS.marketing.length).fill('marketing:team'), ...Array(STARTING_BOARDS.outreach.length).fill('outreach:team'),
+      ...Array(STARTING_BOARDS.clients.length).fill('clients:team'),
     ]);
+    assert.deepEqual(s.seededBoards, BOARD_MODULES, 'the demo has every module’s starting boards');
     s.boards.forEach((b) => assert.ok(b.groups.length, boardTitle(s, b)));
     // Ids are unique across boards, groups, tasks, updates and subtasks; people are real users.
     const ids = s.boards.flatMap((b) => [b.id, ...b.groups.flatMap((g) => [g.id, ...g.items.flatMap((it) => [
@@ -2029,7 +2063,19 @@ if (createSeed) {
     assert.deepEqual(['david', 'josh', 'hello'].map((me) => pagesFor(me).filter((b) => b.owner).map((b) => b.owner)),
       [['david', 'josh', 'hello'], ['josh', 'hello'], ['hello']]);
     assert.deepEqual(pagesFor('hello').filter((b) => !b.owner).map((b) => [b.name, access.canEditBoard({ ...s, me: 'hello' }, b)]),
-      [...STARTING_BOARDS.projects, ...STARTING_BOARDS.marketing].map((n) => [n, true]), 'staff edit every team board by default (0006)');
+      [...[...STARTING_BOARDS.projects, ...STARTING_BOARDS.marketing].map((n) => [n, true]), ...STARTING_BOARDS.clients.map((n) => [n, false])],
+      'staff edit every Projects and Marketing team board by default (0006); Clients’ and Outreach’s follow those modules (view, none)');
+    // Outreach's boards follow each person's Outreach level: none by default for staff, then view or edit.
+    const sales = teamBoards(s, 'outreach')[0];
+    const helloAt = (level) => {
+      const st = { ...s, me: 'hello', moduleAccess: [...(s.moduleAccess || []).filter((a) => !(a.userId === 'hello' && a.module === 'outreach')),
+        ...(level ? [{ userId: 'hello', module: 'outreach', level }] : [])] };
+      return [access.canViewBoard(st, sales), access.canEditBoard(st, sales)];
+    };
+    assert.deepEqual([helloAt(''), helloAt('view'), helloAt('edit')], [[false, false], [true, false], [true, true]]);
+    assert.deepEqual(['david', 'josh'].map((me) => access.canEditBoard({ ...s, me }, sales)), [true, true], 'admins edit');
+    assert.deepEqual(sales.groups.map((g) => g.name), ['To do', 'Done']);
+    assert.deepEqual(teamBoards(s, 'clients').map((b) => [b.name, b.groups.map((g) => g.name)]), [['Demos', ['To do', 'Done']], ['Previews', ['To do']]]);
   });
 }
 
@@ -2526,6 +2572,30 @@ if (createSeed && migrate) {
     assert.ok(!Object.keys(rows).some((t) => t === 'outreach_emails'), 'no emails table in TABLES');
     s.outreachNotes.forEach((n) => assert.ok(s.users.some((u) => u.id === n.author), n.author));
     s.mailboxes.filter((m) => m.owner).forEach((m) => assert.ok(s.users.some((u) => u.id === m.owner), m.owner));
+  });
+
+  await check('migrate: older demo data gets Outreach’s and Clients’ starting boards (0007) once; deleting them sticks', () => {
+    const { STARTING_BOARDS, FIRST_GROUP, FIRST_GROUP_COLOR, teamBoards } = boardsLib;
+    const added = ['outreach', 'clients'];
+    const old = createSeed();
+    old.boards = old.boards.filter((b) => !added.includes(b.module));
+    delete old.seededBoards;
+    const m = migrate(structuredClone(old));
+    added.forEach((module) => assert.deepEqual(
+      teamBoards(m, module).map((b) => [b.name, b.owner, b.groups.map((g) => [g.name, g.color, g.items])]),
+      STARTING_BOARDS[module].map((n) => [n, '', [[FIRST_GROUP[module], FIRST_GROUP_COLOR, []]]]), module));
+    assert.deepEqual(m.boards.slice(-3).map((b) => b.module), ['outreach', 'clients', 'clients'], 'after Marketing, as the live order has them');
+    assert.deepEqual(m.seededBoards, ['projects', 'marketing', 'outreach', 'clients']);
+    assert.deepEqual(migrate(structuredClone(m)), m, 'running it again adds nothing');
+    const deleted = structuredClone(m);
+    deleted.boards = deleted.boards.filter((b) => !added.includes(b.module));
+    assert.deepEqual(migrate(structuredClone(deleted)).boards.filter((b) => added.includes(b.module)), [], 'deleted starting boards stay deleted');
+    // An older demo that already has a board in the module (renamed) keeps it and gets no starting boards there.
+    const own = structuredClone(old);
+    own.boards.push({ id: 'b-own', module: 'clients', name: 'Onboarding', owner: '', groups: [] });
+    const kept = migrate(own);
+    assert.deepEqual([teamBoards(kept, 'clients').map((b) => b.name), teamBoards(kept, 'outreach').map((b) => b.name)],
+      [['Onboarding'], STARTING_BOARDS.outreach]);
   });
 
   await check('migrate: older demo data gets the outreach demo once; outreach data already there is left as it is', () => {

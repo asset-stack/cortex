@@ -40,6 +40,27 @@ export const BOARD_SCHEMAS = {
       { key: 'due', label: 'Due', type: 'date' },
     ],
   },
+  // Outreach's boards (Sales Tasks …) and Clients' (Demos, Previews …) have the standard task columns, as Projects.
+  outreach: {
+    title: 'Outreach',
+    icon: 'Mail',
+    columns: [
+      { key: 'people', label: 'People', type: 'people' },
+      { key: 'status', label: 'Status', type: 'status', options: STATUS },
+      { key: 'priority', label: 'Priority', type: 'label', options: PRIORITY },
+      { key: 'due', label: 'Due', type: 'date' },
+    ],
+  },
+  clients: {
+    title: 'Clients',
+    icon: 'Building2',
+    columns: [
+      { key: 'people', label: 'People', type: 'people' },
+      { key: 'status', label: 'Status', type: 'status', options: STATUS },
+      { key: 'priority', label: 'Priority', type: 'label', options: PRIORITY },
+      { key: 'due', label: 'Due', type: 'date' },
+    ],
+  },
 };
 
 // Item values with `people` as a clean list of user ids (the people column). Phase 1's single `owner` becomes

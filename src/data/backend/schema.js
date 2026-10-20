@@ -2,7 +2,7 @@
 // No Supabase or Vite imports: scripts/test-sync.mjs runs this file directly in Node.
 import { TEAM_TIMEZONE } from '../../lib/format.js';
 
-const BOARD_KEYS = ['projects', 'marketing']; // the boards.module check constraint (0006; 0002 merged admin into projects)
+const BOARD_KEYS = ['projects', 'marketing', 'outreach', 'clients']; // the boards.module check (0006; 0007 adds outreach and clients)
 
 const DEFAULT_ORG = {
   businessName: '', abn: '', address: '', email: '', phone: '', bankAccountName: '', bsb: '', accountNumber: '',

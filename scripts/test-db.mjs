@@ -3125,6 +3125,79 @@ async function phase7(ctx) {
       && later.row.synced_at.toISOString() === '2026-10-18T03:00:00.000Z',
     { earlier, bUpsert, goneB, aUpsert, goneA, raced, later });
 
+  // 58. Outreach and Clients boards ------------------------------------------------------------------------------------
+
+  // 0007 widens the three checks that list the board modules and starts Outreach with Sales Tasks and Clients with Demos
+  // and Previews, each with a To do group. Team boards follow their module's level: Outreach (Hello view, New edit,
+  // Alice none) and Clients (staff view by default, so New only reads there).
+  {
+    await as(null);
+    const moduleBoards = async () => (await rows(`select b.module, b.name, b.position,
+        coalesce((select array_agg(g.name order by g.position) from public.board_groups g where g.board_id = b.id), '{}') as groups
+      from public.boards b where b.module in ('outreach', 'clients') order by b.module desc, b.position, b.name`))
+      .map((r) => [r.module, r.name, r.position, r.groups]);
+    const started = await moduleBoards();
+    const lists = (await rows(`select conname, pg_get_constraintdef(oid) as def from pg_constraint
+      where conname in ('boards_module_check', 'board_groups_board_key_check', 'items_board_key_check') order by conname`))
+      .map((r) => [r.conname, ['projects', 'marketing', 'outreach', 'clients'].every((m) => r.def.includes(`'${m}'`))]);
+    const groupOf = async (module, name) => (await one(`select g.id from public.board_groups g join public.boards b on b.id = g.board_id
+      where b.module = $1 and b.name = $2 and b.owner_id is null order by g.position limit 1`, [module, name])).id;
+    const salesGroup = await groupOf('outreach', 'Sales Tasks');
+    const demosGroup = await groupOf('clients', 'Demos');
+    const campaignGroup = await groupOf('marketing', 'Campaigns');
+    const seen = {};
+    for (const [name, user] of Object.entries({ david, boss, hello, newcomer, alice, carol })) {
+      await as(user);
+      seen[name] = (await rows("select module, name from public.boards where module in ('outreach', 'clients') order by module desc, position"))
+        .map((r) => `${r.module}:${r.name}`).join(',');
+    }
+    const task = async (user, board, group, name) => { await as(user); return error('insert into items (board_key, group_id, name) values ($1, $2, $3)', [board, group, name]); };
+    const tasks = {
+      editSales: await task(newcomer, 'outreach', salesGroup, 'Call the referral'),
+      viewSales: await task(hello, 'outreach', salesGroup, 'Nope'),
+      noneSales: await task(alice, 'outreach', salesGroup, 'Nope'),
+      viewDemos: await task(newcomer, 'clients', demosGroup, 'Nope'),
+      adminDemos: await task(boss, 'clients', demosGroup, 'Coastal Rail demo'),
+    };
+    await as(newcomer);
+    const staffBoard = await error("insert into public.boards (module, name, position) values ('outreach', 'Mine', 9)");
+    await as(boss);
+    const partners = await one("insert into public.boards (module, name, position) values ('outreach', 'Partners', 1) returning id");
+    const renamed = await affected("update public.boards set name = 'Partner deals' where id = $1", [partners.id]);
+    const removed = await affected('delete from public.boards where id = $1', [partners.id]);
+    // Tasks and groups stay in their module: onto Marketing or across Outreach and Clients is refused, even for an admin.
+    await as(null);
+    const callTask = (await one("select id from public.items where name = 'Call the referral'")).id;
+    const demosBoard = (await one("select id from public.boards where module = 'clients' and name = 'Demos'")).id;
+    await as(boss);
+    const moves = {
+      toMarketing: await error("update public.items set board_key = 'marketing', group_id = $2 where id = $1", [callTask, campaignGroup]),
+      toClients: await error("update public.items set board_key = 'clients', group_id = $2 where id = $1", [callTask, demosGroup]),
+      groupToClients: await error("update public.board_groups set board_key = 'clients', board_id = $2 where id = $1", [salesGroup, demosBoard]),
+    };
+    // Running 0007 again changes nothing; nor after the starting boards are renamed or deleted (they never come back).
+    const again = await applyMigration7();
+    const afterAgain = await moduleBoards();
+    await as(null);
+    await db.query("update public.boards set name = 'Sales' where module = 'outreach' and name = 'Sales Tasks'");
+    await db.query("delete from public.boards where module = 'clients' and name = 'Previews'");
+    const third = await applyMigration7();
+    const afterThird = await moduleBoards();
+    await as(null);
+    check('58. Outreach and Clients boards: 0007 starts Sales Tasks, Demos and Previews (a To do group each) once, with the board checks '
+      + 'widened; they follow Outreach / Clients access (view reads, edit writes tasks, admins add, rename and delete boards); tasks and '
+      + 'groups stay in their module; a re-run (also after a rename or delete) brings nothing back',
+      stable(started) === stable([['outreach', 'Sales Tasks', 0, ['To do']], ['clients', 'Demos', 0, ['To do']], ['clients', 'Previews', 1, ['To do']]])
+        && lists.length === 3 && lists.every(([, ok]) => ok)
+        && seen.david === 'outreach:Sales Tasks,clients:Demos,clients:Previews' && seen.boss === seen.david
+        && seen.hello === seen.david && seen.newcomer === seen.david && seen.alice === 'clients:Demos,clients:Previews' && seen.carol === ''
+        && tasks.editSales === null && tasks.viewSales !== null && tasks.noneSales !== null && tasks.viewDemos !== null && tasks.adminDemos === null
+        && staffBoard !== null && renamed === 1 && removed === 1 && Object.values(moves).every((e) => e !== null)
+        && again === null && stable(afterAgain) === stable(started) && third === null
+        && stable(afterThird) === stable([['outreach', 'Sales', 0, ['To do']], ['clients', 'Demos', 0, ['To do']]]),
+      { started, lists, seen, tasks, staffBoard, renamed, removed, moves, again, afterAgain, third, afterThird });
+  }
+
   await as(null);
   return ctx;
 }

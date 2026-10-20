@@ -35,7 +35,7 @@ const item = (name, values, extra = {}) => ({
   id: id('it'), name, values, updates: [], subtasks: [], done: values.status === 'Done', ...extra,
 });
 
-// Projects: everyone's own page, then the team boards; Marketing: its team boards (docs/PHASE2.md §11).
+// Projects: everyone's own page, then the team boards; Marketing, Outreach and Clients: their team boards (docs/PHASE2.md §11).
 const board = (module, name, groups, owner = '') => ({ id: id('b'), module, name: owner ? '' : name, owner, groups });
 const group = (name, color, items) => ({ id: id('g'), name, color, items });
 
@@ -129,6 +129,34 @@ function boards() {
       group('Upcoming', '#ffe6b0', [
         item('Golf Day', { people: ['hello', 'josh'], status: 'In progress', type: 'Sponsorship', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-12' }),
         item('Local government conference stand', { people: ['david'], status: 'Not started', type: 'Industry', channel: 'Website', approval: '', due: '2026-11-19' }),
+      ]),
+    ]),
+    board('outreach', 'Sales Tasks', [
+      group('To do', '#c9ffe6', [
+        item('Follow up the Riverbend Water referral', { people: ['david'], status: 'In progress', priority: 'High', due: '2026-10-22' }),
+        item('Book a demo with Eastvale City Council', { people: ['josh'], status: 'Not started', priority: 'High', due: '2026-10-24' }),
+        item('Send pricing to Pinecrest Regional Council', { people: ['david'], status: 'Not started', priority: 'Medium', due: '2026-10-27' }),
+        item('Prepare the Harbourside Ports proposal', { people: ['josh', 'david'], status: 'Stuck', priority: 'Medium', due: '2026-10-30' }),
+        item('Call back Northbrook Shire Council', { people: ['josh'], status: 'Not started', priority: 'Low', due: '' }),
+      ]),
+      group('Done', '#bfe9ff', [
+        item('Intro call with Glenmore Shire Council', { people: ['david'], status: 'Done', priority: 'Medium', due: '2026-10-15' }),
+      ]),
+    ]),
+    board('clients', 'Demos', [
+      group('To do', '#c9ffe6', [
+        item('Northside Diocese: asset register walkthrough', { people: ['david'], status: 'In progress', priority: 'High', due: '2026-10-23' }),
+        item('Coastal Rail: condition data demo', { people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-10-29' }),
+        item('Harbour Construction: digital twin demo', { people: ['david', 'josh'], status: 'Not started', priority: 'Low', due: '' }),
+      ]),
+      group('Done', '#bfe9ff', [
+        item('Westbay Council: onboarding demo', { people: ['josh'], status: 'Done', priority: 'High', due: '2026-10-14' }),
+      ]),
+    ]),
+    board('clients', 'Previews', [
+      group('To do', '#c9ffe6', [
+        item('Northside Diocese preview site', { people: ['hello'], status: 'In progress', priority: 'High', due: '2026-10-22' }),
+        item('Coastal Rail preview with sample assets', { people: ['hello', 'david'], status: 'Not started', priority: 'Medium', due: '2026-10-28' }),
       ]),
     ]),
   ];
@@ -449,6 +477,7 @@ export function createSeed() {
     routines: routines(),
     todos: [],
     routineRuns: [], // demo only: the routine runs ensureTodosLocal has made (routine_runs in the database)
+    seededBoards: [...BOARD_MODULES], // demo only: modules whose starting boards this demo has (migrate() adds new ones once)
     payments: [
       { id: id('pay'), invoiceId: invoiceNo(westbay, 'INV-1012'), clientId: westbay.id, amount: 5000, receivedOn: '2026-10-07', reference: 'Part payment INV-1012', statementId: statement.id },
       { id: id('pay'), invoiceId: invoiceNo(harbour, 'INV-1014'), clientId: harbour.id, amount: 7975, receivedOn: '2026-10-06', reference: 'INV-1014', statementId: statement.id },
@@ -547,6 +576,15 @@ export function migrate(data) {
   const pages = data.users.filter((u) => !data.boards.some((b) => b.module === 'projects' && b.owner === u.id))
     .map((u) => ({ id: uid(), module: 'projects', name: '', owner: u.id, groups: [firstGroup('projects')] }));
   data.boards = [...pages, ...data.boards];
+  // A module's starting boards that a newer build adds (Outreach's Sales Tasks, Clients' Demos and Previews: 0007) come
+  // to older demo data once: seededBoards remembers it, so a starting board someone deleted stays deleted.
+  data.seededBoards ||= ['projects', 'marketing'];
+  BOARD_MODULES.filter((m) => !data.seededBoards.includes(m)).forEach((module) => {
+    if (!data.boards.some((b) => b.module === module && !b.owner)) {
+      data.boards.push(...STARTING_BOARDS[module].map((name) => ({ id: uid(), module, name, owner: '', groups: [firstGroup(module)] })));
+    }
+    data.seededBoards.push(module);
+  });
   // An item's single owner becomes its people, as the 0002 migration does in the database.
   const userIds = new Set(data.users.map((u) => u.id));
   data.boards.forEach((b) => {
