@@ -6,7 +6,7 @@ import { useAccess } from '@/lib/access';
 import { boardHref, boardTitle } from '@/lib/boards';
 import { shortDate } from '@/lib/format';
 
-/** Open tasks with `personId` among their people, on every Projects / Marketing board you can see, soonest due first. */
+/** Open tasks with `personId` among their people, on every board you can see (any module), soonest due first. */
 export default function OnBoards({ personId }) {
   const { state } = useStore();
   const access = useAccess();

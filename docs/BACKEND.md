@@ -11,7 +11,8 @@ contacts and contracts, credits, the admins' Google accounts and the `google` Ed
 ([PHASE2.md §11](PHASE2.md#11-0006-boards-under-projects-and-marketing): boards under Projects and Marketing, each
 person's own Projects page) and `0007_outreach.sql`
 ([PHASE2.md §12](PHASE2.md#12-0007-outreach--cold-email-per-mailbox-synced-with-the-agents-sheet): Outreach, the
-cold email the agent sends from each mailbox, read from its Google Sheet). The rest of this file is phase 1,
+cold email the agent sends from each mailbox, read from its Google Sheet; and
+[§13](PHASE2.md#13-0007-boards-under-outreach-and-clients): boards under Outreach and Clients). The rest of this file is phase 1,
 corrected where 0002–0007 changed it.
 
 - **Roles**: `superadmin | admin | staff` (phase 1's `member` became `staff`). Admins (superadmin or admin) edit
@@ -75,7 +76,7 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
   users: [{ id, name, initials, color, email, role: 'superadmin'|'admin'|'staff', active: true }],
   org: { businessName, abn, address, email, phone, bankAccountName, bsb, accountNumber,
          paymentTermsDays: 30, invoicePrefix: 'INV-' },
-  // 0006: an array (was { projects|marketing: { groups } }). Projects then Marketing; personal boards first (by
+  // 0006: an array (was { projects|marketing: { groups } }). Projects, Marketing, Outreach, then Clients; personal boards first (by
   // owner's name), then team boards in order. A personal board has name '' and owner set (title from boardTitle()).
   boards: [{ id, module: 'projects'|'marketing'|'outreach'|'clients' /* 0007 adds the last two */, name, owner /* '' | userId */,
              groups: [{ id, name, color,

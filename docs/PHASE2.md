@@ -60,11 +60,12 @@ staff default above. One implementation per side:
   (0006 adds `seesPerson(userId)`, `canViewBoard(board)`, `canEditBoard(board)`: §11).
   `MODULES` and `STAFF_DEFAULTS` exported from there.
 
-Since 0006 Projects and Marketing boards each have a level (§11): a team board has its module's level; a person's own
-Projects page is edit for whoever may open it.
+Since 0006 (Projects, Marketing, §11) and 0007 (Outreach, Clients, §13) boards each have a level: a team board has its
+module's level (so Outreach and Clients access also reads or edits their boards); a person's own Projects page is edit
+for whoever may open it.
 
 Outreach since 0007 (§12): `view` sees the dashboard, the emails and the notes and may **Sync now**; `edit` also writes
-notes (changing or removing one: its author or an admin). The mailboxes and the sheet's link are admins only
+notes (changing or removing one: its author or an admin). The same level reads or edits Outreach's boards (§13). The mailboxes and the sheet's link are admins only
 (**Settings → Outreach**).
 
 UI rules: nav hides modules at `none`; a hidden route falls back to My Work. At `view`, pages render
@@ -85,6 +86,8 @@ todos: [{ id, assignee, createdBy, title, notes, day /* 'YYYY-MM-DD' */, start /
           done, doneAt /* iso | '' */ }],
 routines: [{ id, title, category, minutes, assignee, weekdays /* [1..7], 1 = Monday */, start, active }],
 routineRuns: ['<day>|<routineId>|<userId>'],            // demo only: ensureTodosLocal's run log (live: routine_runs)
+seededBoards: ['projects', 'marketing', 'outreach', 'clients'], // demo only (0007, §13): modules whose starting boards
+                                                        // this demo has had; migrate() adds a new module's once
 contacts: [{ ..., owner /* userId | '' */ }],          // statuses: New, Sent, Opened, Replied, Meeting booked, No reply
 deals:    [{ ..., contactId /* '' | id */ }],
 clients:  [{ ..., plans: [{ id, description, amount, frequency /* 'monthly'|'quarterly'|'annually' */, nextDate,
@@ -203,12 +206,13 @@ The round-trip property must hold for every table. Rows the user can't read simp
 ## 6. Screens
 - **Sidebar**: nav = My Work, Projects, Marketing, Outreach (if visible), Pipeline (if visible), Clients (if visible),
   Settings (admins). `#/admin` redirects to Projects. Role chip shows SuperAdmin / Admin / Staff. Since 0006 Projects
-  and Marketing list their boards as sub-menus (§11).
+  and Marketing, and since 0007 Outreach and Clients (after their own page, §13), list their boards as sub-menus
+  (§11).
 - **My Work** (`src/pages/MyWork.jsx` + `src/components/work/*`): day navigator (‹ Today ›); admins get a person
   picker (default me). Sections: *Carried over* (undone to-dos before today), *Today* (to-dos sorted by start time
   then position: checkbox, title, category pill, minutes, source icon for routine/automation, delete), inline add
-  (title, category, minutes, optional time; admins can add for the selected person), *On boards* (Projects/Marketing
-  items whose `people` include the person and aren't done), *Mentions* (existing). KPI row: to-dos today, done,
+  (title, category, minutes, optional time; admins can add for the selected person), *On boards* (items on any board
+  you can see whose `people` include the person and aren't done), *Mentions* (existing). KPI row: to-dos today, done,
   carried over, mentions. Calls `ensureTodos(today)` once per day per signed-in user.
 - **Projects / Marketing** boards: people column = multi-avatar picker (`PeoplePicker` in `src/components/ui`);
   read-only at `view` (per board since 0006, §11).
@@ -230,7 +234,8 @@ The round-trip property must hold for every table. Rows the user can't read simp
   Modal: 8 hourly blocks 09:00–17:00, each with category select + note, pre-filled by
   `suggestBlocks({ todosDone, emailsSent, itemsTouched, messagesSent }, { start: '09:00', end: '17:00' })`
   (minutes per category from completed to-dos (their `minutes`), 10 min per email sent → Email marketing,
-  board items edited → Projects/Marketing; scaled to whole hours by largest remainder, ordered by first activity,
+  board items edited → their module's category (Projects, Marketing, Outreach, Clients); scaled to whole hours by
+  largest remainder, ordered by first activity,
   remaining hours `Other`). Save → `saveTimesheet`. My Work has a **Log time** button for anyone, any day.
   Settings gains a **Timesheets** tab (admins): week view, hours per person per category.
 - **Settings → Team** (superadmin): role select (SuperAdmin/Admin/Staff), active toggle, and an access grid per staff
@@ -416,8 +421,8 @@ version that uses it.
   groups (several *Active* and *To do* groups), and a task added to one of them lands on that board, possibly
   someone's own page. So everyone closes Cortex before 0006 runs, and the new app is deployed straight after
   (`DEPLOY.md`).
-- **App**: `state.boards` is an array (`docs/BACKEND.md` §1): Projects then Marketing; personal boards first (by
-  owner's name), then team boards in order. Sync: `boards` → `board_groups` → `items`; team board positions count
+- **App**: `state.boards` is an array (`docs/BACKEND.md` §1): Projects, Marketing, then (0007, §13) Outreach and
+  Clients; personal boards first (by owner's name), then team boards in order. Sync: `boards` → `board_groups` → `items`; team board positions count
   within their module, personal boards are 0. Pure helpers in `src/lib/boards.js` (`findBoard`, `personalBoard`,
   `teamBoards`, `boardTitle`, `boardHref`, `resolveBoard`). Store actions take a **board id** (was the module key):
   `addBoard(module, name) → id` (with one group), `renameBoard`, `moveBoard(id, ±1)`, `removeBoard` (admins, team

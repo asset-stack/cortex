@@ -155,8 +155,8 @@ function boards() {
     ]),
     board('clients', 'Previews', [
       group('To do', '#c9ffe6', [
-        item('Northside Diocese preview site', { people: ['hello'], status: 'In progress', priority: 'High', due: '2026-10-22' }),
-        item('Coastal Rail preview with sample assets', { people: ['hello', 'david'], status: 'Not started', priority: 'Medium', due: '2026-10-28' }),
+        item('Northside Diocese preview site', { people: ['josh'], status: 'In progress', priority: 'High', due: '2026-10-22' }),
+        item('Coastal Rail preview with sample assets', { people: ['josh', 'david'], status: 'Not started', priority: 'Medium', due: '2026-10-28' }),
       ]),
     ]),
   ];

@@ -65,7 +65,7 @@ const EMAILS = '\u0000emails'; // stands in for the "N emails" note until the co
  *   when it was ticked off).
  * - `emailsSent`: emails sent (or a count); 10 minutes each towards Email marketing.
  * - `itemsTouched`: board items worked on ({ board, name, ts }, or a count of Projects items); 30 minutes each
- *   towards Projects or Marketing.
+ *   towards the board's module (Projects, Marketing, Outreach or Clients).
  * - `messagesSent`: team chat messages (or a count); no minutes of their own, noted on the first spare hour.
  * The minutes per category are scaled to whole hours by largest remainder (to the nearest hour of activity, at least
  * one when there was any, at most the day), categories in order of their first activity, and the hours left are
@@ -123,7 +123,7 @@ export function suggestBlocks({ todosDone, emailsSent, itemsTouched, messagesSen
 }
 
 // What `userId` did on `day` (local days), from the state: to-dos ticked off that day, emails sent to contacts
-// they own, Projects / Marketing items they posted an update on, and chat messages they sent.
+// they own, board items they posted an update on (any module), and chat messages they sent.
 export function dayActivity(state, userId, day) {
   const on = (iso) => dayOf(iso) === day;
   const todosDone = (state?.todos || [])

@@ -390,7 +390,8 @@ export function assemble(rowsByTable, { me } = {}) {
   const subtasks = groupBy(all('subtasks'), 'item_id');
   const items = groupBy(all('items'), 'group_id');
   const groups = groupBy(all('board_groups'), 'board_id');
-  // Projects then Marketing; in each, personal boards (by their owner's name) before the team boards in order.
+  // Projects, Marketing, Outreach, then Clients (BOARD_KEYS); in each, personal boards (by their owner's name) before the
+  // team boards in order.
   const names = new Map(all('profiles').map((u) => [u.id, u.name.toLowerCase()]));
   const boardOrder = (a, b) => BOARD_KEYS.indexOf(a.module) - BOARD_KEYS.indexOf(b.module)
     || (a.owner_id ? 0 : 1) - (b.owner_id ? 0 : 1)

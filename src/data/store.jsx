@@ -222,7 +222,8 @@ function createActions(mutate, mode) {
     const b = findBoard(d, boardId);
     return b && canEditBoard(d, b) ? fn(d, b) : false;
   });
-  // Team boards (the sub-menus under Projects and Marketing) are the admins' to add, rename, order and delete.
+  // Team boards (the sub-menus under the board modules: Projects, Marketing, Outreach, Clients) are the admins' to add,
+  // rename, order and delete.
   const onTeamBoard = (boardId, fn) => admin((d) => {
     const b = findBoard(d, boardId);
     return b && !b.owner ? fn(d, b) : false;
@@ -323,7 +324,7 @@ function createActions(mutate, mode) {
       return result;
     }),
 
-    // ── Boards (Projects, Marketing, Outreach): team boards are the admins'; groups and tasks need edit access to the board ──
+    // ── Boards (BOARD_MODULES): team boards are the admins'; groups and tasks need edit access to the board ──
 
     // A new team board at the end of its module, with one group. → id
     addBoard: (module, name) => admin((d) => {

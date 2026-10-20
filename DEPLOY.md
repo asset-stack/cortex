@@ -72,7 +72,8 @@ to **Public**, and don't add policies to it in the dashboard.
 Then run `supabase/migrations/0004_clients_google.sql` the same way (client contacts and contracts, credits,
 and each admin's Google connection; see section 11), then `0005_work_tools.sql` (each person's Tools in My Work),
 then `0006_boards.sql` (the boards under Projects and Marketing, and each person's own Projects page), then
-`0007_outreach.sql` (Outreach, read from the outreach agent's Google Sheet; see section 12).
+`0007_outreach.sql` (Outreach, read from the outreach agent's Google Sheet, see section 12; and the boards under
+Outreach and Clients, `docs/PHASE2.md` §13).
 
 Later schema changes arrive as new numbered files in `supabase/migrations/` (`0008_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one.
@@ -411,7 +412,8 @@ revoke it at Google too: <https://myaccount.google.com/connections>. When someon
 mailbox. The agent logs every prospect in its own Google Sheet. Cortex reads that sheet into the database through the
 `google` Edge Function, **with the Google account of the admin who linked it**, and writes a **Summary** tab, a
 **Notes** tab and **a tab per mailbox** (named after it: that mailbox's rows) back into it. Cortex never sends outreach email and never changes the agent's rows. This needs section 11 steps
-1–3 done and that admin's Google connected (11.5). Contract: `docs/PHASE2.md` §12.
+1–3 done and that admin's Google connected (11.5). Contract: `docs/PHASE2.md` §12 (and §13 for the boards under
+Outreach and Clients).
 
 1. **Database**: run `0007_outreach.sql` (section 2, *0007 on an existing database*).
 2. **Google Cloud** (<https://console.cloud.google.com>, the Cortex project) → **APIs & Services** → **Library** →

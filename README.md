@@ -22,9 +22,9 @@ One workspace for the team's daily work, the departments and team chat:
 |---|---|---|
 | Projects | Edit | Edit (team boards and their own page) |
 | Marketing | Edit | Edit |
-| Outreach | Edit; mailboxes and the sheet link (Settings) | None (View: the dashboard, emails and notes, **Sync now**; Edit: also write notes) |
+| Outreach | Edit; mailboxes and the sheet link (Settings) | None (View: the dashboard, emails and notes, **Sync now**, and Outreach's boards read-only; Edit: also write notes and edit those boards' groups and tasks) |
 | Pipeline | Edit | View |
-| Clients | Edit | View: no money in, expenses or software costs; can't approve, send or mark paid |
+| Clients | Edit | View: no money in, expenses or software costs; can't approve, send or mark paid; Clients' boards (Demos, Previews …) read-only until given Edit |
 | My Work, team chat, timesheet | Yes | Yes |
 | Settings | Yes (Team read-only for Admins) | No |
 

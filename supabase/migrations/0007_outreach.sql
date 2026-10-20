@@ -1,7 +1,7 @@
 -- Cortex 0007: Outreach monitors the cold email a Claude agent sends from each outreach mailbox. Run in the Supabase SQL
 -- editor after 0006, BEFORE the app version that uses it goes live. Safe to re-run, also statement by statement (the
 -- SQL editor may run it that way): no statement relies on another having run in the same transaction or session.
--- Contract: docs/PHASE2.md §12.
+-- Contract: docs/PHASE2.md §12 (Outreach) and §13 (boards under Outreach and Clients).
 --
 -- - The agent keeps its own Google Sheet (one row per prospect: research, Gmail draft and send, follow-ups, reply,
 --   meeting) and fills a `sender` column with the mailbox it sent from. The google Edge Function's outreach-sync route

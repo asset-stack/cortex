@@ -10,7 +10,8 @@ export const STATUS = {
 
 export const PRIORITY = { High: '#e2445c', Medium: '#fdab3d', Low: '#579bfc' };
 
-// Projects (with the former Admin board merged in) and Marketing. Both are modules in src/lib/access.js.
+// The board modules' columns (BOARD_MODULES): Projects (with the former Admin board merged in), Marketing, Outreach and
+// Clients. All are modules in src/lib/access.js.
 export const BOARD_SCHEMAS = {
   projects: {
     title: 'Projects',

@@ -27,7 +27,10 @@ const fixAddress = () => {
   if (REDIRECTS[route]) window.history.replaceState(window.history.state, '', `#/${REDIRECTS[route]}${query}`);
 };
 
-/** { route, sub }: the page and, for Projects and Marketing, the board id ('' for the module's default board). */
+/**
+ * { route, sub }: the page and, for the board modules, the board id ('' for the module's default board, or for Outreach
+ * and Clients their own page: MODULE_HOMES in src/lib/boards.js).
+ */
 export function useRoute() {
   const [at, setAt] = useState(read);
   useEffect(() => {
