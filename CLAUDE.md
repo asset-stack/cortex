@@ -14,8 +14,8 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
 - Keep demo mode working. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` the app runs on localStorage
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
-  migration that has been applied** (`0001`–`0007` are live in production): fix forward in the next file
-  (`0008_….sql`). A migration must never mention `module_level` unless it redefines it
+  migration that has been applied** (`0001`–`0007` are live in production; `0008` is written, not yet run): fix forward
+  in the next file (`0009_….sql`). A migration must never mention `module_level` unless it redefines it
   (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table
   keeps row-level security on with policies that require `is_staff()` (directly or through `is_admin()` /
   `can_view()` / `can_edit()` / the board helpers), and is added to the `supabase_realtime` publication if it is synced. Extend
@@ -30,8 +30,9 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
   `board_level()` / `can_view_board()` / `can_edit_board()` ⇄ `boardLevel` / `canViewBoard` / `canEditBoard`, and
   `sees_person()` ⇄ `seesPerson` (whose personal Projects page you may open).
 - **Boards are records**, not code: `state.boards` is an array of team boards and personal Projects pages
-  (`docs/PHASE2.md` §11, §13), and board store actions take a board id. Board modules are Projects, Marketing, Outreach
-  and Clients (`BOARD_MODULES`); Outreach's and Clients' menus start with their own page (`MODULE_HOMES`). Admins add
+  (`docs/PHASE2.md` §11, §13), and board store actions take a board id. Board modules are Projects, Marketing, Outreach,
+  Clients and Pipeline (`BOARD_MODULES`); Outreach's and Clients' menus start with their own page (`MODULE_HOMES`), and
+  Pipeline's boards (Work in Progress) sit on its page under the deals, not in the menu (`PAGE_BOARD_MODULES`). Admins add
   new team boards in the app; personal pages come and go with their person.
 - **A new module gets a module key**: add it to `MODULES` and `STAFF_DEFAULTS` in `src/lib/access.js`, to the
   `module_access.module` check and the defaults in `public.module_level()` (in a new migration), give its tables

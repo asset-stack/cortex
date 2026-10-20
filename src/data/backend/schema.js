@@ -2,7 +2,7 @@
 // No Supabase or Vite imports: scripts/test-sync.mjs runs this file directly in Node.
 import { TEAM_TIMEZONE } from '../../lib/format.js';
 
-const BOARD_KEYS = ['projects', 'marketing', 'outreach', 'clients']; // the boards.module check (0006; 0007 adds outreach and clients)
+const BOARD_KEYS = ['projects', 'marketing', 'outreach', 'clients', 'pipeline']; // the boards.module check (0006; 0007, 0008 add the rest)
 
 const DEFAULT_ORG = {
   businessName: '', abn: '', address: '', email: '', phone: '', bankAccountName: '', bsb: '', accountNumber: '',
@@ -390,8 +390,8 @@ export function assemble(rowsByTable, { me } = {}) {
   const subtasks = groupBy(all('subtasks'), 'item_id');
   const items = groupBy(all('items'), 'group_id');
   const groups = groupBy(all('board_groups'), 'board_id');
-  // Projects, Marketing, Outreach, then Clients (BOARD_KEYS); in each, personal boards (by their owner's name) before the
-  // team boards in order.
+  // Projects, Marketing, Outreach, Clients, then Pipeline (BOARD_KEYS); in each, personal boards (by their owner's name)
+  // before the team boards in order.
   const names = new Map(all('profiles').map((u) => [u.id, u.name.toLowerCase()]));
   const boardOrder = (a, b) => BOARD_KEYS.indexOf(a.module) - BOARD_KEYS.indexOf(b.module)
     || (a.owner_id ? 0 : 1) - (b.owner_id ? 0 : 1)

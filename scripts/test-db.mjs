@@ -2522,6 +2522,37 @@ async function phase8(ctx) {
       && edits.newcomer.update === 1 && edits.newcomer.stage === 1 && deletes.newcomer === 1
       && edits.boss.update === 1 && edits.boss.stage === 1 && deletes.boss === 1,
     { edits, deletes });
+
+  // 63. Work in Progress: a team board of the pipeline board module, under the deals --------------------------------------
+  {
+    await as(null);
+    const wip = await rows(`select b.id, b.name, b.position, (select array_agg(g.name order by g.position) from public.board_groups g where g.board_id = b.id) as groups
+      from public.boards b where b.module = 'pipeline'`);
+    const lists = (await rows(`select conname, pg_get_constraintdef(oid) as def from pg_constraint
+      where conname in ('boards_module_check', 'board_groups_board_key_check', 'items_board_key_check') order by conname`))
+      .map((r) => ['projects', 'marketing', 'outreach', 'clients', 'pipeline'].every((m) => r.def.includes(`'${m}'`)));
+    const group = wip[0] && (await one('select id from public.board_groups where board_id = $1 order by position limit 1', [wip[0].id])).id;
+    const add = async (user, name) => { await as(user); return error(`insert into items (board_key, group_id, name, "values") values ('pipeline', $1, $2, $3)`,
+      [group, name, { details: 'Kick-off', status: 'In progress', people: [] }]); };
+    const adds = { viewer: await add(hello, 'Nope'), editor: await add(newcomer, 'Example Council'), admin: await add(boss, 'Example Port') };
+    await as(hello);
+    const seenByStaff = (await rows("select name from public.boards where module = 'pipeline'")).map((r) => r.name);
+    // A re-run of 0008 (and of 0007) after Work in Progress is renamed or deleted brings nothing back and keeps pipeline.
+    await as(null);
+    await db.query("update public.boards set name = 'WIP' where module = 'pipeline'");
+    const again = [await applyMigration8(), await applyMigration7()];
+    const afterRename = (await rows("select name from public.boards where module = 'pipeline'")).map((r) => r.name);
+    await db.query("delete from public.boards where module = 'pipeline'");
+    const third = await applyMigration8();
+    const afterDelete = (await one("select count(*)::int as n from public.boards where module = 'pipeline'")).n;
+    const stillAllowed = (await one("select pg_get_constraintdef(oid) as def from pg_constraint where conname = 'boards_module_check'")).def.includes("'pipeline'");
+    check('63. 0008 starts Work in Progress (an Active group) once with the board checks widened to pipeline; it follows Pipeline access '
+      + '(staff view read it, Pipeline edit and admins add rows); re-running 0008 or 0007 after a rename or delete brings nothing back',
+      wip.length === 1 && wip[0].name === 'Work in Progress' && stable(wip[0].groups) === stable(['Active']) && lists.length === 3 && lists.every(Boolean)
+        && adds.viewer !== null && adds.editor === null && adds.admin === null && stable(seenByStaff) === stable(['Work in Progress'])
+        && again.every((e) => e === null) && stable(afterRename) === stable(['WIP']) && third === null && afterDelete === 0 && stillAllowed,
+      { wip, lists, adds, seenByStaff, again, afterRename, third, afterDelete, stillAllowed });
+  }
   await as(null);
   return ctx;
 }

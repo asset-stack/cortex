@@ -1,12 +1,15 @@
--- Cortex 0008: Pipeline's stages are Opportunities → Contacted → First meetings → Demos. Run in the Supabase SQL editor
--- after 0007. Safe to re-run, also statement by statement (the SQL editor may run it that way). Contract:
--- docs/PHASE2.md §14.
+-- Cortex 0008: Pipeline's stages are Opportunities → Contacted → First meetings → Demos, and Work in Progress sits under
+-- the deals. Run in the Supabase SQL editor after 0007. Safe to re-run, also statement by statement (the SQL editor may
+-- run it that way). Contract: docs/PHASE2.md §14.
 --
 -- - There's no Won stage: a deal made a client leaves the board (it lives in Clients), and Make client sits on Demos.
 --   Deals still at Won move to Demos (those already made a client keep their client and stay off the board).
 -- - A meeting booked moves a deal on to First meetings from Opportunities or Contacted (never back from later on). The
 --   contact_pipeline trigger is 0003's, with that one change.
 -- - deals.stage is free text (no check), so nothing else changes; the app shows any other stage in Opportunities.
+-- - Work in Progress, a list under the deals (a row per client: details, status, contact), is a team board of a new
+--   board module, pipeline, on 0006's boards: it follows the Pipeline access level as every team board follows its
+--   module's, so only the three checks that list the board modules change (as 0007 did for Outreach and Clients).
 
 begin;
 
@@ -54,5 +57,30 @@ begin
   return null;
 end;
 $$;
+
+-- The first time (the boards check doesn't list pipeline yet) the checks widen and Work in Progress starts with one
+-- group, all in this one statement, so a re-run never brings back a Work in Progress someone deleted.
+do $$
+declare
+  v_def text := coalesce((select pg_get_constraintdef(oid) from pg_constraint
+                          where conrelid = 'public.boards'::regclass and conname = 'boards_module_check'), '');
+begin
+  if v_def not like '%pipeline%' then
+    alter table public.boards drop constraint if exists boards_module_check;
+    alter table public.boards add constraint boards_module_check
+      check (module in ('projects', 'marketing', 'outreach', 'clients', 'pipeline'));
+    alter table public.board_groups drop constraint if exists board_groups_board_key_check;
+    alter table public.board_groups add constraint board_groups_board_key_check
+      check (board_key in ('projects', 'marketing', 'outreach', 'clients', 'pipeline'));
+    alter table public.items drop constraint if exists items_board_key_check;
+    alter table public.items add constraint items_board_key_check
+      check (board_key in ('projects', 'marketing', 'outreach', 'clients', 'pipeline'));
+    with b as (
+      insert into public.boards (module, name, position) values ('pipeline', 'Work in Progress', 0) returning id, module
+    )
+    insert into public.board_groups (board_key, board_id, name, color, position)
+    select b.module, b.id, 'Active', '#c9ffe6', 0 from b;
+  end if;
+end $$;
 
 commit;

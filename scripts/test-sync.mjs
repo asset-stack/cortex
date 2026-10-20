@@ -1696,8 +1696,9 @@ const migrationFile = (prefix) => {
 };
 const boardsSql = migrationFile('0006_');
 const outreachBoardsSql = migrationFile('0007_');
-if (boardsSql && outreachBoardsSql) {
-  await check(`boards: STARTING_BOARDS, EXISTING_BOARD and FIRST_GROUP match ${boardsSql[0]} and ${outreachBoardsSql[0]}`, () => {
+const pipelineBoardsSql = migrationFile('0008_');
+if (boardsSql && outreachBoardsSql && pipelineBoardsSql) {
+  await check(`boards: STARTING_BOARDS, EXISTING_BOARD and FIRST_GROUP match ${boardsSql[0]}, ${outreachBoardsSql[0]} and ${pipelineBoardsSql[0]}`, () => {
     const sql = boardsSql[1];
     const starting = {};
     [...sql.matchAll(/\('(projects|marketing)', '([^']+)', (\d+)\)/g)].forEach(([, module, name, pos]) => { (starting[module] ||= [])[+pos] = name; });
@@ -1714,14 +1715,24 @@ if (boardsSql && outreachBoardsSql) {
     [...values[1].matchAll(/\('(outreach|clients)', '([^']+)', (\d+)\)/g)].forEach(([, module, name, pos]) => { (starting[module] ||= [])[+pos] = name; });
     const group7 = /select b\.module, b\.id, '([^']+)', '(#[0-9a-f]{6})', 0 from b/.exec(sql7);
     assert.ok(group7, "0007's first group: not found");
+    // 0008: Pipeline's Work in Progress, the same way.
+    const sql8 = pipelineBoardsSql[1];
+    const board8 = /values \('pipeline', '([^']+)', 0\) returning id, module/.exec(sql8);
+    const group8 = /select b\.module, b\.id, '([^']+)', '(#[0-9a-f]{6})', 0 from b/.exec(sql8);
+    assert.ok(board8 && group8, "0008's Work in Progress: not found");
+    starting.pipeline = [board8[1]];
     assert.deepEqual(starting, boardsLib.STARTING_BOARDS);
-    assert.deepEqual([{ projects: first[1], marketing: first[2], outreach: group7[1], clients: group7[1] }, first[3], group7[2]],
-      [boardsLib.FIRST_GROUP, boardsLib.FIRST_GROUP_COLOR, boardsLib.FIRST_GROUP_COLOR]);
-    assert.deepEqual(boardsLib.BOARD_MODULES, ['projects', 'marketing', 'outreach', 'clients']);
-    const lists = [...outreachBoardsSql[1].matchAll(/check \((module|board_key) in \(([^)]*)\)\)/g)]
+    assert.deepEqual([{ projects: first[1], marketing: first[2], outreach: group7[1], clients: group7[1], pipeline: group8[1] }, first[3], group7[2], group8[2]],
+      [boardsLib.FIRST_GROUP, boardsLib.FIRST_GROUP_COLOR, boardsLib.FIRST_GROUP_COLOR, boardsLib.FIRST_GROUP_COLOR]);
+    assert.deepEqual(boardsLib.BOARD_MODULES, ['projects', 'marketing', 'outreach', 'clients', 'pipeline']);
+    assert.deepEqual(boardsLib.MENU_BOARD_MODULES, ['projects', 'marketing', 'outreach', 'clients'], 'Pipeline’s boards sit on its page');
+    const listsOf = (sql) => [...sql.matchAll(/check \((module|board_key) in \(([^)]*)\)\)/g)]
       .map(([, col, list]) => [col, list.replace(/['\s]/g, '').split(',')]);
-    assert.deepEqual(lists.map(([col]) => col), ['module', 'board_key', 'board_key'], 'boards, board_groups and items');
-    lists.forEach(([, list]) => assert.deepEqual(list, boardsLib.BOARD_MODULES));
+    [[outreachBoardsSql[1], boardsLib.BOARD_MODULES.slice(0, 4)], [sql8, boardsLib.BOARD_MODULES]].forEach(([sql, modules]) => {
+      const lists = listsOf(sql);
+      assert.deepEqual(lists.map(([col]) => col), ['module', 'board_key', 'board_key'], 'boards, board_groups and items');
+      lists.forEach(([, list]) => assert.deepEqual(list, modules));
+    });
     assert.ok(boardsLib.GROUP_COLORS.includes(boardsLib.FIRST_GROUP_COLOR));
   });
 }
@@ -1961,6 +1972,24 @@ await check('pipeline: stages Opportunities → Contacted → First meetings →
   assert.match(sql8, /v_stage in \('Opportunities', 'Contacted'\)/);
 });
 
+await check('pipeline: Work in Progress has a row per client with Details (text), Status and Contact (people), no dates', async () => {
+  const data = await import('../src/data/boards.js');
+  const wip = data.BOARD_SCHEMAS.pipeline;
+  assert.deepEqual(wip.columns.map((c) => [c.key, c.label, c.type]), [['details', 'Details', 'text'], ['status', 'Status', 'status'], ['people', 'Contact', 'people']]);
+  assert.deepEqual([data.itemWord(wip), data.itemWord(data.BOARD_SCHEMAS.projects), data.itemWord(undefined)], ['Client', 'Task', 'Task']);
+  assert.deepEqual([data.hasDates(wip), data.hasDates(data.BOARD_SCHEMAS.projects), data.hasDates(data.BOARD_SCHEMAS.marketing)], [false, true, true]);
+  // Imported rows: the Details column fills details (it beats Notes for that header), people and status as on every board.
+  const { autoMap, normalise, fieldsFor } = await import('../src/lib/importers.js');
+  assert.deepEqual(fieldsFor('tasks', 'pipeline').filter((f) => f.column).map((f) => f.key), ['details']);
+  const headers = ['Client', 'Details', 'Status', 'Contact'];
+  const map = autoMap(headers, 'tasks', 'pipeline');
+  assert.equal(map.details, 1);
+  const users = [{ id: 'u1', name: 'Dale Example', email: 'dale@example.com' }];
+  const rec = normalise('tasks', ['Example Council', 'Onboarding call', 'In progress', 'Dale Example'], { ...map, name: 0, people: 3 },
+    { users, me: 'u1', board: 'pipeline' });
+  assert.deepEqual([rec.name, rec.values.details, rec.values.status, rec.values.people], ['Example Council', 'Onboarding call', 'In progress', ['u1']]);
+});
+
 await check('pipeline: cleanDealPatch keeps valid edits only (Edit deal)', async () => {
   const { cleanDealPatch } = await import('../src/data/boards.js');
   const users = ['u1', 'u2'];
@@ -2022,13 +2051,15 @@ await check('automations: a plan more than two years behind (a mistyped year) is
   assert.ok(st.clients[0].invoices.every((i) => i.planId === 'two'));
 });
 
-await check('import: deal stages map to the new columns (won or signed → Demos, contacted → Contacted)', async () => {
+await check('import: deal stages map to the new columns (won, signed, quote or contract → Demos, contacted → Contacted, uncontacted → Opportunities)', async () => {
   const { normalise } = await import('../src/lib/importers.js');
   const stage = (v) => normalise('deals', ['Example Water', v], { name: 0, stage: 1 }, { users: [], me: 'u-me' }).stage;
   assert.deepEqual(['Opportunities', 'contacted', 'Emailed', 'Reached out', 'First meetings', 'Discovery call', 'Demo booked', 'Proposal',
-    'Won', 'Closed won', 'Signed', 'Client', 'Lost', "Won't proceed", 'Not signed', '', 'Prospect'].map(stage),
+    'Quote sent', 'Contract out', 'Won', 'Closed won', 'Signed', 'Client', 'Lost', "Won't proceed", 'Not signed', 'Uncontacted',
+    'Un-contacted', 'Not yet contacted', '', 'Prospect'].map(stage),
   ['Opportunities', 'Contacted', 'Contacted', 'Contacted', 'First meetings', 'First meetings', 'Demos', 'Demos',
-    'Demos', 'Demos', 'Demos', 'Demos', 'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities']);
+    'Demos', 'Demos', 'Demos', 'Demos', 'Demos', 'Demos', 'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities',
+    'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities']);
 });
 
 await check('import: contact statuses as written, Meeting booked included (negated wording is not a booking)', async () => {
@@ -2093,7 +2124,7 @@ if (createSeed) {
     assert.deepEqual(s.boards.map((b) => `${b.module}:${b.owner ? 'own' : 'team'}`), [
       ...Array(3).fill('projects:own'), ...Array(STARTING_BOARDS.projects.length).fill('projects:team'),
       ...Array(STARTING_BOARDS.marketing.length).fill('marketing:team'), ...Array(STARTING_BOARDS.outreach.length).fill('outreach:team'),
-      ...Array(STARTING_BOARDS.clients.length).fill('clients:team'),
+      ...Array(STARTING_BOARDS.clients.length).fill('clients:team'), ...Array(STARTING_BOARDS.pipeline.length).fill('pipeline:team'),
     ]);
     assert.deepEqual(s.seededBoards, BOARD_MODULES, 'the demo has every module’s starting boards');
     s.boards.forEach((b) => assert.ok(b.groups.length, boardTitle(s, b)));
@@ -2108,8 +2139,9 @@ if (createSeed) {
     assert.deepEqual(['david', 'josh', 'hello'].map((me) => pagesFor(me).filter((b) => b.owner).map((b) => b.owner)),
       [['david', 'josh', 'hello'], ['josh', 'hello'], ['hello']]);
     assert.deepEqual(pagesFor('hello').filter((b) => !b.owner).map((b) => [b.name, access.canEditBoard({ ...s, me: 'hello' }, b)]),
-      [...[...STARTING_BOARDS.projects, ...STARTING_BOARDS.marketing].map((n) => [n, true]), ...STARTING_BOARDS.clients.map((n) => [n, false])],
-      'staff edit every Projects and Marketing team board by default (0006); Clients’ and Outreach’s follow those modules (view, none)');
+      [...[...STARTING_BOARDS.projects, ...STARTING_BOARDS.marketing].map((n) => [n, true]),
+        ...[...STARTING_BOARDS.clients, ...STARTING_BOARDS.pipeline].map((n) => [n, false])],
+      'staff edit every Projects and Marketing team board by default (0006); Clients’, Pipeline’s and Outreach’s follow those modules (view, view, none)');
     // Outreach's boards follow each person's Outreach level: none by default for staff, then view or edit.
     const sales = teamBoards(s, 'outreach')[0];
     const helloAt = (level) => {
@@ -2637,9 +2669,9 @@ if (createSeed && migrate) {
     assert.deepEqual(migrate(structuredClone(m)), m, 'running it again changes nothing');
   });
 
-  await check('migrate: older demo data gets Outreach’s and Clients’ starting boards (0007) once; deleting them sticks', () => {
+  await check('migrate: older demo data gets Outreach’s, Clients’ (0007) and Pipeline’s (0008) starting boards once; deleting them sticks', () => {
     const { STARTING_BOARDS, FIRST_GROUP, FIRST_GROUP_COLOR, teamBoards } = boardsLib;
-    const added = ['outreach', 'clients'];
+    const added = ['outreach', 'clients', 'pipeline'];
     const old = createSeed();
     old.boards = old.boards.filter((b) => !added.includes(b.module));
     delete old.seededBoards;
@@ -2647,8 +2679,8 @@ if (createSeed && migrate) {
     added.forEach((module) => assert.deepEqual(
       teamBoards(m, module).map((b) => [b.name, b.owner, b.groups.map((g) => [g.name, g.color, g.items])]),
       STARTING_BOARDS[module].map((n) => [n, '', [[FIRST_GROUP[module], FIRST_GROUP_COLOR, []]]]), module));
-    assert.deepEqual(m.boards.slice(-3).map((b) => b.module), ['outreach', 'clients', 'clients'], 'after Marketing, as the live order has them');
-    assert.deepEqual(m.seededBoards, ['projects', 'marketing', 'outreach', 'clients']);
+    assert.deepEqual(m.boards.slice(-4).map((b) => b.module), ['outreach', 'clients', 'clients', 'pipeline'], 'after Marketing, as the live order has them');
+    assert.deepEqual(m.seededBoards, ['projects', 'marketing', 'outreach', 'clients', 'pipeline']);
     assert.deepEqual(migrate(structuredClone(m)), m, 'running it again adds nothing');
     const deleted = structuredClone(m);
     deleted.boards = deleted.boards.filter((b) => !added.includes(b.module));

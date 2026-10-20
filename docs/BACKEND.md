@@ -12,8 +12,9 @@ contacts and contracts, credits, the admins' Google accounts and the `google` Ed
 person's own Projects page) and `0007_outreach.sql`
 ([PHASE2.md §12](PHASE2.md#12-0007-outreach--cold-email-per-mailbox-synced-with-the-agents-sheet): Outreach, the
 cold email the agent sends from each mailbox, read from its Google Sheet; and
-[§13](PHASE2.md#13-0007-boards-under-outreach-and-clients): boards under Outreach and Clients). The rest of this file is phase 1,
-corrected where 0002–0007 changed it.
+[§13](PHASE2.md#13-0007-boards-under-outreach-and-clients): boards under Outreach and Clients) and `0008_pipeline_stages.sql`
+([PHASE2.md §14](PHASE2.md#14-0008-pipeline--opportunities--contacted--first-meetings--demos-editable-deals-work-in-progress): Pipeline's stages, editable deals and
+Work in Progress). The rest of this file is phase 1, corrected where 0002–0008 changed it.
 
 - **Roles**: `superadmin | admin | staff` (phase 1's `member` became `staff`). Admins (superadmin or admin) edit
   every module and see finance; only the SuperAdmin changes roles, active flags and module access, and the last
@@ -78,7 +79,7 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
          paymentTermsDays: 30, invoicePrefix: 'INV-' },
   // 0006: an array (was { projects|marketing: { groups } }). Projects, Marketing, Outreach, then Clients; personal boards first (by
   // owner's name), then team boards in order. A personal board has name '' and owner set (title from boardTitle()).
-  boards: [{ id, module: 'projects'|'marketing'|'outreach'|'clients' /* 0007 adds the last two */, name, owner /* '' | userId */,
+  boards: [{ id, module: 'projects'|'marketing'|'outreach'|'clients'|'pipeline' /* 0007, 0008 add the last three */, name, owner /* '' | userId */,
              groups: [{ id, name, color,
                items: [{ id, name, values: { people /* [userId] */, status, ... }, done,
                          updates: [{ id, user, text, ts }], subtasks: [{ id, text, done }] }] }] }],
@@ -131,8 +132,8 @@ maintained by a `touch()` trigger (the sync engine never sends these two columns
 | `profiles` | `id uuid pk → auth.users on delete cascade`, `email text unique not null`, `name text not null`, `initials text not null`, `color text not null`, `role text not null default 'staff' check in ('superadmin','admin','staff')` (0002; was `'member'`, `('admin','member')`), `active bool not null default true`, `created_at timestamptz default now()`, `timezone text not null default 'Australia/Sydney'` (0003; a real IANA name, checked by a trigger) | `users[]` |
 | `admin_emails` | `email text pk`, `role text not null default 'admin' check in ('superadmin','admin')` (0002) (setup only; not synced) | — |
 | `org_settings` | `id int pk default 1 check (id = 1)`, `business_name, abn, address, email, phone, bank_account_name, bsb, account_number, invoice_prefix text not null default ''` (`invoice_prefix` default `'INV-'`), `payment_terms_days int not null default 30` | `org` |
-| `boards` (0006) | `module text not null check in ('projects','marketing')` (0007: also `'outreach'`, `'clients'`), `name text` (`''` for a personal board), `owner_id uuid null → profiles cascade` (a personal board: one per person, Projects only), `position int` (team boards within their module; personal boards 0) | `boards[]` |
-| `board_groups` | `board_key text not null check in ('projects','marketing')` (0007: also `'outreach'`, `'clients'`; `items.board_key` the same) (0002 merged `admin` into `projects`), `board_id uuid not null` (0006; `(board_id, board_key)` → `boards (id, module)` cascade), `name text`, `color text`, `position int` | `boards[].groups[]` |
+| `boards` (0006) | `module text not null check in ('projects','marketing')` (0007: also `'outreach'`, `'clients'`; 0008: `'pipeline'`), `name text` (`''` for a personal board), `owner_id uuid null → profiles cascade` (a personal board: one per person, Projects only), `position int` (team boards within their module; personal boards 0) | `boards[]` |
+| `board_groups` | `board_key text not null check in ('projects','marketing')` (0007: also `'outreach'`, `'clients'`; 0008: `'pipeline'`; `items.board_key` the same) (0002 merged `admin` into `projects`), `board_id uuid not null` (0006; `(board_id, board_key)` → `boards (id, module)` cascade), `name text`, `color text`, `position int` | `boards[].groups[]` |
 | `items` | `board_key text not null`, `board_id uuid not null` (0006; its group's board), `group_id uuid not null → board_groups cascade` (0006: `(group_id, board_id)` → `board_groups (id, board_id)`), `position int`, `name text`, `values jsonb not null default '{}'` (`people`: user ids; 0002 replaced `owner`), `done bool not null default false` | `groups[].items[]` |
 | `item_updates` | `item_id → items cascade`, `user_id uuid → profiles`, `text text`, `created_at timestamptz` | `items[].updates[]` (newest first in state; order by `created_at desc`) |
 | `subtasks` | `item_id → items cascade`, `position int`, `text text`, `done bool` | `items[].subtasks[]` |

@@ -35,7 +35,8 @@ const item = (name, values, extra = {}) => ({
   id: id('it'), name, values, updates: [], subtasks: [], done: values.status === 'Done', ...extra,
 });
 
-// Projects: everyone's own page, then the team boards; Marketing, Outreach and Clients: their team boards (docs/PHASE2.md §11).
+// Projects: everyone's own page, then the team boards; Marketing, Outreach, Clients and Pipeline: their team boards
+// (docs/PHASE2.md §11).
 const board = (module, name, groups, owner = '') => ({ id: id('b'), module, name: owner ? '' : name, owner, groups });
 const group = (name, color, items) => ({ id: id('g'), name, color, items });
 
@@ -157,6 +158,14 @@ function boards() {
       group('To do', '#c9ffe6', [
         item('Northside Diocese preview site', { people: ['josh'], status: 'In progress', priority: 'High', due: '2026-10-22' }),
         item('Coastal Rail preview with sample assets', { people: ['josh', 'david'], status: 'Not started', priority: 'Medium', due: '2026-10-28' }),
+      ]),
+    ]),
+    board('pipeline', 'Work in Progress', [
+      group('Active', '#c9ffe6', [
+        item('Westbay Council', { details: 'Onboarding: asset register import and staff training', status: 'In progress', people: ['david'] }),
+        item('Northside Diocese', { details: 'Scope document for the condition audit', status: 'In progress', people: ['josh'] }),
+        item('Harbour Construction', { details: 'Pilot review with the site team', status: 'Stuck', people: ['david', 'josh'] }),
+        item('Coastal Rail', { details: 'Preview with sample assets', status: 'Not started', people: ['josh'] }),
       ]),
     ]),
   ];

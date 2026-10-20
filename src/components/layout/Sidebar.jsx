@@ -4,7 +4,7 @@ import { useStore, useUsers } from '@/data/store';
 import { Avatar, Modal, Popover } from '@/components/ui';
 import NewBoardModal from '@/components/board/NewBoard';
 import { ROLE_LABELS, roleOf, useAccess } from '@/lib/access';
-import { BOARD_MODULES, MODULE_HOMES, boardHref, boardTitle, personalBoard, resolveBoard } from '@/lib/boards';
+import { MENU_BOARD_MODULES, MODULE_HOMES, boardHref, boardTitle, personalBoard, resolveBoard } from '@/lib/boards';
 import { hashParam } from '@/lib/router';
 import { cn } from '@/lib/cn';
 
@@ -39,7 +39,7 @@ function useBoardNav(route, sub) {
   const access = useAccess();
   const visible = (state.boards || []).filter(access.canViewBoard);
   const own = personalBoard(state, state.me);
-  const lists = Object.fromEntries(BOARD_MODULES.map((m) => [m, [
+  const lists = Object.fromEntries(MENU_BOARD_MODULES.map((m) => [m, [
     ...(MODULE_HOMES[m] ? [MODULE_HOMES[m]] : []),
     ...[
       ...(m === 'projects' && own && visible.includes(own) ? [own] : []),
@@ -47,7 +47,7 @@ function useBoardNav(route, sub) {
     ].map((b) => ({ id: b.id, href: boardHref(b), title: boardTitle(state, b) })),
   ]]));
   const home = !sub && MODULE_HOMES[route];
-  const current = home || !BOARD_MODULES.includes(route) ? null : resolveBoard(state, visible, route, sub, hashParam('item'));
+  const current = home || !MENU_BOARD_MODULES.includes(route) ? null : resolveBoard(state, visible, route, sub, hashParam('item'));
   return { lists, current: home ? home.id : current?.id || '', isAdmin: access.isAdmin };
 }
 
@@ -213,7 +213,7 @@ export default function Sidebar({ route, sub }) {
   const { lists, current, isAdmin } = useBoardNav(route, sub);
   // Which board sections are open: the current module's, plus whatever was toggled; going into a module opens it.
   const [open, setOpen] = useState(() => ({ [route]: true }));
-  useEffect(() => { if (BOARD_MODULES.includes(route)) setOpen((o) => (o[route] ? o : { ...o, [route]: true })); }, [route]);
+  useEffect(() => { if (MENU_BOARD_MODULES.includes(route)) setOpen((o) => (o[route] ? o : { ...o, [route]: true })); }, [route]);
   const [adding, setAdding] = useState(null); // module getting a new board
 
   return (
@@ -228,7 +228,7 @@ export default function Sidebar({ route, sub }) {
       <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 text-[14px]">
         {nav.map((item) => {
           const { id, label, icon: Icon, badge } = item;
-          if (!collapsed && BOARD_MODULES.includes(id)) {
+          if (!collapsed && MENU_BOARD_MODULES.includes(id)) {
             return (
               <BoardSection key={id} item={item} route={route} boards={lists[id]} current={current} open={!!open[id]}
                 onToggle={() => setOpen((o) => ({ ...o, [id]: !o[id] }))} onNew={isAdmin ? () => setAdding(id) : undefined} />
@@ -262,7 +262,7 @@ export default function Sidebar({ route, sub }) {
 export function MobileNav({ route, sub }) {
   const nav = useNav();
   const { lists, current, isAdmin } = useBoardNav(route, sub);
-  const boards = BOARD_MODULES.includes(route) ? lists[route] : null;
+  const boards = MENU_BOARD_MODULES.includes(route) ? lists[route] : null;
   const label = nav.find((n) => n.id === route)?.label;
   const [adding, setAdding] = useState(false);
   // Keep the current board's chip in view in its scrolling row.

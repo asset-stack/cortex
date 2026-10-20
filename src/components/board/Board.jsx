@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Calendar, Columns3, ListFilter, MoreHorizontal, Pencil, Plus, Table2, Trash2, User } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { useAccess } from '@/lib/access';
-import { BOARD_SCHEMAS, STATUS } from '@/data/boards';
+import { BOARD_SCHEMAS, STATUS, hasDates, itemWord } from '@/data/boards';
 import { boardHref, boardItems, boardTitle, personalBoard, teamBoards } from '@/lib/boards';
 import { Avatar, ConfirmModal, IconButton, Modal, Popover, SearchField, Segmented } from '@/components/ui';
 import PersonSwitch from '@/components/work/PersonSwitch';
@@ -43,12 +43,17 @@ function RenameBoard({ board, onClose }) {
   );
 }
 
-export default function Board({ board }) {
+/** A board with its views, filters and task drawer. `embedded`: shown on its module's page under the main content (Work
+ *  in Progress on the Pipeline page): a section heading, and its admins' options are Rename only (it isn't in a menu). */
+export default function Board({ board, embedded = false }) {
   const { state, actions } = useStore();
   const access = useAccess();
   const editable = access.canEditBoard(board); // at view: no adding, pickers, drag or typing
   const schema = BOARD_SCHEMAS[board.module];
   const title = boardTitle(state, board);
+  const dated = hasDates(schema); // no dates: no calendar, no sort by due
+  const word = itemWord(schema);
+  const views = dated ? VIEWS : VIEWS.filter((v) => v.id !== 'calendar');
   const [view, setView] = useState('table');
   const [q, setQ] = useState('');
   const [person, setPerson] = useState('');
@@ -69,8 +74,9 @@ export default function Board({ board }) {
   // delete, move), focus fell to the page: start keyboard users at this board's title instead of the top.
   const heading = useRef(null);
   useEffect(() => {
+    if (embedded) return; // part of its module's page, which opened at the top
     if (!document.activeElement || document.activeElement === document.body) heading.current?.focus({ preventScroll: true });
-  }, []);
+  }, [embedded]);
 
   const groups = useMemo(() => (board.groups || []).map((g) => {
     let items = g.items.filter((it) => added.includes(it.id) || (
@@ -121,7 +127,9 @@ export default function Board({ board }) {
     <div>
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-3">
-          <h1 ref={heading} tabIndex={-1} className="page-title min-w-0 break-words text-[34px] md:text-[44px] leading-none outline-none">{title}</h1>
+          {embedded
+            ? <h2 ref={heading} tabIndex={-1} className="page-title min-w-0 break-words text-[26px] md:text-[32px] leading-none outline-none">{title}</h2>
+            : <h1 ref={heading} tabIndex={-1} className="page-title min-w-0 break-words text-[34px] md:text-[44px] leading-none outline-none">{title}</h1>}
           {people.length > 1 && <PersonSwitch value={board.owner} onChange={showPerson} people={people} />}
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -131,15 +139,15 @@ export default function Board({ board }) {
             </span>
           )}
           {editable && (
-            <button type="button" onClick={newTask} aria-label="New task" title="New task"
+            <button type="button" onClick={newTask} aria-label={`New ${word.toLowerCase()}`} title={`New ${word.toLowerCase()}`}
               className="btn-primary inline-flex h-11 w-11 shrink-0 items-center justify-center gap-2 rounded-full font-semibold sm:w-auto sm:px-5">
-              <Plus className="h-4 w-4" /><span className="hidden sm:inline">New task</span>
+              <Plus className="h-4 w-4" /><span className="hidden sm:inline">New {word.toLowerCase()}</span>
             </button>
           )}
         </div>
       </div>
       <div className="mt-6 flex flex-wrap items-center gap-2">
-        <Segmented options={VIEWS} value={view} onChange={setView} label="View" />
+        <Segmented options={views} value={view} onChange={setView} label="View" />
         <SearchField value={q} onChange={setQ} />
         <span ref={setPersonAnchor}>
           <IconButton icon={User} label={person ? 'Person filter on' : 'Filter by person'} active={!!person} onClick={() => setPopover(popover === 'person' ? null : 'person')} />
@@ -147,7 +155,7 @@ export default function Board({ board }) {
         <span ref={setStatusAnchor}>
           <IconButton icon={ListFilter} label={status ? `Status: ${status}` : 'Filter by status'} active={!!status} onClick={() => setPopover(popover === 'status' ? null : 'status')} />
         </span>
-        <IconButton icon={ArrowUpDown} label={sortDue ? 'Sorted by due date' : 'Sort by due date'} active={sortDue} onClick={() => setSortDue((s) => !s)} />
+        {dated && <IconButton icon={ArrowUpDown} label={sortDue ? 'Sorted by due date' : 'Sort by due date'} active={sortDue} onClick={() => setSortDue((s) => !s)} />}
       </div>
 
       <Popover anchor={personAnchor} open={popover === 'person'} onClose={() => setPopover(null)} width={190} align="right">
@@ -170,9 +178,13 @@ export default function Board({ board }) {
         <Popover anchor={optionsAnchor} open={popover === 'options'} onClose={() => setPopover(null)} width={190} align="right">
           <div className="flex flex-col">
             <button type="button" className={MENU_ITEM} onClick={fromMenu(() => setRenaming(true))}><Pencil className="h-4 w-4 dim" />Rename</button>
-            <button type="button" className={MENU_ITEM} disabled={at <= 0} onClick={fromMenu(() => actions.moveBoard(board.id, -1))}><ArrowUp className="h-4 w-4 dim" />Move up</button>
-            <button type="button" className={MENU_ITEM} disabled={at < 0 || at >= team.length - 1} onClick={fromMenu(() => actions.moveBoard(board.id, 1))}><ArrowDown className="h-4 w-4 dim" />Move down</button>
-            <button type="button" className={MENU_ITEM} onClick={fromMenu(() => setDeleting(true))}><Trash2 className="h-4 w-4 dim" />Delete board</button>
+            {!embedded && (
+              <>
+                <button type="button" className={MENU_ITEM} disabled={at <= 0} onClick={fromMenu(() => actions.moveBoard(board.id, -1))}><ArrowUp className="h-4 w-4 dim" />Move up</button>
+                <button type="button" className={MENU_ITEM} disabled={at < 0 || at >= team.length - 1} onClick={fromMenu(() => actions.moveBoard(board.id, 1))}><ArrowDown className="h-4 w-4 dim" />Move down</button>
+                <button type="button" className={MENU_ITEM} onClick={fromMenu(() => setDeleting(true))}><Trash2 className="h-4 w-4 dim" />Delete board</button>
+              </>
+            )}
           </div>
         </Popover>
       )}

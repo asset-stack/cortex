@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, MessageCircle, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { findBoard } from '@/lib/boards';
+import { itemWord } from '@/data/boards';
 import { ConfirmModal, InlineRename, LabelPicker, PeoplePicker, Popover } from '@/components/ui';
 import { shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
@@ -25,14 +26,31 @@ function StatusBar({ items }) {
   );
 }
 
-function AddRow({ onAdd, colSpan }) {
+// A text column (Work in Progress' Details): typed in place, saved when you leave it or press Enter (Escape undoes).
+function TextCell({ value, label, readOnly, onSave }) {
+  const [v, setV] = useState(value);
+  useEffect(() => { setV(value); }, [value]);
+  if (readOnly) return <span className="block px-1.5 py-1.5 dim">{value || '—'}</span>;
+  const save = () => { if (v.trim() !== value) onSave(v.trim()); };
+  return (
+    <input value={v} aria-label={label} placeholder="—" onChange={(e) => setV(e.target.value)} onBlur={save}
+      onKeyDown={(e) => {
+        if (e.nativeEvent.isComposing) return;
+        if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+        if (e.key === 'Escape') { e.preventDefault(); setV(value); }
+      }}
+      className="w-full rounded-lg bg-transparent px-1.5 py-1.5 outline-none hover:bg-white/5 focus:bg-white/10" />
+  );
+}
+
+function AddRow({ onAdd, colSpan, word = 'task' }) {
   const [v, setV] = useState('');
   return (
     <tr className="border-t rowline">
       <td className="p-3 text-center dimmer"><Plus className="h-4 w-4 inline" /></td>
       <td colSpan={colSpan} className="p-1.5">
         <form onSubmit={(e) => { e.preventDefault(); if (v.trim()) { onAdd(v.trim()); setV(''); } }}>
-          <input value={v} onChange={(e) => setV(e.target.value)} placeholder="Add task" aria-label="Add task"
+          <input value={v} onChange={(e) => setV(e.target.value)} placeholder={`Add ${word}`} aria-label={`Add ${word}`}
             className="w-full rounded-lg bg-transparent px-1.5 py-1.5 outline-none focus:bg-white/10" />
         </form>
       </td>
@@ -133,9 +151,11 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                     <thead>
                       <tr className="text-[12px] dimmer">
                         <th className="w-12 p-3"><span className="sr-only">Done</span></th>
-                        <th className="text-left p-3 font-medium">Task</th>
+                        <th className="text-left p-3 font-medium">{itemWord(schema)}</th>
                         <th className="w-10"><span className="sr-only">Updates</span></th>
-                        {schema.columns.map((c) => <th key={c.key} className="p-3 font-medium w-[124px]">{c.label}</th>)}
+                        {schema.columns.map((c) => (
+                          <th key={c.key} className={cn('p-3 font-medium', c.type === 'text' ? 'min-w-[220px] text-left' : 'w-[124px]')}>{c.label}</th>
+                        ))}
                         {!readOnly && <th className="w-[80px]"><span className="sr-only">Actions</span></th>}
                       </tr>
                     </thead>
@@ -174,6 +194,14 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                                   <td key={c.key} className="text-center">
                                     <PeoplePicker value={it.values.people || []} label={`${c.label} for ${it.name}`} readOnly={readOnly}
                                       onChange={(v) => actions.updateItem(boardId, it.id, { values: { people: v } })} />
+                                  </td>
+                                );
+                              }
+                              if (c.type === 'text') {
+                                return (
+                                  <td key={c.key} className="px-1.5">
+                                    <TextCell value={String(val)} label={`${c.label} for ${it.name}`} readOnly={readOnly}
+                                      onSave={(v) => actions.updateItem(boardId, it.id, { values: { [c.key]: v } })} />
                                   </td>
                                 );
                               }
@@ -216,7 +244,7 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                           </tr>
                         );
                       })}
-                      {!readOnly && <AddRow colSpan={schema.columns.length + 3} onAdd={(name) => onAdd(g.id, name)} />}
+                      {!readOnly && <AddRow colSpan={schema.columns.length + 3} word={itemWord(schema).toLowerCase()} onAdd={(name) => onAdd(g.id, name)} />}
                     </tbody>
                   </table>
                 </div>

@@ -74,7 +74,7 @@ and each admin's Google connection; see section 11), then `0005_work_tools.sql` 
 then `0006_boards.sql` (the boards under Projects and Marketing, and each person's own Projects page), then
 `0007_outreach.sql` (Outreach, read from the outreach agent's Google Sheet, see section 12; and the boards under
 Outreach and Clients, `docs/PHASE2.md` §13), then `0008_pipeline_stages.sql` (Pipeline's stages: Opportunities →
-Contacted → First meetings → Demos; `docs/PHASE2.md` §14).
+Contacted → First meetings → Demos, and Work in Progress under the deals; `docs/PHASE2.md` §14).
 
 Later schema changes arrive as new numbered files in `supabase/migrations/` (`0009_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one.
@@ -139,9 +139,12 @@ again. Afterwards:
 
 **0008 on an existing database**: run it after `0007`, the same way (a new snippet, paste
 `supabase/migrations/0008_pipeline_stages.sql`, **Run**; until merged, take it from its branch or pull request on GitHub).
-It moves deals still at Won to Demos (Pipeline has no Won column any more: a deal made a client leaves the board) and
-lets a meeting booked move a Contacted deal on to First meetings. Nobody needs to close Cortex, it is safe to run
-again, and the app shows any deal still at Won in Demos until it has run.
+It moves deals still at Won to Demos (Pipeline has no Won column any more: a deal made a client leaves the board),
+lets a meeting booked move a Contacted deal on to First meetings, and adds **Work in Progress** under the deals (a
+team board with an *Active* group; **Table Editor** → `boards` lists it with module `pipeline`). Run it **before** the
+new app goes live (the app that's live now works with it): until it has run, the new app shows no Work in Progress and
+a meeting booked leaves a Contacted deal where it is, though it shows any deal still at Won in Demos. Nobody needs to
+close Cortex, and it is safe to run again.
 
 ### Upgrading an existing project
 

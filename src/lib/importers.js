@@ -63,6 +63,7 @@ export const FIELDS = {
     field('channel', 'Channel', 'text', ['channel', 'platform'], { column: true }),
     field('approval', 'Approval', 'text', ['approval', 'approved', 'approval status'], { column: true }),
     field('due', 'Due', 'date', ['due', 'due date', 'deadline', 'due on', 'date'], { column: true }),
+    field('details', 'Details', 'text', ['details', 'detail', 'summary'], { column: true }),
     field('notes', 'Notes', 'note', [...NOTES, 'update', 'updates']),
     field('created', 'Created', 'ts', CREATED),
   ],
@@ -259,15 +260,15 @@ function priority(v, allowP3) {
 }
 
 const [OPPORTUNITIES, CONTACTED, MEETINGS, DEMOS] = DEAL_STAGES;
-// Lost or negated ("Won't proceed", "Not signed") is back to Opportunities. Won, signed or client wording is the last
+// Lost or negated ("Won't proceed", "Not signed", "Uncontacted") is back to Opportunities. Won, signed or client wording is the last
 // stage, Demos, where Make client is (there's no Won column); a client or onboarding mention only once demo and meeting
 // wording is ruled out ("Client demo", "Onboarding call"). Contacted, emailed or reached out is Contacted.
 function dealStage(v) {
   const s = norm(v);
   return exactly(s, DEAL_STAGES)
-    || (/lost|\bnot\b|\bnever\b|\bno\b|won['’]t/.test(s) && OPPORTUNITIES)
+    || (/lost|\bnot\b|\bnever\b|\bno\b|won['’]t|\bun ?-?(contacted|sent|emailed|reached)/.test(s) && OPPORTUNITIES)
     || (/\bwon\b|closed|\bsigned\b/.test(s) && DEMOS)
-    || (/demo|proposal|pilot|trial|negotiat/.test(s) && DEMOS)
+    || (/demo|proposal|quote|contract|pilot|trial|negotiat/.test(s) && DEMOS)
     || (/meeting|call|discovery/.test(s) && MEETINGS)
     || (/contacted|emailed|reached|outreach|\bsent\b/.test(s) && CONTACTED)
     || (/client|onboard/.test(s) && DEMOS)

@@ -1,21 +1,26 @@
-// The boards under Projects, Marketing, Outreach and Clients (state.boards, docs/PHASE2.md §11): team boards (Landing
-// Page, Posting schedule, Sales Tasks, Demos …) and each person's own Projects page (`owner` set). Pure helpers; access
-// rules are in src/lib/access.js.
+// The boards under Projects, Marketing, Outreach and Clients, and on the Pipeline page (state.boards, docs/PHASE2.md
+// §11): team boards (Landing Page, Posting schedule, Sales Tasks, Demos, Work in Progress …) and each person's own
+// Projects page (`owner` set). Pure helpers; access rules are in src/lib/access.js.
 // Relative imports with extensions, so scripts/test-sync.mjs can load this file in Node.
 
-export const BOARD_MODULES = ['projects', 'marketing', 'outreach', 'clients'];
+export const BOARD_MODULES = ['projects', 'marketing', 'outreach', 'clients', 'pipeline'];
+// Modules whose boards sit on the module's own page, under its main content (Pipeline: Work in Progress under the
+// deals), rather than in the sidebar; the others list theirs as sub-menus.
+export const PAGE_BOARD_MODULES = ['pipeline'];
+export const MENU_BOARD_MODULES = BOARD_MODULES.filter((m) => !PAGE_BOARD_MODULES.includes(m));
 
-// What each module starts with: 0006 for Projects and Marketing, 0007 for Outreach and Clients. `existing`: where the
-// module's groups from before sub-boards go.
+// What each module starts with: 0006 for Projects and Marketing, 0007 for Outreach and Clients, 0008 for Pipeline.
+// `existing`: where the module's groups from before sub-boards go.
 export const STARTING_BOARDS = {
   projects: ['Landing Page', 'Tender Portal', 'General'],
   marketing: ['Daily Automation', 'Posting schedule', 'Campaigns', 'Events'],
   outreach: ['Sales Tasks'],
   clients: ['Demos', 'Previews'],
+  pipeline: ['Work in Progress'],
 };
 export const EXISTING_BOARD = { projects: 'General', marketing: 'Posting schedule' };
 // The group a new board starts with, so it has somewhere to add tasks.
-export const FIRST_GROUP = { projects: 'Active', marketing: 'To do', outreach: 'To do', clients: 'To do' };
+export const FIRST_GROUP = { projects: 'Active', marketing: 'To do', outreach: 'To do', clients: 'To do', pipeline: 'Active' };
 // Modules whose menu starts with their own page (#/outreach: the email dashboard; #/clients: the client list), then
 // their boards (#/<module>/<board id>). `id` is the menu entry's, unique across modules.
 export const MODULE_HOMES = {
@@ -66,6 +71,6 @@ export function resolveBoard(state, visible, module, sub, itemId) {
   if (named) return named;
   const holding = itemId && mine.find((b) => b.groups.some((g) => g.items.some((i) => i.id === itemId)));
   if (holding) return holding;
-  if (MODULE_HOMES[module]) return null;
+  if (MODULE_HOMES[module] || PAGE_BOARD_MODULES.includes(module)) return null;
   return (module === 'projects' && mine.find((b) => b.owner === state?.me)) || mine.find((b) => !b.owner) || mine[0];
 }

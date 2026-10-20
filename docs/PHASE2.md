@@ -667,7 +667,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   staying in their module, re-runs); `scripts/test-sync.mjs` (the starting boards against 0006 and 0007, no default
   board for Outreach and Clients, the seed and `migrate()`, access by module level).
 
-## 14. 0008: Pipeline — Opportunities → Contacted → First meetings → Demos; editable deals
+## 14. 0008: Pipeline — Opportunities → Contacted → First meetings → Demos; editable deals; Work in Progress
 
 - **Owner's ask**: deals editable; Won replaced by **Contacted**, between Opportunities and First meetings.
 - **Owner's decisions**: **Make client** is on the **Demos** column (the last); a deal made a client leaves the board (it
@@ -680,12 +680,26 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   `contact_pipeline()` as 0003's with one change: a booking moves a deal to First meetings from Opportunities **or
   Contacted** (never back from later stages). Safe to re-run, also statement by statement.
 - **App**: each card has **Edit** (Pipeline edit) opening **Edit deal**: organisation, sector, value, owner, priority,
-  next step and stage, **Delete deal** (asks first) and, on Demos, **Make client**. Store actions `updateDeal(id, patch)`
+  next step and stage, **Delete deal** (asks first) and, on Demos, **Make client**. Saving sends only the fields changed
+  in the form, so a change made meanwhile (by a teammate or the booking automation) stays; the form closes if the deal is
+  deleted or made a client meanwhile. **Make client** (on a Demos card, or in Edit deal once the stage is Demos) asks
+  first (“Make <name> a client?”); in Edit deal it saves the form's changes first, so a corrected name is the client's
+  name. Keyboard focus returns to the deal's Edit button (or New deal when it's gone). Store actions `updateDeal(id, patch)`
   (cleaned by `cleanDealPatch()`: text trimmed, a value of 0 or more, a known priority and stage, an owner who is a user)
   and `removeDeal(id)`; `moveDeal` refuses an unknown stage. Demo mode's `contactPipelineLocal()` follows the same
-  booking rule; imports map won / signed / client wording to Demos and contacted / emailed wording to Contacted;
+  booking rule; imports map won / signed / quote / contract / client wording to Demos, contacted / emailed wording to
+  Contacted, and negated wording (“Not signed”, “Uncontacted”) to Opportunities;
   `migrate()` moves saved demo deals at Won to Demos.
-- **Tests**: `scripts/test-db.mjs` checks 59–62 (0008 re-runs, Won → Demos, the booking rule, who edits and deletes);
-  `scripts/test-sync.mjs` (stages and `dealStage()`, `cleanDealPatch()`, the booking rule, import mapping, seed and
-  `migrate()`).
+- **Work in Progress** (owner's ask: a projects-style list under the Pipeline, columns Client, Details, Status, Contact):
+  a team board of a new board module, `pipeline`, shown on the Pipeline page under the deals (not in the sidebar:
+  `PAGE_BOARD_MODULES`). Its schema (`BOARD_SCHEMAS.pipeline`) calls a row a **Client** (`item`), with **Details** (a
+  new `text` column type, typed in place), **Status** and **Contact** (the `people` column, so a row shows in its
+  contact's My Work). No dates, so no Calendar view or sort by due. It follows the Pipeline level like any team board
+  (admins edit; staff read it at the default View); on the page its admin options are Rename only. 0008 widens the
+  three board-module checks to `pipeline` and starts Work in Progress with an *Active* group, in one statement, only
+  the first time (a re-run never brings back a deleted one). Imports to it map a Details column to `details`; its time
+  counts towards Clients in the suggested timesheet.
+- **Tests**: `scripts/test-db.mjs` checks 59–63 (0008 re-runs, Won → Demos, the booking rule, who edits and deletes,
+  Work in Progress); `scripts/test-sync.mjs` (stages and `dealStage()`, `cleanDealPatch()`, the booking rule, import
+  mapping, Work in Progress's columns and import, seed and `migrate()`).
 

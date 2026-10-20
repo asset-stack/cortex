@@ -3,12 +3,24 @@ import { Pencil, Trash2, X } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { useAccess } from '@/lib/access';
 import { boardHref, boardTitle, findBoard, sameAudience } from '@/lib/boards';
+import { itemWord } from '@/data/boards';
 import { Avatar, ConfirmModal, Drawer, InlineRename, LabelPicker, PeoplePicker, QuickAdd } from '@/components/ui';
 import { MessageText } from '@/lib/mentions';
 import { ago, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
 const ICON = 'grid h-8 w-8 shrink-0 place-items-center rounded-full dimmer hover:bg-white/10 hover:text-white';
+
+// A text column (Work in Progress' Details): saved when you leave it (Escape undoes what you typed).
+function TextField({ value, label, onSave }) {
+  const [v, setV] = useState(value);
+  useEffect(() => { setV(value); }, [value]);
+  return (
+    <textarea value={v} aria-label={label} rows={2} className="field !py-1.5 resize-y" onChange={(e) => setV(e.target.value)}
+      onBlur={() => { if (v.trim() !== value) onSave(v.trim()); }}
+      onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setV(value); } }} />
+  );
+}
 
 export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly = false }) {
   const { state, actions } = useStore();
@@ -56,7 +68,7 @@ export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly 
     <Drawer open={!!item} onClose={onClose} title={title}>
       {item && (
         <div className="flex flex-col gap-6">
-          <input value={nameDraft ?? item.name} aria-label="Task name" className="field text-[16px] font-semibold" readOnly={readOnly}
+          <input value={nameDraft ?? item.name} aria-label={`${itemWord(schema)} name`} className="field text-[16px] font-semibold" readOnly={readOnly}
             onChange={(e) => {
               const v = e.target.value;
               if (v.trim()) { setNameDraft(null); actions.updateItem(boardId, item.id, { name: v }); } else setNameDraft(v);
@@ -65,7 +77,7 @@ export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly 
 
           <div className="grid grid-cols-2 gap-3">
             {schema.columns.map((c) => (
-              <div key={c.key} className="flex flex-col gap-1.5">
+              <div key={c.key} className={cn('flex flex-col gap-1.5', c.type === 'text' && 'col-span-2')}>
                 <span className="text-[12px] dimmer">{c.label}</span>
                 {c.type === 'people' && (
                   <div>
@@ -73,6 +85,10 @@ export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly 
                       onChange={(v) => actions.updateItem(boardId, item.id, { values: { people: v } })} />
                   </div>
                 )}
+                {c.type === 'text' && (readOnly
+                  ? <span className="py-1.5">{item.values[c.key] || '—'}</span>
+                  : <TextField value={String(item.values[c.key] ?? '')} label={c.label}
+                      onSave={(v) => actions.updateItem(boardId, item.id, { values: { [c.key]: v } })} />)}
                 {c.type === 'date' && (readOnly
                   ? <span className="py-1.5 tnum">{shortDate(item.values[c.key])}</span>
                   : <input type="date" value={item.values[c.key] || ''} className="field !py-1.5" aria-label={c.label}

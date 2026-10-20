@@ -62,7 +62,22 @@ export const BOARD_SCHEMAS = {
       { key: 'due', label: 'Due', type: 'date' },
     ],
   },
+  // Work in Progress, under the deals on the Pipeline page: a row per client (`item`: what a row is called), its
+  // details, status and contact (the team member on it; `people`, so it shows in their My Work).
+  pipeline: {
+    title: 'Pipeline',
+    icon: 'GitBranch',
+    item: 'Client',
+    columns: [
+      { key: 'details', label: 'Details', type: 'text' },
+      { key: 'status', label: 'Status', type: 'status', options: STATUS },
+      { key: 'people', label: 'Contact', type: 'people' },
+    ],
+  },
 };
+// What a board's rows are called ("Task", or "Client" on Work in Progress), and whether it has dates (the calendar).
+export const itemWord = (schema) => schema?.item || 'Task';
+export const hasDates = (schema) => (schema?.columns || []).some((c) => c.type === 'date');
 
 // Item values with `people` as a clean list of user ids (the people column). Phase 1's single `owner` becomes
 // people, as the 0002 migration does in the database.
