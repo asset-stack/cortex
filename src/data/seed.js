@@ -431,16 +431,16 @@ export function createSeed() {
   const deals = [
     deal('City of Lakeside', 'Government', 70000, 'P2', 'Opportunities', 'josh', 'Intro call'),
     deal('Riverbend Water', 'Utilities', 220000, 'P1', 'Opportunities', 'david', 'Send digital twin brief', contactId('Riley Shaw')),
-    deal('Coastal Rail', 'Transport', 160000, 'P2', 'Opportunities', 'hello', 'PDF walkthrough', contactId('Casey Ng')),
+    deal('Coastal Rail', 'Transport', 160000, 'P2', 'Contacted', 'hello', 'PDF walkthrough', contactId('Casey Ng')),
     deal('Shire of Southcliff', 'Government', 55000, 'P2', 'First meetings', 'josh', 'Thursday 10am walkthrough', contactId('Morgan Hale')),
     deal('Eastgate University Facilities', 'Education', 90000, 'P3', 'First meetings', 'david', 'Confirm campus list'),
     deal('Northside Diocese', 'Healthcare', 110000, 'P1', 'Demos', 'josh', 'Scope document', contactId('Jordan Price')),
     deal('Harbour Construction', 'Construction', 190000, 'P1', 'Demos', 'david', 'Pilot review'),
-    deal('Westbay Council', 'Government', 130000, 'P1', 'Won', 'david', 'Onboarding', contactId('Alex Taylor')),
+    deal('Westbay Council', 'Government', 130000, 'P1', 'Demos', 'david', 'Onboarding', contactId('Alex Taylor')),
   ];
-  // Won deals that already have a client start linked, so Pipeline shows "Client", not "Make client".
+  // Westbay was made a client: its deal is linked, so it has left the board and counts in Made clients.
   deals.forEach((dl) => {
-    if (dl.stage !== 'Won') return;
+    if (dl.name !== 'Westbay Council') return;
     const c = seedClients.find((x) => x.name === dl.name);
     if (c) dl.clientId = c.id;
   });
@@ -599,6 +599,8 @@ export function migrate(data) {
 
   (data.contacts || []).forEach((c) => { c.owner ??= ''; });
   (data.deals || []).forEach((dl) => { dl.contactId ??= ''; });
+  // Won is no longer a stage (0008): a deal there moves to Demos (one made a client has left the board anyway).
+  (data.deals || []).forEach((dl) => { if (dl.stage === 'Won') dl.stage = 'Demos'; });
   (data.clients || []).forEach((c) => {
     c.abn ??= '';
     c.billingAddress ??= '';

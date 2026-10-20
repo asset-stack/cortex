@@ -73,9 +73,10 @@ Then run `supabase/migrations/0004_clients_google.sql` the same way (client cont
 and each admin's Google connection; see section 11), then `0005_work_tools.sql` (each person's Tools in My Work),
 then `0006_boards.sql` (the boards under Projects and Marketing, and each person's own Projects page), then
 `0007_outreach.sql` (Outreach, read from the outreach agent's Google Sheet, see section 12; and the boards under
-Outreach and Clients, `docs/PHASE2.md` §13).
+Outreach and Clients, `docs/PHASE2.md` §13), then `0008_pipeline_stages.sql` (Pipeline's stages: Opportunities →
+Contacted → First meetings → Demos; `docs/PHASE2.md` §14).
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0008_…`). Run each new file
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0009_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one.
 
 **0003 on a database that already has 0002**: **SQL Editor** → **+** → **Create a new snippet**, paste
@@ -135,6 +136,12 @@ again. Afterwards:
   **Settings** → **Team**: staff see Outreach's boards only once given View or Edit, and read Clients' boards (View by
   default) until given Edit.
 - Then redeploy the `google` function, deploy the new app and set up Outreach (section 12).
+
+**0008 on an existing database**: run it after `0007`, the same way (a new snippet, paste
+`supabase/migrations/0008_pipeline_stages.sql`, **Run**; until merged, take it from its branch or pull request on GitHub).
+It moves deals still at Won to Demos (Pipeline has no Won column any more: a deal made a client leaves the board) and
+lets a meeting booked move a Contacted deal on to First meetings. Nobody needs to close Cortex, it is safe to run
+again, and the app shows any deal still at Won in Demos until it has run.
 
 ### Upgrading an existing project
 

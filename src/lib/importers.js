@@ -258,17 +258,19 @@ function priority(v, allowP3) {
   return 'P2';
 }
 
-const [OPPORTUNITIES, MEETINGS, DEMOS, WON] = DEAL_STAGES;
-// Lost or negated ("Won't proceed", "Not signed") is back to Opportunities. A client or onboarding mention only
-// means Won once demo and meeting wording is ruled out ("Client demo", "Onboarding call").
+const [OPPORTUNITIES, CONTACTED, MEETINGS, DEMOS] = DEAL_STAGES;
+// Lost or negated ("Won't proceed", "Not signed") is back to Opportunities. Won, signed or client wording is the last
+// stage, Demos, where Make client is (there's no Won column); a client or onboarding mention only once demo and meeting
+// wording is ruled out ("Client demo", "Onboarding call"). Contacted, emailed or reached out is Contacted.
 function dealStage(v) {
   const s = norm(v);
   return exactly(s, DEAL_STAGES)
     || (/lost|\bnot\b|\bnever\b|\bno\b|won['’]t/.test(s) && OPPORTUNITIES)
-    || (/\bwon\b|closed|\bsigned\b/.test(s) && WON)
+    || (/\bwon\b|closed|\bsigned\b/.test(s) && DEMOS)
     || (/demo|proposal|pilot|trial|negotiat/.test(s) && DEMOS)
     || (/meeting|call|discovery/.test(s) && MEETINGS)
-    || (/client|onboard/.test(s) && WON)
+    || (/contacted|emailed|reached|outreach|\bsent\b/.test(s) && CONTACTED)
+    || (/client|onboard/.test(s) && DEMOS)
     || OPPORTUNITIES;
 }
 

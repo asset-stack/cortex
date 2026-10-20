@@ -161,7 +161,8 @@ Additive and safe to run once on the live database (which may already hold rows)
   `Replied` or `Meeting booked`: if no deal has `contact_id = new.id`, insert one (`name` = org if set else name,
   stage `Opportunities` for Replied / `First meetings` for Meeting booked, `owner_id` = contact owner or `auth.uid()`,
   `priority 'P2'`, `next_step` 'Reply to <name>' / 'Prepare meeting with <name>', position at the end);
-  if one exists and the new status is `Meeting booked` while the deal is in `Opportunities`, move it to `First meetings`.
+  if one exists and the new status is `Meeting booked` while the deal is in `Opportunities` (or, since 0008, `Contacted`:
+  §14), move it to `First meetings`.
   Then insert an automation to-do for that owner for `team_today()` (`user_today(owner)` since 0003) (`ref 'contact:<id>'`, category `Outreach`,
   title 'Follow up: <name> replied' / 'Prepare: meeting with <name>') `on conflict do nothing`.
 - Storage: private bucket `finance` (`insert into storage.buckets … on conflict do nothing`); `storage.objects`
@@ -218,8 +219,9 @@ The round-trip property must hold for every table. Rows the user can't read simp
   read-only at `view` (per board since 0006, §11).
 - **Outreach**: contact status select (New → Meeting booked …) and owner; read-only at `view`. Since 0007 the page is
   the agent's dashboard, with this contact list kept as its **Contacts** view (§12).
-- **Pipeline**: read-only for `view` (no drag, no stage select, no New deal, no Make client); deal card shows a small
-  link icon when it came from a contact.
+- **Pipeline**: read-only for `view` (no drag, no stage select, no Edit, no New deal, no Make client); deal card shows a
+  small link icon when it came from a contact. Since 0008 the columns are Opportunities → Contacted → First meetings →
+  Demos, each card has **Edit**, and Make client is on Demos (§14).
 - **Clients**: top-level tabs **Clients · Invoices · Money in · Expenses · Usage** (Money in and Expenses admins only;
   Usage shows client usage to all who can view clients and *Software costs* to admins only).
   Invoices tab: all invoices across clients, *Awaiting approval* first, **Approve** / **Mark as sent** / **Print / PDF**
@@ -664,3 +666,26 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Tests**: `scripts/test-db.mjs` check 58 (the starting boards once, the widened checks, who reads and writes, tasks
   staying in their module, re-runs); `scripts/test-sync.mjs` (the starting boards against 0006 and 0007, no default
   board for Outreach and Clients, the seed and `migrate()`, access by module level).
+
+## 14. 0008: Pipeline — Opportunities → Contacted → First meetings → Demos; editable deals
+
+- **Owner's ask**: deals editable; Won replaced by **Contacted**, between Opportunities and First meetings.
+- **Owner's decisions**: **Make client** is on the **Demos** column (the last); a deal made a client leaves the board (it
+  lives in Clients) and counts in the **Made clients** KPI (was Won). Existing Won deals: those made clients stay off the
+  board, the rest move to Demos. Editing a deal is Pipeline edit (admins, and staff given Edit), as moving one always was.
+- **Stages**: `DEAL_STAGES = ['Opportunities', 'Contacted', 'First meetings', 'Demos']` (`src/data/boards.js`).
+  `deals.stage` is free text (no check); `dealStage(deal)` shows a stage the board doesn't have in Demos for the old Won
+  (an old browser tab may still write one) and in Opportunities otherwise, so no deal goes missing.
+- **Database** (`0008_pipeline_stages.sql`): `update deals set stage = 'Demos' where stage = 'Won'`, and
+  `contact_pipeline()` as 0003's with one change: a booking moves a deal to First meetings from Opportunities **or
+  Contacted** (never back from later stages). Safe to re-run, also statement by statement.
+- **App**: each card has **Edit** (Pipeline edit) opening **Edit deal**: organisation, sector, value, owner, priority,
+  next step and stage, **Delete deal** (asks first) and, on Demos, **Make client**. Store actions `updateDeal(id, patch)`
+  (cleaned by `cleanDealPatch()`: text trimmed, a value of 0 or more, a known priority and stage, an owner who is a user)
+  and `removeDeal(id)`; `moveDeal` refuses an unknown stage. Demo mode's `contactPipelineLocal()` follows the same
+  booking rule; imports map won / signed / client wording to Demos and contacted / emailed wording to Contacted;
+  `migrate()` moves saved demo deals at Won to Demos.
+- **Tests**: `scripts/test-db.mjs` checks 59–62 (0008 re-runs, Won → Demos, the booking rule, who edits and deletes);
+  `scripts/test-sync.mjs` (stages and `dealStage()`, `cleanDealPatch()`, the booking rule, import mapping, seed and
+  `migrate()`).
+

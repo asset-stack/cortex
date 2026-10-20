@@ -195,10 +195,12 @@ export function clientCreatedLocal(state, clientId, { me = state.me, uid: newId 
 // ── Outreach → Pipeline ────────────────────────────────────────────────────────────────────────────────────
 
 export const PIPELINE_STATUSES = ['Replied', 'Meeting booked'];
+// The stages a booking moves a deal on from (0008's contact_pipeline()).
+const EARLY_STAGES = ['Opportunities', 'Contacted'];
 
 // The contact_pipeline trigger, for a contact whose status was `prevStatus` ('' for a new contact). When it becomes
 // Replied or Meeting booked: a deal for it (named after the organisation, owned by the contact's owner or `me`), or
-// its deal moves from Opportunities to First meetings on a booking; and the owner gets a follow-up to-do for `day`,
+// its deal moves from Opportunities or Contacted to First meetings on a booking (never back from later on); and the owner gets a follow-up to-do for `day`,
 // by default the owner's own today (user_today()), once per contact and day. → { deal, todo } (todo null when it
 // already existed), or null when nothing applies.
 export function contactPipelineLocal(state, contactId, prevStatus = '', { day, me = state.me, uid: newId = uid } = {}) {
@@ -219,7 +221,7 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day, m
       next: booked ? `Prepare meeting with ${name}` : `Reply to ${name}`, contactId: c.id,
     };
     state.deals.push(deal);
-  } else if (booked && deal.stage === 'Opportunities') {
+  } else if (booked && EARLY_STAGES.includes(deal.stage)) {
     deal.stage = 'First meetings';
   }
 

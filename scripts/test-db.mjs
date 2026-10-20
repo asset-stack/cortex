@@ -25,6 +25,7 @@ const migration4 = await readFile(new URL('supabase/migrations/0004_clients_goog
 const migration5 = await readFile(new URL('supabase/migrations/0005_work_tools.sql', root), 'utf8');
 const migration6 = await readFile(new URL('supabase/migrations/0006_boards.sql', root), 'utf8');
 const migration7 = await readFile(new URL('supabase/migrations/0007_outreach.sql', root), 'utf8');
+const migration8 = await readFile(new URL('supabase/migrations/0008_pipeline_stages.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -2448,6 +2449,83 @@ async function asSecretKey() {
 // src/lib/outreach.js has relative imports only, so Node loads it as it is (the store's demo mode runs the same code).
 const outreachLib = () => import('../src/lib/outreach.js');
 
+async function applyMigration8() {
+  await as(null);
+  try {
+    await db.exec(migration8);
+    return null;
+  } catch (e) {
+    await db.exec('rollback').catch(() => {});
+    return e.message;
+  }
+}
+
+// 59–62. 0008: Pipeline's stages are Opportunities → Contacted → First meetings → Demos (no Won) --------------------------
+async function phase8(ctx) {
+  const { david, boss, hello, newcomer } = ctx;
+  const pipelineDef = async () => (await one("select pg_get_functiondef('public.contact_pipeline()'::regprocedure) as d")).d;
+  // Before 0008: a Won deal made a client, a Won deal that wasn't, and deals linked to contacts at Contacted, Demos and
+  // Opportunities.
+  await as(boss);
+  const client = (await one("insert into clients (name) values ('Example Rail') returning id")).id;
+  const deal = async (name, stage, extra = {}) => (await one(`insert into deals (name, stage, owner_id, client_id, contact_id)
+    values ($1, $2, $3, $4, $5) returning id`, [name, stage, boss, extra.client || null, extra.contact || null])).id;
+  const contact = async (name) => (await one("insert into contacts (name, org, status, owner_id) values ($1, 'Example Org', 'Sent', $2) returning id",
+    [name, boss])).id;
+  const wonClient = await deal('Example Rail', 'Won', { client });
+  const wonPlain = await deal('Example Port', 'Won');
+  const [cContacted, cDemos, cOpp] = [await contact('Casey Contacted'), await contact('Dana Demos'), await contact('Oli Opportunity')];
+  const dContacted = await deal('Contacted Org', 'Contacted', { contact: cContacted });
+  const dDemos = await deal('Demos Org', 'Demos', { contact: cDemos });
+  const dOpp = await deal('Opportunity Org', 'Opportunities', { contact: cOpp });
+
+  const first = await applyMigration8();
+  const def1 = await pipelineDef();
+  const second = await applyMigration8();
+  await as(null);
+  const splitErrors = await runSplit(db, migration8, { continueOnError: true });
+  const def2 = await pipelineDef();
+  const stageOf = async (id) => (await one('select stage, client_id from deals where id = $1', [id]));
+  const won = { client: await stageOf(wonClient), plain: await stageOf(wonPlain) };
+  check('59. 0008 runs, re-runs and runs statement by statement (the editor) to the same contact_pipeline(); never mentions module_level',
+    first === null && second === null && splitErrors.length === 0 && def1 === def2 && !/module_level/.test(migration8),
+    { first, second, splitErrors });
+  check('60. 0008: Won deals move to Demos; one made a client keeps it (and stays off the board)',
+    won.client.stage === 'Demos' && won.client.client_id === client && won.plain.stage === 'Demos' && won.plain.client_id === null, won);
+
+  await as(boss);
+  await db.query("update contacts set status = 'Meeting booked' where id = any($1::uuid[])", [[cContacted, cDemos, cOpp]]);
+  const booked = { contacted: (await stageOf(dContacted)).stage, demos: (await stageOf(dDemos)).stage, opp: (await stageOf(dOpp)).stage };
+  check('61. contact_pipeline (0008): a booking moves a deal on to First meetings from Opportunities or Contacted, never back from Demos',
+    booked.contacted === 'First meetings' && booked.opp === 'First meetings' && booked.demos === 'Demos', booked);
+
+  // Editing a deal (Pipeline's Edit deal) is Pipeline edit: admins, and staff only with an Edit override.
+  await as(david);
+  await db.query(`insert into module_access (user_id, module, level) values ($1, 'pipeline', 'edit')
+    on conflict (user_id, module) do update set level = excluded.level`, [newcomer]);
+  const edits = {};
+  for (const [name, user] of Object.entries({ hello, newcomer, boss })) {
+    await as(user);
+    edits[name] = {
+      update: await affected("update deals set name = $2, value = 5000, priority = 'P1', next_step = 'Call' where id = $1", [dOpp, `Edited by ${name}`]),
+      stage: await affected("update deals set stage = 'Contacted' where id = $1", [dOpp]),
+    };
+  }
+  const deletes = {};
+  for (const [name, user, id] of [['hello', hello, dDemos], ['newcomer', newcomer, dDemos], ['boss', boss, dContacted]]) {
+    await as(user);
+    deletes[name] = await affected('delete from deals where id = $1', [id]);
+  }
+  await as(null);
+  check('62. deals: staff at Pipeline view can’t edit, move or delete one; staff with Pipeline edit and admins can',
+    edits.hello.update === 0 && edits.hello.stage === 0 && deletes.hello === 0
+      && edits.newcomer.update === 1 && edits.newcomer.stage === 1 && deletes.newcomer === 1
+      && edits.boss.update === 1 && edits.boss.stage === 1 && deletes.boss === 1,
+    { edits, deletes });
+  await as(null);
+  return ctx;
+}
+
 async function phase7(ctx) {
   const { alice, boss, david, hello, carol, newcomer, early, late } = ctx;
 
@@ -3540,7 +3618,8 @@ try {
   const ctx5 = ctx4 && await phase5(ctx4);
   const ctx6 = ctx5 && await phase6(ctx5);
   const ctx7 = ctx6 && await phase7(ctx6);
-  if (ctx7) await syncWriteCheck(ctx7);
+  const ctx8 = ctx7 && await phase8(ctx7);
+  if (ctx8) await syncWriteCheck(ctx8);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);

@@ -72,7 +72,29 @@ export function withPeople(values) {
   return { ...rest, people: [...new Set([owner, ...list].filter(Boolean).map(String))] };
 }
 
-export const DEAL_STAGES = ['Opportunities', 'First meetings', 'Demos', 'Won'];
+// Pipeline's columns, in order (0008). A deal made a client leaves the board (it lives in Clients); there's no Won.
+export const DEAL_STAGES = ['Opportunities', 'Contacted', 'First meetings', 'Demos'];
+export const DEAL_PRIORITIES = ['P1', 'P2', 'P3'];
+/** The column a deal shows in: its stage, or for a stage the board no longer has, Demos for the old Won (0008 moves
+ *  those in the database; an old browser tab may still write one) and Opportunities for anything else. */
+export const dealStage = (deal) => (DEAL_STAGES.includes(deal?.stage) ? deal.stage : deal?.stage === 'Won' ? 'Demos' : 'Opportunities');
+
+/** A deal's edited fields, cleaned (Pipeline's Edit deal): text trimmed, a value of 0 or more, a known priority and
+ *  stage, and an owner among `userIds` ('' for none). Fields that aren't valid are left out, so the deal keeps them. */
+export function cleanDealPatch(patch = {}, userIds = []) {
+  const text = (v) => String(v ?? '').trim();
+  const out = {};
+  if ('name' in patch && text(patch.name)) out.name = text(patch.name);
+  if ('sector' in patch) out.sector = text(patch.sector);
+  if ('next' in patch) out.next = text(patch.next);
+  if ('value' in patch && patch.value !== '' && patch.value !== null && Number.isFinite(Number(patch.value)) && Number(patch.value) >= 0) {
+    out.value = Number(patch.value);
+  }
+  if ('priority' in patch && DEAL_PRIORITIES.includes(patch.priority)) out.priority = patch.priority;
+  if ('stage' in patch && DEAL_STAGES.includes(patch.stage)) out.stage = patch.stage;
+  if ('contact' in patch) out.contact = userIds.includes(patch.contact) ? patch.contact : '';
+  return out;
+}
 export const CLIENT_STATUSES = {
   Onboarding: '#f5a623',
   Active: '#1fbf86',

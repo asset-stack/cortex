@@ -5,7 +5,7 @@
 // can't do it; RLS is the real enforcement.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createSeed, migrate } from './seed';
-import { withPeople } from './boards';
+import { DEAL_STAGES, cleanDealPatch, withPeople } from './boards';
 import { LIVE, supabase } from '@/data/backend/client';
 import { TABLES, assemble, diff, flatten, normalizeRow, stable } from '@/data/backend/schema';
 import { createSync } from '@/data/backend/sync';
@@ -163,6 +163,7 @@ const newDeal = (r) => {
   const { clientId: _clientId, ...rest } = r;
   return { sector: '', value: 0, priority: 'P2', stage: 'Opportunities', contact: '', next: '', contactId: '', ...rest, id: uid() };
 };
+
 
 // `prev` is the plan before the edit: a date that isn't a real day this century keeps the previous one ('' clears it).
 // The billing day follows the date someone picks; generating invoices moves the date on and keeps it.
@@ -676,8 +677,22 @@ function createActions(mutate, mode) {
     }),
     moveDeal: (dealId, stage) => editing('pipeline', (d) => {
       const x = d.deals.find((v) => v.id === dealId);
-      if (!x) return false;
+      if (!x || !DEAL_STAGES.includes(stage)) return false;
       x.stage = stage;
+      return true;
+    }),
+    // Organisation, sector, value, priority, owner, next step and stage (cleanDealPatch). Refused when nothing valid
+    // changes.
+    updateDeal: (dealId, patch = {}) => editing('pipeline', (d) => {
+      const x = d.deals.find((v) => v.id === dealId);
+      const clean = x && cleanDealPatch(patch, d.users.map((u) => u.id));
+      if (!x || !Object.keys(clean).length) return false;
+      Object.assign(x, clean);
+      return true;
+    }),
+    removeDeal: (dealId) => editing('pipeline', (d) => {
+      if (!d.deals.some((v) => v.id === dealId)) return false;
+      d.deals = d.deals.filter((v) => v.id !== dealId);
       return true;
     }),
     // Needs edit access to the pipeline and to clients. → client id

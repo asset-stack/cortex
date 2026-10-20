@@ -1935,7 +1935,43 @@ await check('automations: contactPipelineLocal names, owners and stages', () => 
   assert.equal(auto.contactPipelineLocal(st, 'missing', ''), null);
   st.deals.push({ id: 'd-demo', name: 'Org', sector: '', value: 0, priority: 'P2', stage: 'Demos', contact: 'stu', next: '', contactId: 'c3' });
   st.contacts[2].status = 'Meeting booked';
-  assert.equal(auto.contactPipelineLocal(st, 'c3', 'Opened', { day: '2026-10-12' }).deal.stage, 'Demos', 'only Opportunities moves on');
+  assert.equal(auto.contactPipelineLocal(st, 'c3', 'Opened', { day: '2026-10-12' }).deal.stage, 'Demos', 'Demos stays put');
+});
+
+await check('automations: a booking moves a deal on from Opportunities or Contacted, never back from later stages (0008)', () => {
+  const at = (stage) => {
+    const st = outreachState();
+    st.deals.push({ id: 'd-x', name: 'Org', sector: '', value: 0, priority: 'P2', stage, contact: 'stu', next: '', contactId: 'c3' });
+    st.contacts[2].status = 'Meeting booked';
+    return auto.contactPipelineLocal(st, 'c3', 'Opened', { day: '2026-10-12' }).deal.stage;
+  };
+  assert.deepEqual(['Opportunities', 'Contacted', 'First meetings', 'Demos'].map(at), ['First meetings', 'First meetings', 'First meetings', 'Demos']);
+});
+
+await check('pipeline: stages Opportunities → Contacted → First meetings → Demos; dealStage() shows the old Won in Demos', async () => {
+  const data = await import('../src/data/boards.js');
+  assert.deepEqual(data.DEAL_STAGES, ['Opportunities', 'Contacted', 'First meetings', 'Demos']);
+  assert.deepEqual(data.DEAL_PRIORITIES, ['P1', 'P2', 'P3']);
+  assert.deepEqual(['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Won', '', 'Lost', undefined].map((stage) => data.dealStage({ stage })),
+    ['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Demos', 'Opportunities', 'Opportunities', 'Opportunities']);
+  assert.equal(data.dealStage(null), 'Opportunities');
+  // 0008 makes the same moves in the database: Won → Demos, the booking rule from Opportunities or Contacted.
+  const sql8 = readFileSync(new URL('0008_pipeline_stages.sql', migrationsDir), 'utf8');
+  assert.match(sql8, /update public\.deals set stage = 'Demos' where stage = 'Won';/);
+  assert.match(sql8, /v_stage in \('Opportunities', 'Contacted'\)/);
+});
+
+await check('pipeline: cleanDealPatch keeps valid edits only (Edit deal)', async () => {
+  const { cleanDealPatch } = await import('../src/data/boards.js');
+  const users = ['u1', 'u2'];
+  assert.deepEqual(cleanDealPatch({ name: '  Example Water ', sector: ' Utilities ', next: ' Call ', value: '250000', priority: 'P1', stage: 'Contacted', contact: 'u2' }, users),
+    { name: 'Example Water', sector: 'Utilities', next: 'Call', value: 250000, priority: 'P1', stage: 'Contacted', contact: 'u2' });
+  assert.deepEqual(cleanDealPatch({ name: '   ', value: -5, priority: 'P9', stage: 'Won', contact: 'ghost' }, users), { contact: '' },
+    'no blank name, negative value, unknown priority or stage; an unknown owner is none');
+  assert.deepEqual(cleanDealPatch({ value: '' }, users), {}, 'an empty value is no change');
+  assert.deepEqual(cleanDealPatch({ value: 0, sector: '' }, users), { value: 0, sector: '' });
+  assert.deepEqual(cleanDealPatch({}, users), {});
+  assert.deepEqual(cleanDealPatch({ id: 'x', clientId: 'c', contactId: 'p' }, users), {}, 'links and ids are never edited');
 });
 
 await check('automations: generateDueInvoicesLocal catches up every period, numbered in order', () => {
@@ -1984,6 +2020,15 @@ await check('automations: a plan more than two years behind (a mistyped year) is
   assert.equal(auto.generateDueInvoicesLocal(st, '2026-10-12'), 9, 'two years back still catches up');
   assert.deepEqual(st.clients[0].plans.map((p) => p.nextDate), ['0026-07-01', '2027-01-12']);
   assert.ok(st.clients[0].invoices.every((i) => i.planId === 'two'));
+});
+
+await check('import: deal stages map to the new columns (won or signed → Demos, contacted → Contacted)', async () => {
+  const { normalise } = await import('../src/lib/importers.js');
+  const stage = (v) => normalise('deals', ['Example Water', v], { name: 0, stage: 1 }, { users: [], me: 'u-me' }).stage;
+  assert.deepEqual(['Opportunities', 'contacted', 'Emailed', 'Reached out', 'First meetings', 'Discovery call', 'Demo booked', 'Proposal',
+    'Won', 'Closed won', 'Signed', 'Client', 'Lost', "Won't proceed", 'Not signed', '', 'Prospect'].map(stage),
+  ['Opportunities', 'Contacted', 'Contacted', 'Contacted', 'First meetings', 'First meetings', 'Demos', 'Demos',
+    'Demos', 'Demos', 'Demos', 'Demos', 'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities']);
 });
 
 await check('import: contact statuses as written, Meeting booked included (negated wording is not a booking)', async () => {
@@ -2572,6 +2617,24 @@ if (createSeed && migrate) {
     assert.ok(!Object.keys(rows).some((t) => t === 'outreach_emails'), 'no emails table in TABLES');
     s.outreachNotes.forEach((n) => assert.ok(s.users.some((u) => u.id === n.author), n.author));
     s.mailboxes.filter((m) => m.owner).forEach((m) => assert.ok(s.users.some((u) => u.id === m.owner), m.owner));
+  });
+
+  await check('pipeline demo: every deal in a column, none at Won; Westbay made a client; older Won deals move to Demos once', async () => {
+    const { DEAL_STAGES } = await import('../src/data/boards.js');
+    const s = createSeed();
+    assert.ok(s.deals.every((d) => DEAL_STAGES.includes(d.stage)), JSON.stringify(s.deals.map((d) => d.stage)));
+    assert.deepEqual(DEAL_STAGES.map((st) => s.deals.filter((d) => d.stage === st && !d.clientId).length).map((n) => n > 0), [true, true, true, true],
+      'something in every column');
+    const westbay = s.deals.find((d) => d.name === 'Westbay Council');
+    assert.ok(westbay.clientId && s.clients.some((c) => c.id === westbay.clientId), 'made a client: off the board');
+    assert.equal(s.deals.filter((d) => d.clientId).length, 1);
+    const old = structuredClone(s);
+    old.deals.forEach((d) => { if (d.clientId) d.stage = 'Won'; });
+    old.deals.push({ id: 'd-won', name: 'Old win', sector: '', value: 1, priority: 'P2', stage: 'Won', contact: 'david', next: '', contactId: '' });
+    const m = migrate(structuredClone(old));
+    assert.deepEqual([m.deals.find((d) => d.id === westbay.id).stage, m.deals.find((d) => d.id === 'd-won').stage], ['Demos', 'Demos']);
+    assert.equal(m.deals.find((d) => d.id === westbay.id).clientId, westbay.clientId, 'its client kept');
+    assert.deepEqual(migrate(structuredClone(m)), m, 'running it again changes nothing');
   });
 
   await check('migrate: older demo data gets Outreach’s and Clients’ starting boards (0007) once; deleting them sticks', () => {
