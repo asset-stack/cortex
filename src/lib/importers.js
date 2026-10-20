@@ -72,7 +72,12 @@ export const FIELDS = {
 /** The fields for a kind; for tasks, only the columns the chosen board has (`board`: its module, a BOARD_MODULES entry). */
 export function fieldsFor(kind, board) {
   const cols = BOARD_SCHEMAS[board]?.columns;
-  return (FIELDS[kind] || []).filter((f) => !f.column || !cols || cols.some((c) => c.key === f.key));
+  const fields = (FIELDS[kind] || []).filter((f) => !f.column || !cols || cols.some((c) => c.key === f.key));
+  // A board that calls a row a Client (Work in Progress) also reads a Client or Organisation column as the name.
+  const item = BOARD_SCHEMAS[board]?.item;
+  return kind === 'tasks' && item === 'Client'
+    ? fields.map((f) => (f.key === 'name' ? { ...f, aliases: [...f.aliases, 'client', 'client name', 'organisation', 'organization', 'company'] } : f))
+    : fields;
 }
 
 // ── Header matching ──────────────────────────────────────────────────────────

@@ -683,8 +683,10 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   next step and stage, **Delete deal** (asks first) and, on Demos, **Make client**. Saving sends only the fields changed
   in the form, so a change made meanwhile (by a teammate or the booking automation) stays; the form closes if the deal is
   deleted or made a client meanwhile. **Make client** (on a Demos card, or in Edit deal once the stage is Demos) asks
-  first (“Make <name> a client?”); in Edit deal it saves the form's changes first, so a corrected name is the client's
-  name. Keyboard focus returns to the deal's Edit button (or New deal when it's gone). Store actions `updateDeal(id, patch)`
+  first (“Make <name> a client?”, closed if the deal is deleted or made a client meanwhile); in Edit deal it saves the
+  form's changes first, so a corrected name is the client's name. `convertDeal` refuses a deal already made a client
+  (a teammate's convert that has reached this browser). Keyboard focus returns to the deal's Edit button (or New deal
+  when it's gone). Store actions `updateDeal(id, patch)`
   (cleaned by `cleanDealPatch()`: text trimmed, a value of 0 or more, a known priority and stage, an owner who is a user)
   and `removeDeal(id)`; `moveDeal` refuses an unknown stage. Demo mode's `contactPipelineLocal()` follows the same
   booking rule; imports map won / signed / quote / contract / client wording to Demos, contacted / emailed wording to
@@ -697,7 +699,9 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   contact's My Work). No dates, so no Calendar view or sort by due. It follows the Pipeline level like any team board
   (admins edit; staff read it at the default View); on the page its admin options are Rename only. 0008 widens the
   three board-module checks to `pipeline` and starts Work in Progress with an *Active* group, in one statement, only
-  the first time (a re-run never brings back a deleted one). Imports to it map a Details column to `details`; its time
+  the first time (a re-run never brings back a deleted one). Imports to it map a Details column to `details` and a
+  Client or Organisation column to the name; **New client** adds a row called “New client”. Details keeps line breaks
+  (typed in the drawer; the table cell shows the first line); its time
   counts towards Clients in the suggested timesheet.
 - **Tests**: `scripts/test-db.mjs` checks 59–63 (0008 re-runs, Won → Demos, the booking rule, who edits and deletes,
   Work in Progress); `scripts/test-sync.mjs` (stages and `dealStage()`, `cleanDealPatch()`, the booking rule, import

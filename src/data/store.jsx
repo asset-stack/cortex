@@ -696,9 +696,10 @@ function createActions(mutate, mode) {
       return true;
     }),
     // Needs edit access to the pipeline and to clients. → client id
+    // Once: a deal already made a client (by a teammate meanwhile) is refused.
     convertDeal: (dealId) => mutate((d) => {
       const deal = d.deals.find((v) => v.id === dealId);
-      if (!deal || !canEdit(d, 'pipeline') || !canEdit(d, 'clients')) return false;
+      if (!deal || deal.clientId || !canEdit(d, 'pipeline') || !canEdit(d, 'clients')) return false;
       const existing = d.clients.find((c) => normName(c.name) === normName(deal.name));
       if (existing) { deal.clientId = existing.id; return existing.id; }
       // The deal owner keeps the client; fall back to whoever converts it.

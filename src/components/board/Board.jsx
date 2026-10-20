@@ -92,7 +92,7 @@ export default function Board({ board, embedded = false }) {
     if (id) setAdded((a) => [...a, id]);
     return id || null;
   };
-  const newTask = () => { const id = add(board.groups[0]?.id); if (id) setOpenId(id); };
+  const newTask = () => { const id = add(board.groups[0]?.id, `New ${word.toLowerCase()}`); if (id) setOpenId(id); };
   const closeItem = () => {
     setOpenId(null);
     // Drop ?item= so a reload or Back doesn't reopen it; replaceState fires no hashchange.

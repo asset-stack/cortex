@@ -27,19 +27,20 @@ function StatusBar({ items }) {
 }
 
 // A text column (Work in Progress' Details): typed in place, saved when you leave it or press Enter (Escape undoes).
+// One row of a textarea, not an input: an input drops the line breaks typed in the drawer and runs the lines together.
 function TextCell({ value, label, readOnly, onSave }) {
   const [v, setV] = useState(value);
   useEffect(() => { setV(value); }, [value]);
-  if (readOnly) return <span className="block px-1.5 py-1.5 dim">{value || '—'}</span>;
+  if (readOnly) return <span className="block whitespace-pre-line px-1.5 py-1.5 dim">{value || '—'}</span>;
   const save = () => { if (v.trim() !== value) onSave(v.trim()); };
   return (
-    <input value={v} aria-label={label} placeholder="—" onChange={(e) => setV(e.target.value)} onBlur={save}
+    <textarea value={v} aria-label={label} placeholder="—" rows={1} wrap="off" onChange={(e) => setV(e.target.value)} onBlur={save}
       onKeyDown={(e) => {
         if (e.nativeEvent.isComposing) return;
         if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
         if (e.key === 'Escape') { e.preventDefault(); setV(value); }
       }}
-      className="w-full rounded-lg bg-transparent px-1.5 py-1.5 outline-none hover:bg-white/5 focus:bg-white/10" />
+      className="block w-full resize-none overflow-hidden rounded-lg bg-transparent px-1.5 py-1.5 outline-none hover:bg-white/5 focus:bg-white/10" />
   );
 }
 

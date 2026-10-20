@@ -160,7 +160,7 @@ export default function Pipeline() {
   const canConvert = editable && access.canEdit('clients'); // convertDeal needs both
   const [over, setOver] = useState(null);
   const [form, setForm] = useState(null); // null | 'new' | the deal being edited
-  const [making, setMaking] = useState(null); // the deal Make client asks about
+  const [making, setMaking] = useState(null); // id of the deal Make client asks about
   // A deal moved by its stage select lands in another column: keep focus on its select there.
   const refocusStage = (dealId) => window.setTimeout(() => {
     document.querySelector(`[data-deal="${CSS.escape(dealId)}"] select`)?.focus({ preventScroll: true });
@@ -170,6 +170,9 @@ export default function Pipeline() {
   // A deal made a client has left the board (it lives in Clients); the rest show in their stage's column.
   const closeForm = useCallback(() => setForm(null), []);
   const deals = state.deals.filter((d) => !d.clientId);
+  // The confirm closes if the deal is deleted or made a client meanwhile.
+  const makingDeal = making ? deals.find((d) => d.id === making) : null;
+  useEffect(() => { if (making && !makingDeal) { setMaking(null); refocus(null); } }, [making, makingDeal]);
   const value = deals.reduce((t, d) => t + (d.value || 0), 0);
   const drop = (stage) => (editable ? {
     onDragOver: (e) => { e.preventDefault(); setOver(stage); },
@@ -219,7 +222,7 @@ export default function Pipeline() {
                           {d.contact && <Avatar userId={d.contact} size={22} />}
                         </div>
                         {stage === LAST_STAGE && canConvert && (
-                          <button type="button" onClick={() => setMaking(d)} className="inline-flex items-center gap-1 rounded-full chip-on px-2.5 py-1 text-[12px] font-semibold">
+                          <button type="button" onClick={() => setMaking(d.id)} className="inline-flex items-center gap-1 rounded-full chip-on px-2.5 py-1 text-[12px] font-semibold">
                             Make client<ArrowRight className="h-3.5 w-3.5" />
                           </button>
                         )}
@@ -248,9 +251,9 @@ export default function Pipeline() {
       {editable && form && (
         <DealForm key={form === 'new' ? 'new' : form.id} deal={form === 'new' ? null : form} canConvert={canConvert} onClose={closeForm} />
       )}
-      {making && (
-        <ConfirmMakeClient name={making.name} open onClose={() => setMaking(null)}
-          onConfirm={() => { actions.convertDeal(making.id); refocus(null); }} />
+      {makingDeal && (
+        <ConfirmMakeClient name={makingDeal.name} open onClose={() => setMaking(null)}
+          onConfirm={() => { actions.convertDeal(makingDeal.id); refocus(null); }} />
       )}
     </div>
   );

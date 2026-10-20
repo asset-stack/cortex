@@ -1983,7 +1983,11 @@ await check('pipeline: Work in Progress has a row per client with Details (text)
   assert.deepEqual(fieldsFor('tasks', 'pipeline').filter((f) => f.column).map((f) => f.key), ['details']);
   const headers = ['Client', 'Details', 'Status', 'Contact'];
   const map = autoMap(headers, 'tasks', 'pipeline');
-  assert.equal(map.details, 1);
+  // The list's own headers map whole: Client (or Organisation) is the name there, and only there.
+  assert.deepEqual([map.name, map.details, map.status, map.people], [0, 1, 2, 3]);
+  assert.equal(autoMap(['Organisation', 'Details'], 'tasks', 'pipeline').name, 0);
+  assert.deepEqual(((m) => [m.name, m.people])(autoMap(['Client', 'Task', 'Owner'], 'tasks', 'projects')), [1, 2]);
+  assert.equal(autoMap(['Client', 'Details'], 'tasks', 'projects').name, -1);
   const users = [{ id: 'u1', name: 'Dale Example', email: 'dale@example.com' }];
   const rec = normalise('tasks', ['Example Council', 'Onboarding call', 'In progress', 'Dale Example'], { ...map, name: 0, people: 3 },
     { users, me: 'u1', board: 'pipeline' });
