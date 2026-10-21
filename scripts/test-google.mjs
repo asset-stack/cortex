@@ -2345,7 +2345,7 @@ const THREADS = {
   tNoTo: gThread('tNoTo', sentMsg('mN1', '2026-10-14T00:00:00Z', { Subject: 'Bcc only' })),
   tKnown: gThread('tKnown', coldFirst('mKn1', 'Kim <KIM@example.net>')),
   tClient: gThread('tClient', coldFirst('mCl1', 'lee@sub.client.example.com')),
-  tInternal: gThread('tInternal', coldFirst('mIn1', 'gus@example.org', 'Asset registers', { Cc: 'ops@assetstack.org' })),
+  tInternal: gThread('tInternal', coldFirst('mIn1', 'ops@assetstack.org', 'Asset registers', { Cc: 'someone@assetstackai.com' })),
   tNoReply: gThread('tNoReply', coldFirst('mNr1', 'no-reply@example.org')),
   tInbound: gThread('tInbound',
     gm('mIb1', '2026-10-13T00:00:00Z', { From: 'hal@example.org', To: BOX1, Subject: 'Question' }),
@@ -2354,8 +2354,8 @@ const THREADS = {
 };
 const WHY = {
   tA: 'cold', tB: 'cold', tC: 'cold', tDraftFirst: 'cold', tPrior: 'cold', tReply: 'reply subject', tFwd: 'reply subject', tInReplyTo: 'in reply',
-  tCal: 'calendar', tCal2: 'calendar', tMany: 'recipients', tBcc: 'internal', tNoTo: 'recipients', tKnown: 'known', tClient: 'client domain',
-  tInternal: 'internal', tNoReply: 'no-reply', tInbound: 'not ours',
+  tCal: 'calendar', tCal2: 'calendar', tMany: 'recipients', tBcc: 'recipients', tNoTo: 'recipients', tKnown: 'known', tClient: 'client domain',
+  tInternal: 'recipients', tNoReply: 'no-reply', tInbound: 'not ours',
 };
 const SENT_PAGES = [
   ['tA', 'tB', 'tA', 'tC', 'tReply', 'tFwd', 'tInReplyTo', 'tCal', 'tCal2'],
@@ -2590,7 +2590,12 @@ await check('gmail helpers: coldThread — ours first, not a reply, forward or i
   assert.equal(g.coldThread(to(five, { Cc: 'f@example.org' }), KNOWN).why, 'recipients', 'To and Cc together');
   assert.equal(g.coldThread(to(five, { Bcc: 'f@example.org, g@example.org' }), KNOWN).cold, true, 'Bcc is ignored');
   assert.deepEqual(pick(g.coldThread(to('', { Cc: 'Cy <cy@example.org>' }), KNOWN), ['cold', 'prospect', 'prospectName']), { cold: true, prospect: 'cy@example.org', prospectName: 'Cy' }, 'Cc when no To');
-  assert.equal(g.coldThread(to('x@old.example.com'), { ...KNOWN, internal: ['old.example.com'] }).why, 'internal', 'a mailbox’s own other domain');
+  assert.equal(g.coldThread(to('x@old.example.com'), { ...KNOWN, internal: ['old.example.com'] }).why, 'recipients', 'a mailbox’s own other domain');
+  assert.deepEqual(pick(g.coldThread(to('Gus <gus@example.org>', { Cc: 'Ops <ops@assetstack.org>, x@mail.assetstackai.com' }), KNOWN), ['cold', 'prospect', 'recipients']),
+    { cold: true, prospect: 'gus@example.org', recipients: 1 }, 'a colleague copied in doesn’t count');
+  assert.deepEqual(pick(g.coldThread(to('ops@assetstack.org', { Cc: 'Cy <cy@example.org>' }), KNOWN), ['cold', 'prospect', 'recipients']),
+    { cold: true, prospect: 'cy@example.org', recipients: 1 }, 'a colleague in To, the prospect in Cc');
+  assert.equal(g.coldThread(to(`${five}, ops@assetstack.org`), KNOWN).recipients, 5, 'five outside people and a colleague');
   assert.equal(g.coldThread(to('x@client.example.com'), KNOWN).why, 'client domain');
   assert.equal(g.coldThread(to('x@notclient.example.com'), KNOWN).cold, true, 'a domain, not a suffix of the name');
   assert.equal(g.coldThread(to('x@example.org', { 'In-Reply-To': ' ' }), KNOWN).cold, true, 'a blank In-Reply-To');

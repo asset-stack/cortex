@@ -787,10 +787,10 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   mailbox in **Settings → Outreach**.
 - **What a cold thread is** (decided once, the first time the function sees the thread; a stored thread stays cold):
   its first message is ours (`SENT`), not a reply or forward (no `In-Reply-To`, no `Re:` / `Fw:` subject) and not a
-  calendar invite; it goes to 1–5 outside people in To/Cc (Bcc lists fall out); none of them is a colleague
-  (`assetstackai.com`, `assetstack.org`, `assetstackai.com.au`, the mailboxes' and profiles' domains), a known email
-  (profiles, client contacts, client access, invoice recipients), at a client's domain (free-mail domains aside) or a
-  no-reply address; and the prospect (the first outside To, else Cc) has never written to this mailbox before it
+  calendar invite; it goes to 1–5 outside people in To/Cc (colleagues copied in don't count: `assetstackai.com`,
+  `assetstack.org`, `assetstackai.com.au`, the mailboxes' and profiles' domains; Bcc lists fall out); none of them is a
+  known email (profiles, client contacts, client access, invoice recipients), at a client's domain (free-mail domains
+  aside) or a no-reply address; and the prospect (the first outside To, else Cc) has never written to this mailbox before it
   (`from:<prospect> before:<first email>`). Outreach contacts (the prospects in Pipeline) are deliberately not excluded.
   In a cold thread each message of ours is `sent` (the first email and each follow-up) and each of theirs is `reply`,
   `auto` (Auto-Submitted, X-Autoreply / X-Autorespond, Precedence auto_reply / bulk / junk, an out-of-office subject)

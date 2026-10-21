@@ -580,8 +580,8 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
 - **Sent**: our cold emails (first emails and follow-ups) on the Sydney day they went. **Prospects**: threads started.
   **Replies**: prospects who answered (once per thread, on the day of their first reply). **Reply rate**: replies ÷
   prospects. **Bounces**: threads that bounced. **Meetings**: from the sheet. Opens stay *Not tracked*.
-- A thread is judged once, when Cortex first sees it: our first message, to one to five outside people, none of them
-  known (above). Replies, auto-replies and bounces in it are counted as they arrive; a reply to someone else's thread
+- A thread is judged once, when Cortex first sees it: our first message, to one to five outside people (colleagues
+  copied in don't count), none of them known (above). Replies, auto-replies and bounces in it are counted as they arrive; a reply to someone else's thread
   is never counted.
 - Opening Outreach reads new mail when a mailbox was last read over 10 minutes ago; **Sync now** reads at once (with
   the sheet). Nothing reads on a timer.

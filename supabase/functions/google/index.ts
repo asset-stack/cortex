@@ -1653,8 +1653,9 @@ function firstFacts(thread, c) {
   const to = parseAddresses(h.to);
   const cc = parseAddresses(h.cc);
   const seen = new Set();
-  const recipients = [...to, ...cc].filter((r) => !seen.has(r.email) && seen.add(r.email));
   const outside = (r) => !onDomain(r.email, c.internal);
+  // Colleagues in To or Cc don't count: the outside people do (each address once).
+  const recipients = [...to, ...cc].filter((r) => outside(r) && !seen.has(r.email) && seen.add(r.email));
   const type = str(h['content-type'] || first?.payload?.mimeType).toLowerCase();
   return {
     msgs, firstAt, h, subject: subjectOf(h), from: firstAddress(h.from), recipients,
@@ -1666,8 +1667,8 @@ function firstFacts(thread, c) {
 /**
  * Whether a thread we haven't stored yet is cold, from its headers alone: its first non-draft message is ours, isn't a
  * reply or forward (no In-Reply-To, no Re:/Fw:/Fwd: subject) or a calendar invite (text/calendar, Google Calendar as
- * Sender), and goes to 1–5 To/Cc recipients (Bcc isn't seen), none of them internal, a no-reply address, a known email
- * or on a client's domain. The sync then asks Gmail whether the prospect ever wrote to the mailbox before (priorInbound).
+ * Sender), and goes to 1–5 outside To/Cc recipients (colleagues copied in don't count; Bcc isn't seen), none of them a
+ * no-reply address, a known email or on a client's domain. The sync then asks Gmail whether the prospect ever wrote to the mailbox before (priorInbound).
  * `ctx`: { internal, emails, domains } (rpc outreach_gmail_known plus the mailbox's own domains).
  * → { cold: true, prospect, prospectName, recipients, firstAt } or { cold: false, why }
  */
@@ -1680,7 +1681,6 @@ export function coldThread(thread, ctx = {}) {
   if (f.calendar) return { cold: false, why: 'calendar' };
   if (!f.recipients.length || f.recipients.length > MAX_COLD_RECIPIENTS) return { cold: false, why: 'recipients' };
   for (const r of f.recipients) {
-    if (onDomain(r.email, c.internal)) return { cold: false, why: 'internal' };
     if (NO_REPLY.test(localOf(r.email))) return { cold: false, why: 'no-reply' };
     if (c.emails.has(r.email)) return { cold: false, why: 'known' };
     if (onDomain(r.email, c.domains)) return { cold: false, why: 'client domain' };
