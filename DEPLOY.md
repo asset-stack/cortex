@@ -506,29 +506,35 @@ client, the Supabase secrets and the `google` function). Contract: `docs/PHASE2.
    - **Google Auth Platform** → **Data Access** → **Add or remove scopes**: tick `.../auth/calendar.readonly` (add it
      under **Manually add scopes** if it isn't listed) → **Update** → **Save**. The consent screen is **Internal**, so
      Google doesn't review it.
-3. **Redeploy the `google` function** with the new `supabase/functions/google/index.ts` (section 11 step 3: replace
-   all of its code, **Deploy**; **Enforce JWT verification** stays **off**).
-4. **Deploy the new app** (it goes live with the merge to `main`).
+3. **Redeploy the `google` function**: Supabase → **Edge Functions** → `google` → **Code**. Replace all of it with the
+   new `supabase/functions/google/index.ts` (GitHub → **Raw**, copy all; before the merge in step 4, from the change's
+   branch or pull request, since `main` still has the old one) → **Deploy** (it may read **Deploy updates**). The new
+   file is safe to deploy first: the invoice, contract and Outreach routes are unchanged. **Enforce JWT verification**
+   stays **off**; the secrets don't change.
+4. **Deploy the new app** (it goes live with the merge to `main`) once 0009 has run, and reload Cortex.
 5. **Everyone**: **Calendar** → **Connect Google Calendar** → **Connect** → pick **your own** @assetstackai.com account
    → **Allow**. Back in Cortex the button shows when the team's meetings last synced. Admins who already connected Gmail
-   and Drive keep them; staff connect only their calendar.
+   and Drive keep them; staff connect only their calendar. Only this button shares a calendar: connecting Gmail and
+   Drive in **Settings** → **Business** never does, even if Google remembers the calendar permission.
 
 **How it syncs**
 - Opening the Calendar syncs everyone who has connected when the last sync is more than 10 minutes old; **Sync now**
   (in the same menu) syncs at once. It reads from the start of last month to 11 months ahead. Nothing syncs on a timer,
   so meetings added in Google show the next time someone opens the Calendar.
-- The menu lists who has connected. *Reconnect* means Google refused that person's access (they removed it at Google,
-  or their password changed): they click **Connect Google Calendar** again.
-- **Disconnect** (same menu) takes your meetings off the Calendar at once. For an admin it also disconnects Gmail and
-  Drive (invoices, contracts, the Outreach sheet), so they connect those again in **Settings** → **Business**.
-  Deactivating someone takes their meetings off too.
-- A calendar whose events are all set to Private in Google (**Settings** → the calendar → **Event privacy**) shows
-  only Busy blocks.
+- The menu lists who shares their calendar. *Reconnect* means Google refused that person's access (they removed it at
+  Google, or their password changed): they click **Reconnect Google Calendar**, which shows in place of Connect.
+- **Stop sharing** (same menu) takes your meetings off the Calendar at once; an admin's Gmail and Drive stay connected.
+  **Settings** → **Business** → **Disconnect** removes the whole Google connection, calendar included. Deactivating
+  someone takes their meetings off too.
+- Only events you mark **Private** (or Confidential) one by one in Google show as Busy. A calendar's sharing settings
+  and its default visibility don't change what Cortex reads with your own account, so to keep a meeting's title off the
+  team Calendar, set that event to Private (or don't connect).
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
+| **Connect Google Calendar** says "Only admins can use Google from Cortex.", or the Calendar's sync says "Not found." | The `google` function still runs the old code: redeploy it (section 13 step 3). |
 | "Only @assetstackai.com Google accounts can sign in." | A personal Google account was chosen. Sign in with the work account. |
 | Google: "Access blocked … can only be used within its organization" | The account isn't in the Workspace. Expected for outsiders. |
 | Google: `redirect_uri_mismatch` | The redirect URI in the Google client must be exactly `https://<project-ref>.supabase.co/auth/v1/callback`. |

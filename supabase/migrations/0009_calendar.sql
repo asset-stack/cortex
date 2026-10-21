@@ -6,21 +6,34 @@
 -- - calendar_events: meetings, events and reminders anyone on the team adds (one day or several; all day, or with a
 --   start and end time), with the people they're for. Synced by the app like any other table. Everyone sees them; their
 --   author edits and deletes their own, admins anyone's.
+-- - private.google_accounts.calendar: whether the person shares their Google Calendar with the team, an explicit
+--   opt-in. Someone shares their calendar when this flag is on AND their stored Google scopes read it (calendar.readonly
+--   or calendar); that one rule is used everywhere (calendar_claim, calendar_save, calendar_status, google_me and the
+--   forgetting). Only the google function's callback for a Calendar connect turns it on (calendar_share, secret key).
+--   google_save (0004) never touches it: a new connection starts off, so a plain connect (Settings → Business), whose
+--   token may still carry calendar.readonly (connect asks for include_granted_scopes), never starts sharing, while an
+--   admin already sharing who reconnects Gmail and Drive keeps sharing. calendar_stop() (Stop sharing) turns it off: an
+--   admin's business connection (Gmail and Drive) stays with the flag off; any other (calendar-only) one is removed.
 -- - calendar_meetings: each person's Google Calendar meetings, read with their own Google account (calendar.readonly)
 --   by the google Edge Function's calendar-sync route with the secret key (calendar_claim / calendar_save). Only times
 --   and titles (private ones as busy, no title): never descriptions, locations, attendees or links. The app reads them
 --   on demand; they're not in realtime and no signed-in user writes them.
 -- - private.calendar_sync: each person's last sync (when, error, reconnect needed, how many meetings) and the claim
 --   that keeps two runs from syncing one person at once. calendar_status() shows it to the team, never a token.
--- - google_me() also says whether the caller's Google account reads their calendar (calendar) and sends invoices and
---   writes contracts (business).
--- - A person's meetings are forgotten when they disconnect Google, reconnect without the calendar, or are deactivated.
+-- - google_me() also says whether the caller shares their calendar (calendar) and whether their Google account sends
+--   invoices and writes contracts (business).
+-- - A person's meetings are forgotten when they stop sharing, disconnect Google, reconnect without the calendar, or are
+--   deactivated.
 -- - boards.calendar: a team board shows a calendar above its tasks (Marketing → Posting schedule to start). Admins
 --   switch it on and off (boards_update, 0006).
 
 begin;
 
--- 1. Which Google scopes read the calendar ------------------------------------------------------------------------
+-- 1. Sharing a calendar: the opt-in flag, and which Google scopes read the calendar ------------------------------
+
+-- Off for every existing connection (an admin's business one included) and for every new one; only calendar_share turns
+-- it on. google_save (0004) never sets it, so a reconnect keeps it.
+alter table private.google_accounts add column if not exists calendar boolean not null default false;
 
 -- True when one whole space-separated entry is a calendar scope (not a substring: '…/calendar.events' doesn't count).
 create or replace function private.has_calendar(p_scopes text) returns boolean
@@ -161,15 +174,15 @@ create policy staff_select on public.calendar_meetings for select to authenticat
 
 -- 6. The calendar sync (the google function, secret key only) ----------------------------------------------------
 
--- Claims the people due a sync (active staff whose Google account reads their calendar, not claimed in the last p_gap
--- seconds, never less than 30) and returns them. Atomic: two runs at once never claim the same person.
+-- Claims the people due a sync (active staff who share their calendar, not claimed in the last p_gap seconds, never
+-- less than 30) and returns them. Atomic: two runs at once never claim the same person.
 create or replace function public.calendar_claim(p_gap int default 600) returns setof uuid
 language sql security definer set search_path = public as $$
   insert into private.calendar_sync as s (user_id, claimed_at)
   select p.id, now()
   from public.profiles p
   join private.google_accounts g on g.user_id = p.id
-  where p.active and lower(p.email) ~ '^[^@]+@assetstackai\.com$' and private.has_calendar(g.scopes)
+  where p.active and lower(p.email) ~ '^[^@]+@assetstackai\.com$' and g.calendar and private.has_calendar(g.scopes)
   on conflict (user_id) do update set claimed_at = excluded.claimed_at
     where s.claimed_at is null
        or s.claimed_at < now() - make_interval(secs => greatest(coalesce(p_gap, 600), 30))
@@ -178,9 +191,12 @@ $$;
 
 -- Saves one person's sync, started at p_started, of the window p_from … p_to (Sydney dates): their meetings
 -- (p_rows: [{google_id, title, busy, all_day, start_date, end_date, start_at, end_at}]) and the run's result. Someone
--- no longer active staff with a calendar connection is forgotten instead (false). An older run never overwrites a
--- newer one's meetings or result; meetings the run didn't see are removed only strictly inside the window (one
--- crossing its edge may simply be outside what was read). A run with an error writes no meetings and removes none.
+-- no longer active staff sharing their calendar is forgotten instead (false). The check locks their profile and Google
+-- connection (for share) until the save commits: a disconnect, Stop sharing, a reconnect without the calendar or a
+-- deactivation arriving meanwhile waits for it, and its forgetting then removes what this run wrote (one that committed
+-- first fails the check). An older run never overwrites a newer one's meetings or result; meetings the run didn't see
+-- are removed only strictly inside the window (one crossing its edge may simply be outside what was read). A run with
+-- an error writes no meetings and removes none.
 create or replace function public.calendar_save(p_user uuid, p_started timestamptz, p_from date, p_to date, p_rows jsonb,
   p_error text default '', p_reconnect boolean default false) returns boolean
 language plpgsql security definer set search_path = public as $$
@@ -192,9 +208,11 @@ begin
     raise exception 'calendar_save needs a person and a start time' using errcode = 'invalid_parameter_value';
   end if;
 
-  if not exists (select 1 from public.profiles p join private.google_accounts g on g.user_id = p.id
-                 where p.id = p_user and p.active and lower(p.email) ~ '^[^@]+@assetstackai\.com$'
-                   and private.has_calendar(g.scopes)) then
+  perform 1 from public.profiles p join private.google_accounts g on g.user_id = p.id
+  where p.id = p_user and p.active and lower(p.email) ~ '^[^@]+@assetstackai\.com$'
+    and g.calendar and private.has_calendar(g.scopes)
+  for share of p, g;
+  if not found then
     delete from public.calendar_meetings where user_id = p_user;
     delete from private.calendar_sync where user_id = p_user;
     return false;
@@ -239,7 +257,7 @@ $$;
 
 -- 7. Reading: the team's sync status (never a token or scope) ----------------------------------------------------
 
--- people: every active profile by name, with whether their Google account reads their calendar and their last sync;
+-- people: every active profile by name, with whether they share their calendar (connected) and their last sync;
 -- earliest: the first day any meeting is kept for; synced_at: the newest sync.
 create or replace function public.calendar_status() returns jsonb
 language plpgsql stable security definer set search_path = public as $$
@@ -251,7 +269,7 @@ begin
     'people', coalesce((
       select jsonb_agg(jsonb_build_object(
                'user_id', p.id,
-               'connected', private.has_calendar(g.scopes),
+               'connected', coalesce(g.calendar, false) and private.has_calendar(g.scopes),
                'synced_at', s.synced_at,
                'error', coalesce(s.error, ''),
                'reconnect', coalesce(s.reconnect, false))
@@ -265,8 +283,8 @@ begin
 end;
 $$;
 
--- As 0004, plus calendar (the caller's Google account reads their calendar) and business (it sends invoices from Gmail
--- and writes contracts in Drive).
+-- As 0004, plus calendar (the caller shares their calendar) and business (their Google account sends invoices from
+-- Gmail and writes contracts in Drive).
 create or replace function public.google_me() returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare
@@ -285,36 +303,79 @@ begin
     'admin', public.is_admin(),
     'google_email', v_google.email,
     'connected_at', v_google.connected_at,
-    'calendar', private.has_calendar(v_google.scopes),
+    'calendar', coalesce(v_google.calendar, false) and private.has_calendar(v_google.scopes),
     'business', regexp_split_to_array(coalesce(v_google.scopes, ''), '\s+')
       @> array['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/drive']);
+end;
+$$;
+
+-- For the google function's callback only (secret key), after google_save for a Calendar connect: the person starts
+-- sharing, if the connection just stored reads the calendar. True when it did.
+create or replace function public.calendar_share(p_user uuid) returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  update private.google_accounts set calendar = true where user_id = p_user and private.has_calendar(scopes);
+  return found;
+end;
+$$;
+
+-- Stop sharing your own calendar. An admin's business connection (Gmail and Drive) stays, with the flag off; any
+-- other connection only read the calendar and is removed. Either way the forgetting (§8) removes your meetings and
+-- sync. True when something changed (false when you weren't sharing and have no calendar-only connection).
+create or replace function public.calendar_stop() returns boolean
+language plpgsql security definer set search_path = public as $$
+declare
+  v_business boolean;
+begin
+  if not public.is_staff() then
+    raise exception 'Not allowed' using errcode = 'insufficient_privilege';
+  end if;
+  select regexp_split_to_array(g.scopes, '\s+')
+           @> array['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/drive']
+    into v_business
+  from private.google_accounts g where g.user_id = auth.uid()
+  for update;
+  if not found then
+    return false;
+  end if;
+  if v_business then
+    update private.google_accounts set calendar = false where user_id = auth.uid() and calendar;
+  else
+    delete from private.google_accounts where user_id = auth.uid();
+  end if;
+  return found;
 end;
 $$;
 
 -- Supabase grants EXECUTE on new functions to everyone; narrow it.
 revoke all on function public.calendar_claim(int) from public, anon, authenticated;
 revoke all on function public.calendar_save(uuid, timestamptz, date, date, jsonb, text, boolean) from public, anon, authenticated;
+revoke all on function public.calendar_share(uuid) from public, anon, authenticated;
 revoke all on function public.calendar_status() from public, anon;
+revoke all on function public.calendar_stop() from public, anon;
 revoke all on function public.google_me() from public, anon;
 grant execute on function public.calendar_status() to authenticated;
+grant execute on function public.calendar_stop() to authenticated;
 grant execute on function public.google_me() to authenticated;
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then
     grant execute on function public.calendar_claim(int) to service_role;
     grant execute on function public.calendar_save(uuid, timestamptz, date, date, jsonb, text, boolean) to service_role;
+    grant execute on function public.calendar_share(uuid) to service_role;
   end if;
 end $$;
 
 -- 8. Forgetting a person's meetings ------------------------------------------------------------------------------
 
--- When their Google account is disconnected or no longer reads the calendar, or they're deactivated.
+-- When their Google account is disconnected, they no longer share their calendar (Stop sharing turned the flag off,
+-- or a reconnect stored scopes without the calendar), or they're deactivated.
 create or replace function public.calendar_forget() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare v_user uuid;
 begin
   if tg_table_name = 'google_accounts' then
-    if tg_op = 'UPDATE' and private.has_calendar(new.scopes) then
+    if tg_op = 'UPDATE' and new.calendar and private.has_calendar(new.scopes) then
       return null;
     end if;
     v_user := old.user_id;
@@ -331,7 +392,7 @@ end;
 $$;
 
 drop trigger if exists calendar_forget on private.google_accounts;
-create trigger calendar_forget after delete or update of scopes on private.google_accounts
+create trigger calendar_forget after delete or update of scopes, calendar on private.google_accounts
   for each row execute function public.calendar_forget();
 drop trigger if exists calendar_forget on public.profiles;
 create trigger calendar_forget after update of active on public.profiles

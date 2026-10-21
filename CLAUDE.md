@@ -49,7 +49,9 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
   `calendar_meetings` is written only by the `google` function's `calendar-sync` and read only through
   `useStore().calendar`; it keeps a meeting's title and times, never its description, place, guests or link, and a
   Private or Confidential one is Busy with no title. A board's 3-month calendar is `boards.calendar`, never a name match.
-  Staff may use Google only to connect their calendar (connect with purpose `calendar`); everything else stays admins only.
+  Sharing a calendar is an explicit flag (`private.google_accounts.calendar`, set only after a calendar connect, cleared
+  by Stop sharing), never inferred from the stored Google scopes. Staff may use Google only to connect their calendar
+  (connect with purpose `calendar`); everything else stays admins only.
 - Automations run in the database in live mode (`contact_pipeline` trigger, `ensure_todos` and
   `generate_due_invoices` RPCs) and in `src/lib/automations.js` in demo mode. Change both together; live mode
   never creates those rows client-side.

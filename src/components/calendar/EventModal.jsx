@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useStore } from '@/data/store';
 import { useAccess } from '@/lib/access';
 import { EVENT_KINDS, localInstant, placeAt } from '@/lib/calendar';
+import { addDays } from '@/lib/automations';
 import { localYmd } from '@/lib/format';
 import { ConfirmModal, Modal, PeoplePicker, Segmented } from '@/components/ui';
-import { cn } from '@/lib/cn';
 
 const KIND_OPTIONS = Object.entries(EVENT_KINDS).map(([id, label]) => ({ id, label }));
 
-// The form's fields from an event (times in this browser's zone, as they were typed), or a new one's defaults.
+// The form's fields from an event (times in this browser's zone), or a new one's defaults. An end time earlier than the
+// start is the next day (a 23:00–00:30 meeting, or one set in a zone where it doesn't cross midnight).
 function formOf(event, day, me) {
   if (!event) return { kind: 'meeting', title: '', day: day || localYmd(), endDay: '', allDay: false, start: '09:00', end: '10:00', people: me ? [me] : [] };
   const start = event.startsAt ? placeAt(event.startsAt) : null;
@@ -32,18 +33,22 @@ export default function EventModal({ eventId = '', day = '', onClose }) {
   const [f, setF] = useState(() => formOf(event, day, state.me));
   const [err, setErr] = useState('');
   const [confirm, setConfirm] = useState(false);
+  const hint = useId();
   useEffect(() => { if (gone) onClose(); }, [gone, onClose]);
   if (gone) return null;
 
   const set = (k) => (e) => { setErr(''); setF((x) => ({ ...x, [k]: e.target.value })); };
+  const nextDay = !f.allDay && Boolean(f.start && f.end) && f.end < f.start;
   const fields = () => (f.allDay
     ? { kind: f.kind, title: f.title, day: f.day, endDay: f.endDay, startsAt: '', endsAt: '', people: f.people }
-    : { kind: f.kind, title: f.title, day: f.day, endDay: '', startsAt: localInstant(f.day, f.start), endsAt: localInstant(f.day, f.end), people: f.people });
+    : {
+      kind: f.kind, title: f.title, day: f.day, endDay: '', startsAt: localInstant(f.day, f.start),
+      endsAt: localInstant(nextDay ? addDays(f.day, 1) : f.day, f.end), people: f.people,
+    });
   const submit = (e) => {
     e.preventDefault();
     if (!f.title.trim()) { setErr('Add a title'); return; }
     if (!f.allDay && !(f.start && f.end)) { setErr('Add a start and end time'); return; }
-    if (!f.allDay && f.end < f.start) { setErr('The end is before the start'); return; }
     if (f.allDay && f.endDay && f.endDay < f.day) { setErr('The end day is before the start'); return; }
     const ok = eventId ? actions.updateCalendarEvent(eventId, fields()) : actions.addCalendarEvent(fields());
     if (ok === false) { setErr('Couldn’t save this event'); return; }
@@ -68,7 +73,8 @@ export default function EventModal({ eventId = '', day = '', onClose }) {
               ) : (
                 <>
                   <input type="time" className="field" aria-label="Start time" value={f.start} onChange={set('start')} required />
-                  <input type="time" className="field" aria-label="End time" value={f.end} onChange={set('end')} required />
+                  <input type="time" className="field" aria-label="End time" aria-describedby={nextDay ? hint : undefined} value={f.end} onChange={set('end')} required />
+                  {nextDay && <div id={hint} className="col-span-2 -mt-1 text-right text-[12px] dim">Ends the next day</div>}
                 </>
               )}
             </div>
@@ -85,7 +91,7 @@ export default function EventModal({ eventId = '', day = '', onClose }) {
               )}
             </>
           ) : (
-            creator && <div className={cn('text-[12.5px] dimmer')}>Added by {creator}</div>
+            creator && <div className="text-[12.5px] dimmer">Added by {creator}</div>
           )}
         </form>
       </Modal>

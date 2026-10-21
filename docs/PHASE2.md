@@ -731,25 +731,34 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   - `calendar_meetings`: the Google meetings, written only by the `google` function (service role) and read by staff on
     demand, never in synced state. Title ('' when busy), busy, all day, start and end dates (inclusive) and instants;
     unique per person and Google event. Nothing else of a meeting is stored.
+  - Sharing is an explicit choice: `private.google_accounts.calendar`, set only by `calendar_share()` (the function, after
+    a **Connect Google Calendar**) and cleared by `calendar_stop()` (**Stop sharing**: the flag off, or a calendar-only
+    connection removed). Someone shares only while that flag is on **and** their stored Google access has the calendar
+    scope. Google returns every scope granted before (`include_granted_scopes`), so the scope alone would turn sharing
+    back on when an admin reconnects Gmail and Drive in Settings.
   - `private.calendar_sync` (when each person last synced, their error, whether they must reconnect) behind
-    `calendar_status()` for staff; `calendar_claim()` / `calendar_save()` for the function only. A person's meetings go
-    when they disconnect Google, their Google access loses the calendar, or they're deactivated (`calendar_forget()`).
-  - `google_me()` also says `calendar` (their Google Calendar is shared) and `business` (Gmail and Drive allowed).
+    `calendar_status()` for staff; `calendar_claim()` / `calendar_save()` for the function only (`calendar_save` locks
+    the person's rows first, so a disconnect at the same moment can't leave meetings behind). A person's meetings go
+    when they stop sharing, disconnect Google, their Google access loses the calendar, or they're deactivated
+    (`calendar_forget()`).
+  - `google_me()` also says `calendar` (they share their Google Calendar) and `business` (Gmail and Drive allowed).
   - `boards.calendar`: added and turned on for the Marketing team board *Posting schedule* in one statement, the first
     time only (a re-run never turns it back on). Admins change it (the boards update policy).
 - **Google** (`supabase/functions/google`): **Connect Google Calendar** is for anyone (connect with purpose
   `calendar`: scopes `openid email …/calendar.readonly`, with the scopes already granted kept, so an admin keeps Gmail
-  and Drive) and comes back to the Calendar; send, contract and a plain connect stay admins only. `calendar-sync` (any
+  and Drive), comes back to the Calendar and then turns sharing on (`calendar_share()`); a plain connect never does.
+  Send, contract and a plain connect stay admins only. `calendar-sync` (any
   staff caller) claims everyone whose last sync is over 10 minutes old (1 minute with **Sync now**), so two people
   opening the Calendar at once sync each person once; reads each one's primary calendar from the start of last month to
   the end of month +11 (Sydney), recurring events as their instances, at most 10 pages of 2,500; and saves their
   meetings, removing those gone from Google inside that window. One person's failure (Google refused: *Reconnect*)
   never stops the others.
 - **App**: **Calendar** (`src/pages/Calendar.jsx`): New event (`EventModal`: kind, title, day, all day or start and end
-  time, people; others' events read only), filters by person and kind, the Google menu (connect with a short warning of
-  what teammates see, when it last synced, who has connected, Sync now, Disconnect), twelve `MonthBlock`s from this
+  time, an end before the start being the next day, people; others' events read only), filters by person and kind, the
+  Google menu (connect with a short warning of what teammates see, or **Reconnect** when Google refused yours; when it
+  last synced, who shares theirs, Sync now, Stop sharing), twelve `MonthBlock`s from this
   month (this one and the next open; a row per week, Monday first, the week number; other months' days shaded and empty;
-  four entries a day, then *+N more*; on a phone a card per week) and the **Archive** (finished months back to the
+  meetings and events before tasks on a day, four entries, then *+N more*; on a phone a card per week) and the **Archive** (finished months back to the
   earliest dated thing, newest first; their meetings load when it opens). A task opens in its drawer (read only unless
   the viewer can edit its board), an event in its form, a meeting in a short summary, an invoice or contract on Clients.
   Opening the page syncs Google when the last sync is over 10 minutes old. Boards with `calendar` on show

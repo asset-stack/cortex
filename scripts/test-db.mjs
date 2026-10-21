@@ -2576,7 +2576,7 @@ async function applyMigration9() {
 
 const CALENDAR_TABLES = ['public.calendar_events', 'public.calendar_meetings', 'private.calendar_sync'];
 const CALENDAR_FUNCTIONS = ['public.calendar_claim', 'public.calendar_save', 'public.calendar_status', 'public.calendar_forget',
-  'public.protect_calendar_event', 'public.google_me', 'private.has_calendar'];
+  'public.calendar_share', 'public.calendar_stop', 'public.protect_calendar_event', 'public.google_me', 'private.has_calendar'];
 const SCOPE = {
   read: 'https://www.googleapis.com/auth/calendar.readonly',
   full: 'https://www.googleapis.com/auth/calendar',
@@ -2584,8 +2584,8 @@ const SCOPE = {
   business: 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/drive',
 };
 
-// Everything 0009 makes (tables, columns, constraints, indexes, triggers, policies, functions, grants, realtime and the
-// boards column), in a form that compares across runs and databases.
+// Everything 0009 makes (tables, columns, constraints, indexes, triggers, policies, functions, grants, realtime, the
+// boards column and google_accounts' calendar flag), in a form that compares across runs and databases.
 async function calendarShape(dbx) {
   const q = async (sql, params) => (await dbx.query(sql, params)).rows;
   const ofTables = `(select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
@@ -2595,6 +2595,7 @@ async function calendarShape(dbx) {
       from pg_class c where c.oid in ${ofTables} order by 1`, [CALENDAR_TABLES]),
     columns: await q(`select table_schema, table_name, column_name, udt_name, is_nullable, column_default from information_schema.columns
       where table_schema || '.' || table_name = any($1::text[]) or (table_schema = 'public' and table_name = 'boards' and column_name = 'calendar')
+        or (table_schema = 'private' and table_name = 'google_accounts' and column_name = 'calendar')
       order by 1, 2, ordinal_position`, [CALENDAR_TABLES]),
     constraints: await q(`select conrelid::regclass::text as t, conname, pg_get_constraintdef(oid) as def from pg_constraint
       where conrelid in ${ofTables} order by 1, 2`, [CALENDAR_TABLES]),
@@ -2613,7 +2614,7 @@ async function calendarShape(dbx) {
   };
 }
 
-// 64–77. 0009: the team Calendar and a calendar on boards (docs/PHASE2.md §15) ---------------------------------------------
+// 64–78. 0009: the team Calendar and a calendar on boards (docs/PHASE2.md §15) ---------------------------------------------
 async function phase9(ctx) {
   const { alice, boss, david, hello, carol, newcomer, early, late, board } = ctx;
   const calendarBoards = async (dbx = db) => (await dbx.query(`select module || ':' || name as b from public.boards
@@ -2630,6 +2631,8 @@ async function phase9(ctx) {
   check('64. 0009 runs on top of 0008 and its rows, as one transaction (begin … commit when run whole)',
     first === null && /^begin;/i.test(body) && /commit;$/i.test(body), first);
   if (first) return null;
+  // Connections from before 0009 (David's business one, from phase 4) start not sharing.
+  const existingFlags = (await rows('select user_id, calendar from private.google_accounts order by user_id'));
   const shape = await calendarShape(db);
   const flaggedFirst = await calendarBoards();
   const second = await applyMigration9();
@@ -2685,7 +2688,8 @@ async function phase9(ctx) {
   const supaFns = supaRun ?? (await supa.query(`select f, has_function_privilege('anon', f, 'execute') as anon,
       has_function_privilege('authenticated', f, 'execute') as signed_in, has_function_privilege('service_role', f, 'execute') as secret
     from unnest(array['public.calendar_claim(int)', 'public.calendar_save(uuid, timestamptz, date, date, jsonb, text, boolean)',
-      'public.calendar_status()', 'public.google_me()', 'private.has_calendar(text)']) f`)).rows;
+      'public.calendar_share(uuid)', 'public.calendar_status()', 'public.calendar_stop()', 'public.google_me()',
+      'private.has_calendar(text)']) f`)).rows;
   const supaTables = supaRun ?? (await supa.query(`select t,
       (select string_agg(p, ',') from unnest(array['select', 'insert', 'update', 'delete', 'truncate']) p
         where has_table_privilege('anon', t, p)) as anon,
@@ -2695,12 +2699,13 @@ async function phase9(ctx) {
   await supa.close();
   const fn = (name) => (Array.isArray(supaFns) ? supaFns.find((r) => r.f.startsWith(name)) : null) || {};
   check('65. with Supabase\'s defaults (new functions granted to anon and everyone), anon calls none of them; signed-in users only '
-    + 'calendar_status and google_me; only the secret key claims and saves; has_calendar is nobody\'s; anon reaches neither table '
-    + 'and signed-in users only read the meetings',
-    supaRun === null && supaFns.every((r) => !r.anon)
+    + 'calendar_status, calendar_stop and google_me; only the secret key claims, saves and shares; has_calendar is nobody\'s; anon '
+    + 'reaches neither table and signed-in users only read the meetings',
+    supaRun === null && supaFns.length === 7 && supaFns.every((r) => !r.anon)
       && !fn('public.calendar_claim').signed_in && fn('public.calendar_claim').secret
       && !fn('public.calendar_save').signed_in && fn('public.calendar_save').secret
-      && fn('public.calendar_status').signed_in && fn('public.google_me').signed_in
+      && !fn('public.calendar_share').signed_in && fn('public.calendar_share').secret
+      && fn('public.calendar_status').signed_in && fn('public.calendar_stop').signed_in && fn('public.google_me').signed_in
       && !fn('private.has_calendar').signed_in && !fn('private.has_calendar').secret
       && supaTables.every((r) => r.anon === null) && supaTables.find((r) => r.t === 'public.calendar_meetings')?.signed_in === 'select',
     { supaRun, supaFns, supaTables });
@@ -2871,13 +2876,15 @@ async function phase9(ctx) {
       has_function_privilege('authenticated', f, 'execute') as signed_in, has_function_privilege('service_role', f, 'execute') as secret,
       (select prosecdef from pg_proc where oid = f::regprocedure) as definer
     from unnest(array['public.calendar_claim(int)', 'public.calendar_save(uuid, timestamptz, date, date, jsonb, text, boolean)',
-      'public.calendar_status()', 'public.google_me()', 'private.has_calendar(text)']) f`);
+      'public.calendar_share(uuid)', 'public.calendar_status()', 'public.calendar_stop()', 'public.google_me()',
+      'private.has_calendar(text)']) f`);
   const fi = Object.fromEntries(fnInfo.map(({ f, ...r }) => [f.replace(/\(.*$/, ''), r]));
   const tryCalls = async (user) => {
     if (user === 'anon') { await as(null); await db.exec('set role anon'); } else await as(user);
     const r = {
       claim: await error('select public.calendar_claim(30)'),
       save: await error("select public.calendar_save($1, now(), '2026-10-01', '2026-12-31', '[]'::jsonb)", [hello]),
+      share: await error('select public.calendar_share($1)', [user === 'anon' ? hello : user]),
       status: await error('select public.calendar_status()'),
       hasCalendar: await error("select private.has_calendar('x')"),
     };
@@ -2885,14 +2892,16 @@ async function phase9(ctx) {
     return r;
   };
   const calls = { staff: await tryCalls(hello), admin: await tryCalls(david), inactive: await tryCalls(carol), anon: await tryCalls('anon') };
-  check('70. calendar_claim and calendar_save are the secret key\'s only (security definer); calendar_status is for signed-in staff; '
-    + 'private.has_calendar is no one\'s to call',
+  check('70. calendar_claim, calendar_save and calendar_share are the secret key\'s only (security definer; nobody signed in shares '
+    + 'even their own calendar); calendar_status and calendar_stop are for signed-in staff; private.has_calendar is no one\'s to call',
     fi['public.calendar_claim'].secret && !fi['public.calendar_claim'].signed_in && !fi['public.calendar_claim'].anon
       && fi['public.calendar_save'].secret && !fi['public.calendar_save'].signed_in && !fi['public.calendar_save'].anon
+      && fi['public.calendar_share'].secret && !fi['public.calendar_share'].signed_in && !fi['public.calendar_share'].anon
+      && fi['public.calendar_stop'].signed_in && !fi['public.calendar_stop'].anon
       && fi['public.calendar_status'].signed_in && !fi['public.calendar_status'].anon && fi['public.google_me'].signed_in
       && !fi['public.google_me'].anon && !fi['private.has_calendar'].signed_in && !fi['private.has_calendar'].anon
       && fnInfo.filter((r) => r.f.startsWith('public.')).every((r) => r.definer)
-      && Object.values(calls).every((c) => c.claim !== null && c.save !== null && c.hasCalendar !== null)
+      && Object.values(calls).every((c) => c.claim !== null && c.save !== null && c.share !== null && c.hasCalendar !== null)
       && calls.staff.status === null && calls.admin.status === null && calls.inactive.status !== null && calls.anon.status !== null,
     { fnInfo, calls });
 
@@ -2909,11 +2918,41 @@ async function phase9(ctx) {
 
   // Google connections from here on: David business and calendar; Hello (staff) the calendar only; Boss the full calendar
   // scope; Josh (early) business only; New (newcomer) calendar.events only; Carol (inactive) the calendar; Late the calendar
-  // but no longer an @assetstackai.com address (changed in the SQL editor); Alice none.
-  const connect = async (user, email, scopes) => {
+  // but no longer an @assetstackai.com address (changed in the SQL editor); Alice none. Each is first stored as the
+  // callback stores any connect (google_save), then the Calendar connects share (calendar_share, as the callback does for
+  // purpose calendar): David, Hello, Boss, Carol and Late; Josh and New try and can't (no calendar scope stored).
+  const connect = async (user, email, scopes, { share = false } = {}) => {
     await asSecretKey();
     await db.query("select public.google_save($1, $2, 'refresh-token', $3)", [user, email, scopes]);
+    const shared = share ? (await db.query('select public.calendar_share($1) as ok', [user])).rows[0].ok : null;
     await as(null);
+    return shared;
+  };
+  const shareCalendar = async (user) => {
+    await asSecretKey();
+    const r = await attempt('select public.calendar_share($1) as ok', [user]);
+    await as(null);
+    return typeof r === 'string' ? r : r?.ok;
+  };
+  const flagOf = async (user) => (await one('select calendar from private.google_accounts where user_id = $1', [user]))?.calendar ?? null;
+  const meOf = async (user) => {
+    await as(user);
+    const r = (await one('select public.google_me() as me')).me;
+    await as(null);
+    return r;
+  };
+  const connectedNow = async () => {
+    await as(alice);
+    const s = (await one('select public.calendar_status() as s')).s;
+    await as(null);
+    return s.people.filter((p) => p.connected).map((p) => p.user_id).sort();
+  };
+  const claim = async (gap) => {
+    await asSecretKey();
+    const r = await db.query(gap === undefined ? 'select c as id from public.calendar_claim() c' : 'select c as id from public.calendar_claim($1) c',
+      gap === undefined ? [] : [gap]);
+    await as(null);
+    return r.rows.map((x) => x.id).sort();
   };
   await connect(david, 'super.example@assetstackai.com', `openid email ${SCOPE.business} ${SCOPE.read}`);
   await connect(hello, 'staff.example@assetstackai.com', `openid email ${SCOPE.read}`);
@@ -2922,12 +2961,36 @@ async function phase9(ctx) {
   await connect(newcomer, 'new.example@assetstackai.com', `openid email ${SCOPE.events}`);
   await connect(carol, 'carol@assetstackai.com', `openid email ${SCOPE.read}`);
   await connect(late, 'late.example@assetstackai.com', `openid email ${SCOPE.read}`);
+  const plain = { flags: {}, me: {} };
+  for (const [name, user] of Object.entries({ david, hello, boss, early, newcomer, carol, late })) plain.flags[name] = await flagOf(user);
+  for (const [name, user] of Object.entries({ david, hello, boss })) plain.me[name] = (await meOf(user)).calendar;
+  plain.claimed = await claim();
+  plain.connected = await connectedNow();
+  plain.syncRows = (await one('select count(*)::int as n from private.calendar_sync')).n;
+  check('71. a connection from before 0009 and a plain connect (google_save, no calendar_share) never share, even with '
+    + 'calendar.readonly or calendar in their scopes: the flag is off, calendar_claim skips them, calendar_status shows them not '
+    + 'connected and google_me says calendar false',
+    stable(existingFlags) === stable([{ user_id: david, calendar: false }])
+      && Object.values(plain.flags).every((f) => f === false) && Object.values(plain.me).every((c) => c === false)
+      && stable(plain.claimed) === stable([]) && stable(plain.connected) === stable([]) && plain.syncRows === 0,
+    { existingFlags, plain });
+
+  const shared = {};
+  for (const [name, user] of Object.entries({ david, hello, boss, carol, late, early, newcomer, alice })) shared[name] = await shareCalendar(user);
+  shared.nobody = await shareCalendar(randomUUID());
+  shared.again = await shareCalendar(hello);
+  const sharedFlags = {};
+  for (const [name, user] of Object.entries({ david, hello, boss, carol, late, early, newcomer, alice })) sharedFlags[name] = await flagOf(user);
   await db.query("update public.profiles set email = 'late.example@example.com' where id = $1", [late]);
+  check('71. calendar_share (the callback, after a Calendar connect) turns sharing on only when the stored scopes read the calendar '
+    + '(not business-only, calendar.events, no connection or no person), and says whether it did',
+    stable(shared) === stable({ david: true, hello: true, boss: true, carol: true, late: true, early: false, newcomer: false, alice: false,
+      nobody: false, again: true })
+      && stable(sharedFlags) === stable({ david: true, hello: true, boss: true, carol: true, late: true, early: false, newcomer: false,
+        alice: null }),
+    { shared, sharedFlags });
   const me = {};
-  for (const [name, user] of Object.entries({ david, hello, boss, early, newcomer, alice })) {
-    await as(user);
-    me[name] = (await one('select public.google_me() as me')).me;
-  }
+  for (const [name, user] of Object.entries({ david, hello, boss, early, newcomer, alice })) me[name] = await meOf(user);
   await as(carol);
   const carolMe = await error('select public.google_me()');
   await as(null);
@@ -2946,13 +3009,6 @@ async function phase9(ctx) {
 
   // 72. calendar_claim: who is due a sync, at most once per gap ---------------------------------------------------------
 
-  const claim = async (gap) => {
-    await asSecretKey();
-    const r = await db.query(gap === undefined ? 'select c as id from public.calendar_claim() c' : 'select c as id from public.calendar_claim($1) c',
-      gap === undefined ? [] : [gap]);
-    await as(null);
-    return r.rows.map((x) => x.id).sort();
-  };
   const ago = (user, seconds) => db.query("update private.calendar_sync set claimed_at = now() - make_interval(secs => $2) where user_id = $1",
     [user, seconds]);
   const sorted = (...list) => [...list].sort();
@@ -2969,7 +3025,7 @@ async function phase9(ctx) {
   await db.query('update private.calendar_sync set claimed_at = null where user_id = $1', [hello]);
   claims.unclaimed = await claim();
   const syncRows = (await rows('select user_id from private.calendar_sync order by user_id')).map((r) => r.user_id);
-  check('72. calendar_claim claims active @assetstackai.com staff whose Google account reads the calendar (not business-only, '
+  check('72. calendar_claim claims active @assetstackai.com staff who share their calendar (not business-only, '
     + 'calendar.events, inactive or another domain), each at most once per p_gap seconds (600 by default, never under 30)',
     stable(claims.first) === stable(sorted(boss, david, hello)) && stable(claims.again) === stable([]) && stable(claims.forced) === stable([])
       && stable(claims.after61) === stable([hello]) && stable(claims.floor) === stable([boss]) && stable(claims.before600) === stable([])
@@ -3107,7 +3163,7 @@ async function phase9(ctx) {
   const person = (id) => status.people.find((p) => p.user_id === id);
   const iso = (v) => (v ? new Date(v).toISOString() : v);
   const earliest = (await one('select min(start_date)::text as d from public.calendar_meetings')).d;
-  check('75. calendar_status (any staff member): every active person by name with whether their Google account reads the calendar and '
+  check('75. calendar_status (any staff member): every active person by name with whether they share their calendar and '
     + 'their last sync (when, error, reconnect needed); the earliest meeting kept and the newest sync; never a token or scope',
     stable(Object.keys(status).sort()) === stable(['earliest', 'people', 'synced_at'])
       && stable(status.people.map((p) => p.user_id)) === stable(activeIds) && !person(carol)
@@ -3121,7 +3177,7 @@ async function phase9(ctx) {
       && iso(status.synced_at) === T(50) && !/refresh|googleapis|scope/.test(JSON.stringify(status)),
     { status, activeIds, earliest });
 
-  // 76. calendar_save forgets anyone no longer active staff with a calendar connection ---------------------------------
+  // 76. calendar_save forgets anyone no longer active staff sharing their calendar --------------------------------------
 
   const plant = async (user) => {
     await db.query(`insert into public.calendar_meetings (user_id, google_id, title, start_date, end_date) values ($1, 'planted', 'Planted',
@@ -3144,15 +3200,18 @@ async function phase9(ctx) {
   // 77. Forgetting: disconnecting Google, reconnecting without the calendar, or being deactivated -------------------------
 
   runs.david = await save(david, T(60), [meeting('d1')]);
-  await connect(early, 'you@assetstackai.com', `openid email ${SCOPE.business} ${SCOPE.read}`);
+  runs.earlyShare = await connect(early, 'you@assetstackai.com', `openid email ${SCOPE.business} ${SCOPE.read}`, { share: true });
   runs.early = await save(early, T(60), [meeting('e1')]);
   const before77 = { hello: await leftFor(hello), boss: await leftFor(boss), david: await leftFor(david), early: await leftFor(early) };
   await as(hello);
   const disconnected = (await one('select public.google_disconnect() as ok')).ok;
   await as(null);
+  // Boss (sharing) reconnects Gmail and Drive with a plain connect (no calendar_share): the token still carries the
+  // calendar, and google_save leaves the flag alone, so Boss keeps sharing.
   await connect(boss, 'boss@assetstackai.com', `openid email ${SCOPE.business} ${SCOPE.full}`);
-  const bossKept = await leftFor(boss);
+  const bossKept = { left: await leftFor(boss), flag: await flagOf(boss), me: (await meOf(boss)).calendar };
   await connect(boss, 'boss@assetstackai.com', `openid email ${SCOPE.business}`);
+  const bossLost = { flag: await flagOf(boss), me: (await meOf(boss)).calendar };
   await as(david);
   const renameDavid = await affected("update public.profiles set name = 'Super Example', active = true where id = $1", [david]);
   const deactivate = await affected('update public.profiles set active = false where id = $1', [early]);
@@ -3162,13 +3221,102 @@ async function phase9(ctx) {
   const reactivate = await affected('update public.profiles set active = true where id = $1', [early]);
   await as(null);
   const triggers = (await rows(`select tgrelid::regclass::text as t from pg_trigger where tgname = 'calendar_forget' order by 1`)).map((r) => r.t);
-  check('77. a person\'s meetings and sync are forgotten when they disconnect Google, reconnect without the calendar (reconnecting with '
-    + 'it keeps them) or are deactivated (other profile changes keep them)',
-    runs.david === true && runs.early === true && stable(before77) === stable({ hello: 5, boss: 5, david: 2, early: 2 })
-      && disconnected === true && bossKept === 5 && renameDavid === 1 && deactivate === 1 && reactivate === 1
+  check('77. a person\'s meetings and sync are forgotten when they disconnect Google, reconnect without the calendar (a plain '
+    + 'reconnect with it, as an admin reconnecting Gmail and Drive, keeps the flag, the sharing and the meetings; google_save never '
+    + 'touches the flag) or are deactivated (other profile changes keep them)',
+    runs.earlyShare === true && runs.david === true && runs.early === true
+      && stable(before77) === stable({ hello: 5, boss: 5, david: 2, early: 2 })
+      && disconnected === true && stable(bossKept) === stable({ left: 5, flag: true, me: true })
+      && stable(bossLost) === stable({ flag: true, me: false }) && renameDavid === 1 && deactivate === 1 && reactivate === 1
       && stable(after77) === stable({ hello: 0, boss: 0, david: 2, early: 0 })
       && stable(triggers) === stable(['private.google_accounts', 'profiles']),
-    { runs, before77, disconnected, bossKept, renameDavid, deactivate, after77, reactivate, triggers });
+    { runs, before77, disconnected, bossKept, bossLost, renameDavid, deactivate, after77, reactivate, triggers });
+
+  // 78. Sharing is an explicit opt-in: reconnecting never restarts it; Stop sharing (calendar_stop) ---------------------
+
+  // The regression: after a Calendar disconnect, a plain connect whose token still carries calendar.readonly (connect asks
+  // for include_granted_scopes) must not start sharing again. Hello (staff) disconnected above; a fresh google_save:
+  await connect(hello, 'staff.example@assetstackai.com', `openid email ${SCOPE.read}`);
+  await plant(hello);
+  const helloPlain = {
+    flag: await flagOf(hello), me: (await meOf(hello)).calendar, claimed: (await claim(30)).includes(hello),
+    connected: (await connectedNow()).includes(hello), save: await save(hello, T(70), [meeting('h1')]), left: await leftFor(hello),
+  };
+  // David (admin, sharing, with a meeting and a sync) stops sharing: his business connection stays, the flag goes off,
+  // his meetings and sync go; a second call changes nothing. Then a plain reconnect (Settings → Business) whose token
+  // still has the calendar doesn't start sharing again; only a Calendar connect does.
+  const davidBefore = await leftFor(david);
+  const rowOf = async (user) => one(`select email, refresh_token, scopes, calendar from private.google_accounts where user_id = $1`, [user]);
+  const davidRow = await rowOf(david);
+  await as(david);
+  const davidStop = { first: (await one('select public.calendar_stop() as ok')).ok, again: (await one('select public.calendar_stop() as ok')).ok };
+  await as(null);
+  const davidStopped = { row: await rowOf(david), left: await leftFor(david), me: await meOf(david) };
+  await connect(david, 'super.example@assetstackai.com', `openid email ${SCOPE.business} ${SCOPE.read}`);
+  const davidPlain = {
+    flag: await flagOf(david), me: (await meOf(david)).calendar, claimed: (await claim(30)).includes(david),
+    connected: (await connectedNow()).includes(david),
+  };
+  const davidReshare = await connect(david, 'super.example@assetstackai.com', `openid email ${SCOPE.business} ${SCOPE.read}`, { share: true });
+  const davidShares = { me: (await meOf(david)).calendar, connected: (await connectedNow()).includes(david) };
+  check('78. after a disconnect, a fresh plain connect with calendar.readonly doesn\'t share (flag off, not claimed, not connected, '
+    + 'google_me calendar false, and calendar_save forgets them)',
+    stable(helloPlain) === stable({ flag: false, me: false, claimed: false, connected: false, save: false, left: 0 }), helloPlain);
+  check('78. calendar_stop on an admin\'s business connection (Gmail and Drive): the connection stays as it was with the flag off, '
+    + 'their meetings and sync go; again, it changes nothing; a plain reconnect with the calendar in its token doesn\'t share again, '
+    + 'a Calendar connect (calendar_share) does',
+    davidBefore === 2 && davidRow?.calendar === true && stable(davidStop) === stable({ first: true, again: false })
+      && stable(davidStopped.row) === stable({ ...davidRow, calendar: false }) && davidStopped.left === 0
+      && davidStopped.me.calendar === false && davidStopped.me.business === true && davidStopped.me.google_email === davidRow.email
+      && stable(davidPlain) === stable({ flag: false, me: false, claimed: false, connected: false })
+      && davidReshare === true && stable(davidShares) === stable({ me: true, connected: true }),
+    { davidBefore, davidRow, davidStop, davidStopped, davidPlain, davidReshare, davidShares });
+
+  // Hello connects the calendar (a Calendar connect), syncs, then stops: a calendar-only connection is removed.
+  const helloShare = await connect(hello, 'staff.example@assetstackai.com', `openid email ${SCOPE.read}`, { share: true });
+  const helloSave = await save(hello, T(80), [meeting('h1'), meeting('h2')]);
+  const helloBefore = await leftFor(hello);
+  const bossRow = await rowOf(boss);
+  await as(hello);
+  const helloStop = { first: (await one('select public.calendar_stop() as ok')).ok, again: (await one('select public.calendar_stop() as ok')).ok };
+  await as(alice);
+  const aliceStop = (await one('select public.calendar_stop() as ok')).ok;
+  await as(carol);
+  const carolStop = await error('select public.calendar_stop()');
+  await as(null);
+  await db.exec('set role anon');
+  const anonStop = await error('select public.calendar_stop()');
+  await as(null);
+  const helloStopped = { row: await rowOf(hello), left: await leftFor(hello), me: await meOf(hello) };
+  check('78. calendar_stop on a calendar-only connection removes it (and the meetings and sync with it); again, or with no '
+    + 'connection, it changes nothing (false); only your own; an inactive account and anon are refused',
+    helloShare === true && helloSave === true && helloBefore === 3 && stable(helloStop) === stable({ first: true, again: false })
+      && helloStopped.row === undefined && helloStopped.left === 0 && helloStopped.me.google_email === null
+      && helloStopped.me.calendar === false && aliceStop === false && typeof carolStop === 'string' && typeof anonStop === 'string'
+      && stable(await rowOf(boss)) === stable(bossRow),
+    { helloShare, helloSave, helloBefore, helloStop, aliceStop, carolStop, anonStop, helloStopped });
+
+  // The forgetting fires on the flag going off (sharing again, or a change that keeps sharing, keeps the meetings).
+  runs.earlyAgain = await save(early, T(80), [meeting('e2')]);
+  const earlyBefore = await leftFor(early);
+  const earlyReshare = await shareCalendar(early);
+  const earlyKept = await leftFor(early);
+  const flagOff = await affected('update private.google_accounts set calendar = false where user_id = $1', [early]);
+  const earlyAfter = await leftFor(early);
+  // calendar_save's check still forgets someone whose flag is off though their scopes read the calendar. Its lock (for share
+  // of the profile and the connection) can't be interleaved with another transaction here (PGlite is one connection), so
+  // the race it closes isn't exercised: the check only confirms the lock is taken.
+  await plant(early);
+  const earlyPlanted = await leftFor(early);
+  runs.earlyOff = await save(early, T(90), [meeting('e3')]);
+  const earlyGone = await leftFor(early);
+  const locks = /perform 1 from public\.profiles p join private\.google_accounts g[^;]*\bg\.calendar and private\.has_calendar\(g\.scopes\)\s+for share of p, g;/
+    .test(migration9);
+  check('78. the forgetting fires when the flag goes off (not when sharing is turned on again); calendar_save then forgets them, '
+    + 'its check locking the profile and the connection (for share of p, g)',
+    runs.earlyAgain === true && earlyBefore === 2 && earlyReshare === true && earlyKept === 2 && flagOff === 1 && earlyAfter === 0
+      && earlyPlanted === 2 && runs.earlyOff === false && earlyGone === 0 && locks,
+    { runs, earlyBefore, earlyReshare, earlyKept, flagOff, earlyAfter, earlyPlanted, earlyGone, locks });
 
   // Back as the phases above left them (Late's address; David's own calendar stays connected for the sync check).
   await db.query("update public.profiles set email = 'late.example@assetstackai.com' where id = $1", [late]);

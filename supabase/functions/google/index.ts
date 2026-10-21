@@ -9,14 +9,16 @@
 //                                                          purpose 'calendar': any staff member, calendar.readonly only;
 //                                                          otherwise admins only, Gmail and Drive
 //   GET  callback ?code&state                            → 302 to <origin>/#/settings?tab=business&google=…, or for a
-//                                                          calendar connect <origin>/#/calendar?google=…
+//                                                          calendar connect <origin>/#/calendar?google=… (and only a
+//                                                          calendar connect turns sharing on: rpc calendar_share)
 //   POST send     {to, subject, text, attachment?}       → {id, from}: sent from the caller's own Gmail
 //   POST contract {template, folder, name, replacements} → {id, name, url}: the template copied into the folder, filled in
 //   POST outreach-sync {}                                → {ok, stats}: the outreach agent's sheet into outreach_emails,
 //                                                          then its Summary, Notes and mailbox tabs written back
 //                                                          (docs/PHASE2.md §12)
-//   POST calendar-sync {force?}                          → {ok, claimed, synced, failed}: the connected staff whose turn
-//                                                          it is (rpc calendar_claim), each one's primary calendar into
+//   POST calendar-sync {force?}                          → {ok, claimed, synced, failed}: the staff sharing their
+//                                                          calendar whose turn it is (rpc calendar_claim), each one's
+//                                                          primary calendar into
 //                                                          calendar_meetings (rpc calendar_save); titles only, never
 //                                                          descriptions, places, attendees or links
 //
@@ -25,7 +27,7 @@
 // outreach_access for outreach-sync (anyone who can see Outreach; the sheet is read with the Google account of the
 // admin who set its link), and PostgREST decides who that is. Refresh tokens are read and saved with the secret key
 // (rpc google_token / google_save), which exists only in the function runtime; so are the outreach tables the sync
-// writes and the calendar RPCs (calendar_claim / calendar_save).
+// writes and the calendar RPCs (calendar_share / calendar_claim / calendar_save).
 //
 // Env (Supabase injects the first three): SUPABASE_URL; SUPABASE_PUBLISHABLE_KEYS (JSON, .default) or
 // SUPABASE_ANON_KEY; SUPABASE_SECRET_KEYS (JSON, .default) or SUPABASE_SERVICE_ROLE_KEY; function secrets
@@ -47,7 +49,9 @@ const DOCS = 'https://docs.googleapis.com/v1/documents';
 const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets'; // the drive scope covers the Sheets API
 export const SCOPES = 'openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/drive';
 export const CALENDAR_SCOPES = 'openid email https://www.googleapis.com/auth/calendar.readonly'; // a calendar connect
-// Either one lets the sync read events (has_calendar() in 0009): whole entries of the space-separated scope list.
+// Either one lets the sync read events (has_calendar() in 0009): whole entries of the space-separated scope list. A
+// scope alone never shares a calendar: sharing is google_accounts.calendar, set only by a calendar connect's callback
+// (rpc calendar_share).
 const CALENDAR_SCOPE_ENTRIES = ['https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/calendar'];
 const CALENDAR_API = 'https://www.googleapis.com/calendar/';
 const CALENDAR_EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
@@ -528,7 +532,8 @@ const callbackUrl = (cfg) => `${cfg.url}/functions/v1/google/callback`;
 
 // purpose 'calendar' (any staff member): calendar.readonly only, back to the Calendar page. Anything else (admins only,
 // checked by the caller): Gmail and Drive, back to Settings → Business. include_granted_scopes keeps what was granted
-// before either way, so one refresh token carries both.
+// before either way, so one refresh token carries both; that is why sharing is an explicit flag
+// (google_accounts.calendar, 0009) that only a calendar connect's callback turns on, never the scopes a token carries.
 async function connect(body, me, cfg) {
   const calendar = body.purpose === 'calendar';
   const origin = allowedOrigin(body.origin, cfg.origins);
@@ -558,6 +563,10 @@ async function connect(body, me, cfg) {
 const CALENDAR_RESULTS = new Set(['denied', 'wrong_account', 'no_refresh_token', 'calendar_scope']);
 
 // Google sends the browser here. Only a valid state says where Cortex is; anything else gets a plain page.
+// google_save (0004) stores the token and scopes and never touches the calendar flag: a new connection starts not
+// sharing and an existing one keeps what it had. A calendar connect then opts in with rpc calendar_share (secret key);
+// any other connect never calls it, so a plain connect after a Calendar disconnect doesn't start sharing again even
+// when Google hands back calendar.readonly (include_granted_scopes), and an admin already sharing keeps sharing.
 async function callback(url, cfg, fetch) {
   const state = await verifyState(url.searchParams.get('state'), cfg.clientSecret);
   const origin = state ? allowedOrigin(state.origin, cfg.origins) : '';
@@ -607,6 +616,20 @@ async function callback(url, cfg, fetch) {
     if (!saved.ok) return fail('save');
   } catch {
     return fail('save');
+  }
+  if (calendar) {
+    // → true when the row was saved with a calendar scope and is now shared; false or a failure → error (the token
+    // stays saved, sharing stays as it was).
+    try {
+      const shared = await fetch(`${cfg.url}/rest/v1/rpc/calendar_share`, {
+        method: 'POST',
+        headers: { ...keyHeaders(cfg.secretKey), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ p_user: state.uid }),
+      });
+      if (!shared.ok || (await readJson(shared)) !== true) return fail('share');
+    } catch {
+      return fail('share');
+    }
   }
   return back('connected');
 }
@@ -1255,10 +1278,10 @@ function claimedIds(data) {
   return [...new Set(list.map((x) => str(x && typeof x === 'object' ? Object.values(x)[0] : x)).filter(Boolean))];
 }
 
-// Claims the people whose turn it is (connected staff not synced in the last 10 minutes, or 1 minute when forced) and
-// syncs them one at a time with their own Google accounts. One person's failure (saved as their error, with reconnect
-// when their Google connection needs it) never stops the others. Every save carries this run's start, so an older run
-// finishing late never overwrites a newer one's meetings or status (calendar_save).
+// Claims the people whose turn it is (staff sharing their calendar, not synced in the last 10 minutes, or 1 minute when
+// forced) and syncs them one at a time with their own Google accounts. One person's failure (saved as their error, with
+// reconnect when their Google connection needs it) never stops the others. Every save carries this run's start, so an
+// older run finishing late never overwrites a newer one's meetings or status (calendar_save).
 async function calendarSync(body, cfg, fetch) {
   const started = new Date();
   const start = started.toISOString();
@@ -1293,7 +1316,7 @@ async function calendarSync(body, cfg, fetch) {
         },
       }, 'Could not save the calendar.');
       if (error) result.failed++;
-      else if (saved === true) result.synced++; // false: no longer connected staff, and their meetings are gone
+      else if (saved === true) result.synced++; // false: no longer staff sharing a calendar; their meetings are gone
     } catch {
       result.failed++;
     }

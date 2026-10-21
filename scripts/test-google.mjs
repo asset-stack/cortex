@@ -4,8 +4,9 @@
 // Covers CORS, the caller check, connect / callback (signed state, your own account only), send (validation and the
 // MIME message Gmail gets), contract (Drive copy, .docx conversion, placeholders), outreach-sync (the agent's sheet
 // into outreach_emails, the Summary, Notes and mailbox tabs back, never over the agent's tab, sync_error) and the
-// calendar (a staff member's calendar connect and callback, calendar-sync: claim, events.list, the rows calendar_save
-// gets, reconnects and per-person failures). Exits non-zero when any check fails.
+// calendar (a staff member's calendar connect and callback, which alone opts in with calendar_share; calendar-sync:
+// claim, events.list, the rows calendar_save gets, reconnects and per-person failures). Exits non-zero when any check
+// fails.
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
 
@@ -75,6 +76,7 @@ const defaults = () => ({
   [`${RPC}/google_me`]: () => reply(200, ME),
   [`${RPC}/google_token`]: () => reply(200, { email: 'ana@example.com', refresh_token: 'stored-refresh-token', scopes: g.SCOPES }),
   [`${RPC}/google_save`]: () => new Response(null, { status: 204 }),
+  [`${RPC}/calendar_share`]: () => reply(200, true),
   [TOKEN_URL]: (c) => (c.form.get('grant_type') === 'refresh_token'
     ? reply(200, { access_token: 'fresh-access-token', expires_in: 3599, token_type: 'Bearer' })
     : reply(200, {
@@ -453,6 +455,7 @@ await check('callback: a failed exchange, another or unverified account, no refr
     assert.equal(r.status, 302, reason);
     assert.equal(r.headers.get('location'), settings(`error&reason=${reason}`));
     if (reason !== 'save') assert.equal(r.to(`${RPC}/google_save`).length, 0, `${reason}: nothing saved`);
+    assert.equal(r.to(`${RPC}/calendar_share`).length, 0, `${reason}: a plain connect never shares a calendar`);
   }
   const noCode = await callback(state, { query: `?state=${encodeURIComponent(state)}` });
   assert.equal(noCode.headers.get('location'), settings('error&reason=exchange'));
@@ -479,6 +482,7 @@ await check('callback: success exchanges the code, saves with the secret key and
   assert.equal(save.headers.get('authorization'), null, 'an sb_secret_ key is not a JWT: apikey only');
   assert.deepEqual(save.json(), { p_user: 'u-ana', p_email: 'ana@example.com', p_token: 'new-refresh-token', p_scopes: g.SCOPES });
   assert.ok(!r.headers.get('location').includes('token') && r.text === '', 'no token in the redirect');
+  assert.equal(r.to(`${RPC}/calendar_share`).length, 0, 'a plain connect never calls calendar_share');
 });
 
 await check('callback: a legacy JWT-style secret key is sent as apikey and as Bearer', async () => {
@@ -1916,7 +1920,10 @@ await check('calendar connect: staff are still refused a plain connect, send and
   assert.ok(!('purpose' in payload), 'no purpose in a plain connect’s state');
 });
 
-await check('calendar callback: back to #/calendar?google=connected, saved with the secret key and Google’s scopes', async () => {
+const shares = (r) => r.to(`${RPC}/calendar_share`);
+const noTokenShared = (r) => assert.ok(shares(r).every((c) => !/access-token|refresh-token|id_token|eyJ/.test(c.body)), 'no token in a calendar_share body');
+
+await check('calendar callback: saved with the secret key and Google’s scopes, then rpc calendar_share opts in → #/calendar?google=connected', async () => {
   for (const scope of [CAL_SCOPES, `${g.SCOPES} ${CAL_SCOPE}`, 'openid email https://www.googleapis.com/auth/calendar']) {
     const r = await callback(await calState(), { routes: { [TOKEN_URL]: () => reply(200, calToken({ scope })) } });
     assert.equal(r.status, 302, scope);
@@ -1924,10 +1931,28 @@ await check('calendar callback: back to #/calendar?google=connected, saved with 
     const [save] = r.to(`${RPC}/google_save`);
     assert.equal(save.headers.get('apikey'), 'sb_secret_test');
     assert.deepEqual(save.json(), { p_user: 'u-ana', p_email: 'ana@example.com', p_token: 'new-refresh-token', p_scopes: scope });
+    const [share, ...more] = shares(r);
+    assert.ok(share && !more.length, `${scope}: calendar_share called once`);
+    assert.ok(r.calls.indexOf(share) > r.calls.indexOf(save), 'calendar_share comes after google_save');
+    assert.equal(share.method, 'POST');
+    assert.equal(share.headers.get('apikey'), 'sb_secret_test', 'with the secret key');
+    assert.equal(share.headers.get('authorization'), null);
+    assert.equal(share.headers.get('content-type'), 'application/json');
+    assert.deepEqual(share.json(), { p_user: 'u-ana' }, 'the state’s uid, nothing else');
+    assert.equal(r.calls.at(-1), share, 'nothing called after it');
+    noTokenShared(r);
   }
-  // A plain connect whose token has the calendar too (granted before) still goes back to Settings.
-  const plain = await callback(await stateFor(), { routes: { [TOKEN_URL]: () => reply(200, calToken({ scope: `${g.SCOPES} ${CAL_SCOPE}` })) } });
-  assert.equal(plain.headers.get('location'), settings('connected'));
+  // Another person's state → their uid (from the signed state, not the token).
+  const sam = await callback(await calState({ uid: 'u-sam', email: 'sam@example.com' }), {
+    routes: { [TOKEN_URL]: () => reply(200, calToken({ id_token: idToken({ email: 'sam@example.com' }) })) },
+  });
+  assert.equal(sam.headers.get('location'), calendarPage('connected'));
+  assert.deepEqual(shares(sam).map((c) => c.json()), [{ p_user: 'u-sam' }]);
+  // A legacy JWT-style secret key: apikey and Bearer, as google_save.
+  const legacy = await callback(await calState(), { env: LEGACY_ENV, routes: { [TOKEN_URL]: () => reply(200, calToken()) } });
+  assert.equal(legacy.headers.get('location'), calendarPage('connected'));
+  const [legacyShare] = shares(legacy);
+  assert.deepEqual([legacyShare.headers.get('apikey'), legacyShare.headers.get('authorization')], ['eyJ.service.placeholder', 'Bearer eyJ.service.placeholder']);
   // The purpose is signed: a plain state can't be turned into a calendar one.
   const good = await stateFor();
   const [, sig] = good.split('.');
@@ -1941,10 +1966,12 @@ await check('calendar callback: no calendar scope in the token → google=calend
     const r = await callback(await calState(), { routes: { [TOKEN_URL]: () => reply(200, calToken({ scope })) } });
     assert.equal(r.headers.get('location'), calendarPage('calendar_scope'), String(scope));
     assert.equal(r.to(`${RPC}/google_save`).length, 0, `${scope}: nothing saved`);
+    assert.equal(shares(r).length, 0, `${scope}: nothing shared`);
   }
   // A plain connect never checks the calendar scope (unchanged).
   const plain = await callback(await stateFor(), { routes: { [TOKEN_URL]: () => reply(200, calToken({ scope: g.SCOPES })) } });
   assert.equal(plain.headers.get('location'), settings('connected'));
+  assert.equal(shares(plain).length, 0);
 
   const state = await calState();
   const denied = await callback(state, { query: `?error=access_denied&state=${encodeURIComponent(state)}` });
@@ -1961,9 +1988,59 @@ await check('calendar callback: no calendar scope in the token → google=calend
     const r = await callback(state, { routes });
     assert.equal(r.status, 302, result);
     assert.equal(r.headers.get('location'), calendarPage(result));
+    assert.equal(shares(r).length, 0, `${result}: nothing shared (a failed google_save stops before calendar_share)`);
   }
   const noCode = await callback(state, { query: `?state=${encodeURIComponent(state)}` });
   assert.equal(noCode.headers.get('location'), calendarPage('error'));
+  assert.equal(shares(noCode).length, 0);
+});
+
+await check('calendar callback: calendar_share failing or not returning true → #/calendar?google=error (token saved, nothing more)', async () => {
+  for (const [label, answer] of [
+    ['500', () => reply(500, { code: 'XX000', message: 'boom' })],
+    ['403', () => reply(403, { code: '42501', message: 'permission denied' })],
+    ['404', () => reply(404, { code: 'PGRST202', message: 'not found' })],
+    ['network', () => { throw new TypeError('fetch failed'); }],
+    ['false', () => reply(200, false)],
+    ['null', () => reply(200, null)],
+    ['empty 204', () => new Response(null, { status: 204 })],
+    ['"true"', () => reply(200, 'true')],
+    ['[true]', () => reply(200, [true])],
+    ['not JSON', () => new Response('true!', { status: 200 })],
+  ]) {
+    const r = await callback(await calState(), { routes: { [TOKEN_URL]: () => reply(200, calToken()), [`${RPC}/calendar_share`]: answer } });
+    assert.equal(r.status, 302, label);
+    assert.equal(r.headers.get('location'), calendarPage('error'), label);
+    assert.equal(r.to(`${RPC}/google_save`).length, 1, `${label}: google_save ran first`);
+    assert.equal(shares(r).length, 1, `${label}: asked once, no retry`);
+    assert.equal(r.calls.at(-1), shares(r)[0], `${label}: nothing called after it`);
+    assert.ok(!r.headers.get('location').includes('token') && r.text === '', `${label}: no token in the redirect`);
+    noTokenShared(r);
+  }
+});
+
+await check('calendar callback: a plain connect never calls calendar_share, even when Google hands back calendar.readonly (granted before)', async () => {
+  // The regression: after a Calendar disconnect, an admin's plain connect (include_granted_scopes) returns a token that
+  // still carries calendar.readonly. It saves and goes back to Settings as before, and must not start sharing again.
+  for (const scope of [`${g.SCOPES} ${CAL_SCOPE}`, `${g.SCOPES} https://www.googleapis.com/auth/calendar`, CAL_SCOPES]) {
+    const r = await callback(await stateFor(), { routes: { [TOKEN_URL]: () => reply(200, calToken({ scope })) } });
+    assert.equal(r.status, 302, scope);
+    assert.equal(r.headers.get('location'), settings('connected'), scope);
+    const [save] = r.to(`${RPC}/google_save`);
+    assert.deepEqual(save.json(), { p_user: 'u-ana', p_email: 'ana@example.com', p_token: 'new-refresh-token', p_scopes: scope });
+    assert.equal(shares(r).length, 0, `${scope}: never calendar_share`);
+  }
+  // Even with calendar_share broken, a plain connect is unaffected (it never asks).
+  const broken = await callback(await stateFor(), {
+    routes: { [TOKEN_URL]: () => reply(200, calToken({ scope: `${g.SCOPES} ${CAL_SCOPE}` })), [`${RPC}/calendar_share`]: () => reply(500, {}) },
+  });
+  assert.deepEqual([broken.headers.get('location'), shares(broken).length], [settings('connected'), 0]);
+  // Any other purpose in a signed state is a plain connect too.
+  for (const purpose of ['Calendar', 'business', 'calendar ', ['calendar'], { calendar: true }, true]) {
+    const r = await callback(await stateFor({ purpose }), { routes: { [TOKEN_URL]: () => reply(200, calToken({ scope: `${g.SCOPES} ${CAL_SCOPE}` })) } });
+    assert.equal(r.headers.get('location'), settings('connected'), JSON.stringify(purpose));
+    assert.equal(shares(r).length, 0, `${JSON.stringify(purpose)}: never calendar_share`);
+  }
 });
 
 await check('calendar-sync: 401 without a JWT (nothing called), 403 for non-staff, any staff member may sync; CORS; GET → 405', async () => {

@@ -1050,6 +1050,13 @@ function createActions(mutate, mode) {
     connectCalendar: () => googleConnectUrl(mode.invoke, window.location.origin, 'calendar'),
     // Read everyone's connected Google Calendar into the team Calendar now (anyone). → { ok, claimed, synced, failed }
     syncCalendar: ({ force = false } = {}) => mode.invoke('google/calendar-sync', { force: Boolean(force) }),
+    // Stop sharing my Google Calendar (anyone): my meetings leave the Calendar; an admin's Gmail and Drive stay connected.
+    // → Promise<boolean>
+    stopCalendar: async () => {
+      const ok = await mode.calendarStop();
+      await mode.refreshGoogle();
+      return ok;
+    },
     // Outreach: read the agent's sheet into the database now (anyone who can see Outreach). → { ok, stats } | { ok: false, error }
     syncOutreach: async () => {
       const allowed = mode.read((st) => canView(st, 'outreach'));
@@ -1289,6 +1296,7 @@ function DemoProvider({ children }) {
     flush: async () => {},
     takeOutreachSheet: async () => ({ ok: false, error: 'Syncing the sheet works in live mode only.' }),
     googleDisconnect: async () => false,
+    calendarStop: async () => false,
     refreshGoogle: async () => {},
   }), [mutate, commit]);
 
@@ -1842,6 +1850,15 @@ function LiveProvider({ userId, children }) {
       googleDisconnect: async () => {
         try {
           const { data, error } = await supabase.rpc('google_disconnect');
+          return !error && Boolean(data);
+        } catch {
+          return false;
+        }
+      },
+      // 0009: the calendar flag off (or a calendar-only connection removed); the database forgets the meetings.
+      calendarStop: async () => {
+        try {
+          const { data, error } = await supabase.rpc('calendar_stop');
           return !error && Boolean(data);
         } catch {
           return false;

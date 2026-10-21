@@ -80,10 +80,16 @@ export default function Calendar() {
   // Google meetings for the months on screen: these twelve, and the Archive's once it's open.
   const from = archiveOpen && archive.length ? `${archive.at(-1)}-01` : `${months[0]}-01`;
   const to = lastOf(months.at(-1));
+  // Only the newest request's answer is shown (opening the Archive mid-sync widens the range; an older, narrower answer
+  // arriving later must not replace it).
+  const asked = useRef(0);
   const loadMeetings = useCallback(async () => {
+    const n = ++asked.current;
     const res = await calendar.meetings(from, to);
-    if (res.ok) setMeetings(res.rows);
+    if (res.ok && n === asked.current) setMeetings(res.rows);
   }, [calendar, from, to]);
+  const loadRef = useRef(loadMeetings);
+  loadRef.current = loadMeetings;
   const loadStatus = useCallback(async () => {
     const res = await calendar.status();
     if (res.ok) setStatus(res);
@@ -97,8 +103,8 @@ export default function Calendar() {
     setSyncing(false);
     if (!res.ok) setNote({ ok: false, text: res.error || 'Couldn’t sync Google Calendar' });
     else if (res.failed) setNote({ ok: false, text: `${res.failed} calendar${res.failed === 1 ? '' : 's'} couldn’t sync` });
-    await Promise.all([loadStatus(), loadMeetings()]);
-  }, [calendar, loadStatus, loadMeetings]);
+    await Promise.all([loadStatus(), loadRef.current()]); // the range on screen now, not when the sync started
+  }, [calendar, loadStatus]);
 
   // Opening the Calendar syncs everyone's Google Calendar when the last sync is over 10 minutes old (live mode; the
   // google function also spaces each person's syncs out, so several people opening it at once sync once).
@@ -126,10 +132,10 @@ export default function Calendar() {
     if (res.ok) window.location.assign(res.url); // to Google, which comes back here
     else setNote({ ok: false, text: res.error || 'Couldn’t connect Google Calendar. Try again.' });
   };
-  const disconnect = async () => {
-    const ok = await actions.disconnectGoogle();
-    setNote(ok ? { ok: true, text: 'Disconnected' } : { ok: false, text: 'Couldn’t disconnect. Try again.' });
-    await Promise.all([loadStatus(), loadMeetings()]);
+  const stop = async () => {
+    const ok = await actions.stopCalendar();
+    setNote(ok ? { ok: true, text: 'Your calendar is no longer shared' } : { ok: false, text: 'Couldn’t stop sharing. Try again.' });
+    await Promise.all([loadStatus(), loadRef.current()]);
   };
 
   const openEntry = (e) => {
@@ -161,7 +167,7 @@ export default function Calendar() {
         <span ref={setKindsAnchor}>
           <IconButton icon={ListFilter} label={kinds.size ? 'Kind filter on' : 'Filter by kind'} active={kinds.size > 0} onClick={() => setPopover(popover === 'kinds' ? null : 'kinds')} />
         </span>
-        <div className="ml-auto"><GoogleCalendar status={status} syncing={syncing} onSync={() => sync(true)} onConnect={connect} onDisconnect={disconnect} /></div>
+        <div className="ml-auto"><GoogleCalendar status={status} syncing={syncing} onSync={() => sync(true)} onConnect={connect} onStop={stop} /></div>
       </div>
       <p role="status" className={cn('text-[12.5px]', note && 'mt-2', note?.ok ? 'text-emerald-200' : 'text-amber-200')}>{note?.text}</p>
 
