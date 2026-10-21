@@ -23,6 +23,10 @@ const GOOGLE_ERRORS = {
   wrong_account: 'Connect the Google account for your own Cortex email',
   calendar_scope: 'Allow Cortex to see your Google Calendar to connect it',
   no_refresh_token: 'Google didn’t finish connecting. Try again.',
+  client: 'Google didn’t accept Cortex’s Google key. An admin needs to check the Google setup.',
+  exchange: 'Google didn’t finish connecting. Try again.',
+  save: 'Couldn’t save your Google connection. Try again.',
+  share: 'Couldn’t turn on sharing. Try again.',
 };
 
 /** A Google meeting: whose, when, and its title (Busy for a Private one). */

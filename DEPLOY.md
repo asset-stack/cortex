@@ -534,6 +534,7 @@ client, the Supabase secrets and the `google` function). Contract: `docs/PHASE2.
 
 | Symptom | Fix |
 |---|---|
+| Connecting Google says "Google didn't accept Cortex's Google key" | The function's `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (Supabase → Edge Functions → **Secrets**) aren't a matching, enabled pair on the Google client. Google shows a secret only once: add a new one (section 11 step 1) and put it in both the function secret and **Authentication** → **Google**. The function's **Logs** show each failed connect as a `google callback:` line with Google's or the database's reason. |
 | **Connect Google Calendar** says "Only admins can use Google from Cortex.", or the Calendar's sync says "Not found." | The `google` function still runs the old code: redeploy it (section 13 step 3). |
 | "Only @assetstackai.com Google accounts can sign in." | A personal Google account was chosen. Sign in with the work account. |
 | Google: "Access blocked … can only be used within its organization" | The account isn't in the Workspace. Expected for outsiders. |

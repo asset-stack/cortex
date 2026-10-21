@@ -139,6 +139,24 @@ const callback = async (state, { query, ...opts } = {}) => run('callback', {
   method: 'GET', auth: '', origin: '', query: query ?? `?code=auth-code&state=${encodeURIComponent(state)}`, ...opts,
 });
 const settings = (result) => `${ORIGIN}/#/settings?tab=business&google=${result}`;
+// A callback with console.error captured: → its result plus `logs` (the function's one line per failed connect).
+const loggedCallback = async (state, opts) => {
+  const logs = [];
+  const original = console.error;
+  console.error = (...args) => logs.push(args.map(String).join(' '));
+  try {
+    return { ...(await callback(state, opts)), logs };
+  } finally {
+    console.error = original;
+  }
+};
+// A failed connect's log line names its step and never a code, token or secret.
+const SECRET_BITS = ['auth-code', 'new-refresh-token', 'first-access-token'];
+function failureLogged(r, step) {
+  assert.equal(r.logs.length, 1, `${step}: one log line`);
+  assert.ok(r.logs[0].startsWith(`google callback: ${step} `), r.logs[0]);
+  [...SECRET_BITS, ENV.GOOGLE_CLIENT_SECRET].forEach((x) => assert.ok(!r.logs[0].includes(x), `${step}: no ${x} in the log`));
+}
 
 const PDF = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(300, 7), Buffer.from('\n%%EOF\n')]);
 const email = (over = {}) => ({
@@ -444,6 +462,9 @@ await check('callback: a failed exchange, another or unverified account, no refr
   const cases = [
     ['exchange', exchange({ error: 'invalid_grant', error_description: 'Bad Request' }, 400)],
     ['exchange', { [TOKEN_URL]: () => { throw new TypeError('fetch failed'); } }],
+    // The client ID and secret don't match (a GOOGLE_CLIENT_SECRET that isn't an enabled secret of the client).
+    ['client', exchange({ error: 'invalid_client', error_description: 'Unauthorized' }, 401)],
+    ['client', exchange({ error: 'unauthorized_client' }, 400)],
     ['wrong_account', exchange(token({ id_token: idToken({ email: 'someone@example.com' }) }))],
     ['wrong_account', exchange(token({ id_token: idToken({ email_verified: false }) }))],
     ['wrong_account', exchange(token({ id_token: undefined }))],
@@ -451,14 +472,22 @@ await check('callback: a failed exchange, another or unverified account, no refr
     ['save', { [`${RPC}/google_save`]: () => reply(500, { message: 'boom' }) }],
   ];
   for (const [reason, routes] of cases) {
-    const r = await callback(state, { routes });
+    const r = await loggedCallback(state, { routes });
     assert.equal(r.status, 302, reason);
     assert.equal(r.headers.get('location'), settings(`error&reason=${reason}`));
+    if (['exchange', 'client', 'save'].includes(reason)) failureLogged(r, reason);
+    else assert.equal(r.logs.length, 0, `${reason}: nothing logged (it names itself)`);
     if (reason !== 'save') assert.equal(r.to(`${RPC}/google_save`).length, 0, `${reason}: nothing saved`);
     assert.equal(r.to(`${RPC}/calendar_share`).length, 0, `${reason}: a plain connect never shares a calendar`);
   }
-  const noCode = await callback(state, { query: `?state=${encodeURIComponent(state)}` });
+  const noCode = await loggedCallback(state, { query: `?state=${encodeURIComponent(state)}` });
   assert.equal(noCode.headers.get('location'), settings('error&reason=exchange'));
+  failureLogged(noCode, 'exchange');
+  // The log carries Google's and PostgREST's short error, so the cause shows in the function's logs.
+  const why = await loggedCallback(state, { routes: exchange({ error: 'invalid_client', error_description: 'Unauthorized' }, 401) });
+  assert.equal(why.logs[0], 'google callback: client 401 invalid_client · Unauthorized');
+  const db = await loggedCallback(state, { routes: { [`${RPC}/google_save`]: () => reply(403, { code: '42501', message: 'permission denied for function google_save' }) } });
+  assert.equal(db.logs[0], 'google callback: save 403 42501 · permission denied for function google_save');
 });
 
 await check('callback: success exchanges the code, saves with the secret key and goes back to Settings connected', async () => {
@@ -1961,7 +1990,7 @@ await check('calendar callback: saved with the secret key and Google’s scopes,
   assert.deepEqual([forged.status, forged.text, forged.calls.length], [400, EXPIRED, 0]);
 });
 
-await check('calendar callback: no calendar scope in the token → google=calendar_scope and nothing saved; other failures by name', async () => {
+await check('calendar callback: no calendar scope in the token → google=calendar_scope and nothing saved; other failures by name (error&reason=<step>)', async () => {
   for (const scope of ['openid email', g.SCOPES, `openid email ${CAL_SCOPE}.extra`, 'openid email https://www.googleapis.com/auth/calendar.events', undefined, '']) {
     const r = await callback(await calState(), { routes: { [TOKEN_URL]: () => reply(200, calToken({ scope })) } });
     assert.equal(r.headers.get('location'), calendarPage('calendar_scope'), String(scope));
@@ -1978,24 +2007,27 @@ await check('calendar callback: no calendar scope in the token → google=calend
   assert.deepEqual([denied.status, denied.headers.get('location'), denied.calls.length], [302, calendarPage('denied'), 0]);
   const exchange = (body, status = 200) => ({ [TOKEN_URL]: () => reply(status, body) });
   for (const [result, routes] of [
-    ['error', exchange({ error: 'invalid_grant' }, 400)],
-    ['error', { [TOKEN_URL]: () => { throw new TypeError('fetch failed'); } }],
+    ['error&reason=exchange', exchange({ error: 'invalid_grant' }, 400)],
+    ['error&reason=exchange', { [TOKEN_URL]: () => { throw new TypeError('fetch failed'); } }],
+    ['error&reason=client', exchange({ error: 'invalid_client', error_description: 'Unauthorized' }, 401)],
     ['wrong_account', exchange(calToken({ id_token: idToken({ email: 'someone@example.com' }) }))],
     ['wrong_account', exchange(calToken({ id_token: idToken({ email_verified: false }), scope: 'openid email' }))],
     ['no_refresh_token', exchange(calToken({ refresh_token: undefined }))],
-    ['error', { [TOKEN_URL]: () => reply(200, calToken()), [`${RPC}/google_save`]: () => reply(500, { message: 'boom' }) }],
+    ['error&reason=save', { [TOKEN_URL]: () => reply(200, calToken()), [`${RPC}/google_save`]: () => reply(500, { message: 'boom' }) }],
   ]) {
-    const r = await callback(state, { routes });
+    const r = await loggedCallback(state, { routes });
     assert.equal(r.status, 302, result);
     assert.equal(r.headers.get('location'), calendarPage(result));
     assert.equal(shares(r).length, 0, `${result}: nothing shared (a failed google_save stops before calendar_share)`);
+    if (result.startsWith('error&reason=')) failureLogged(r, result.slice('error&reason='.length));
   }
-  const noCode = await callback(state, { query: `?state=${encodeURIComponent(state)}` });
-  assert.equal(noCode.headers.get('location'), calendarPage('error'));
+  const noCode = await loggedCallback(state, { query: `?state=${encodeURIComponent(state)}` });
+  assert.equal(noCode.headers.get('location'), calendarPage('error&reason=exchange'));
   assert.equal(shares(noCode).length, 0);
+  failureLogged(noCode, 'exchange');
 });
 
-await check('calendar callback: calendar_share failing or not returning true → #/calendar?google=error (token saved, nothing more)', async () => {
+await check('calendar callback: calendar_share failing or not returning true → #/calendar?google=error&reason=share (token saved, nothing more)', async () => {
   for (const [label, answer] of [
     ['500', () => reply(500, { code: 'XX000', message: 'boom' })],
     ['403', () => reply(403, { code: '42501', message: 'permission denied' })],
@@ -2008,9 +2040,10 @@ await check('calendar callback: calendar_share failing or not returning true →
     ['[true]', () => reply(200, [true])],
     ['not JSON', () => new Response('true!', { status: 200 })],
   ]) {
-    const r = await callback(await calState(), { routes: { [TOKEN_URL]: () => reply(200, calToken()), [`${RPC}/calendar_share`]: answer } });
+    const r = await loggedCallback(await calState(), { routes: { [TOKEN_URL]: () => reply(200, calToken()), [`${RPC}/calendar_share`]: answer } });
     assert.equal(r.status, 302, label);
-    assert.equal(r.headers.get('location'), calendarPage('error'), label);
+    assert.equal(r.headers.get('location'), calendarPage('error&reason=share'), label);
+    failureLogged(r, 'share');
     assert.equal(r.to(`${RPC}/google_save`).length, 1, `${label}: google_save ran first`);
     assert.equal(shares(r).length, 1, `${label}: asked once, no retry`);
     assert.equal(r.calls.at(-1), shares(r)[0], `${label}: nothing called after it`);

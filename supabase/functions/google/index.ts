@@ -559,8 +559,20 @@ async function connect(body, me, cfg) {
   return { url: `${GOOGLE_AUTH}?${query}` };
 }
 
-// A calendar connect's failures, as the Calendar page reads them (#/calendar?google=…): the reasons it names, else error.
+// A calendar connect's failures, as the Calendar page reads them (#/calendar?google=…): the reasons it names, else
+// error&reason=<step> (client, exchange, save or share), as Settings reads a plain connect's.
 const CALENDAR_RESULTS = new Set(['denied', 'wrong_account', 'no_refresh_token', 'calendar_scope']);
+// Google's token answer when the client ID and secret don't match (a GOOGLE_CLIENT_SECRET that isn't an enabled secret of
+// that client): reason client, so an admin knows to check the setup rather than try again.
+const CLIENT_ERRORS = new Set(['invalid_client', 'unauthorized_client']);
+
+// One line in the function's logs (Supabase → Edge Functions → google → Logs) for a failed connect: the step, the HTTP
+// status and Google's or PostgREST's short error. Never a code, token or secret: only those error fields are read.
+function logFailure(step, status, data) {
+  const detail = [data?.error, data?.error_description, data?.code, data?.message]
+    .filter((x) => typeof x === 'string' && x).join(' · ').replace(/\s+/g, ' ').slice(0, 200);
+  console.error('google callback:', step, status || '-', detail || '-');
+}
 
 // Google sends the browser here. Only a valid state says where Cortex is; anything else gets a plain page.
 // google_save (0004) stores the token and scopes and never touches the calendar flag: a new connection starts not
@@ -576,12 +588,12 @@ async function callback(url, cfg, fetch) {
     ? (result) => redirect(`${origin}/#/calendar?google=${result}`)
     : (result) => redirect(`${origin}/#/settings?tab=business&google=${result}`);
   const fail = calendar
-    ? (reason) => back(CALENDAR_RESULTS.has(reason) ? reason : 'error')
+    ? (reason) => back(CALENDAR_RESULTS.has(reason) ? reason : `error&reason=${reason}`)
     : (reason) => back(`error&reason=${reason}`);
 
   if (url.searchParams.get('error')) return fail('denied');
   const code = url.searchParams.get('code');
-  if (!code) return fail('exchange');
+  if (!code) { logFailure('exchange', 0, { error: 'no code' }); return fail('exchange'); }
 
   let token;
   try {
@@ -593,8 +605,13 @@ async function callback(url, cfg, fetch) {
       }).toString(),
     });
     token = await readJson(res);
-    if (!res.ok || !token || token.error) return fail('exchange');
-  } catch {
+    if (!res.ok || !token || token.error) {
+      const step = CLIENT_ERRORS.has(str(token?.error)) ? 'client' : 'exchange';
+      logFailure(step, res.status, token);
+      return fail(step);
+    }
+  } catch (e) {
+    logFailure('exchange', 0, { error: str(e?.name) || 'network' });
     return fail('exchange');
   }
 
@@ -613,8 +630,9 @@ async function callback(url, cfg, fetch) {
       headers: { ...keyHeaders(cfg.secretKey), 'Content-Type': 'application/json' },
       body: JSON.stringify({ p_user: state.uid, p_email: email, p_token: token.refresh_token, p_scopes: str(token.scope) }),
     });
-    if (!saved.ok) return fail('save');
-  } catch {
+    if (!saved.ok) { logFailure('save', saved.status, await readJson(saved)); return fail('save'); }
+  } catch (e) {
+    logFailure('save', 0, { error: str(e?.name) || 'network' });
     return fail('save');
   }
   if (calendar) {
@@ -626,8 +644,13 @@ async function callback(url, cfg, fetch) {
         headers: { ...keyHeaders(cfg.secretKey), 'Content-Type': 'application/json' },
         body: JSON.stringify({ p_user: state.uid }),
       });
-      if (!shared.ok || (await readJson(shared)) !== true) return fail('share');
-    } catch {
+      const answer = await readJson(shared);
+      if (!shared.ok || answer !== true) {
+        logFailure('share', shared.status, shared.ok ? { error: `answered ${JSON.stringify(answer)}`.slice(0, 60) } : answer);
+        return fail('share');
+      }
+    } catch (e) {
+      logFailure('share', 0, { error: str(e?.name) || 'network' });
       return fail('share');
     }
   }

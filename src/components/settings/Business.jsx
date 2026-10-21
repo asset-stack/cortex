@@ -34,7 +34,14 @@ function folderHint(v) {
 
 // Back from Google: the google Edge Function's callback lands on #/settings?tab=business&google=connected, or
 // &google=error&reason=….
-const GOOGLE_ERRORS = { denied: 'Google sign-in was cancelled', wrong_account: 'Connect the Google account for your own Cortex email' };
+const GOOGLE_ERRORS = {
+  denied: 'Google sign-in was cancelled',
+  wrong_account: 'Connect the Google account for your own Cortex email',
+  no_refresh_token: 'Google didn’t finish connecting. Try again.',
+  client: 'Google didn’t accept Cortex’s Google key. Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Supabase (DEPLOY.md section 11).',
+  exchange: 'Google didn’t finish connecting. Try again.',
+  save: 'Couldn’t save your Google connection. Try again.',
+};
 function googleReturn() {
   const result = hashParam('google');
   if (result === 'connected') return { ok: true, text: 'Google connected' };
