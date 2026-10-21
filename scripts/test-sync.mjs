@@ -2476,7 +2476,10 @@ await check('outreach: outreachBreakdown counts contacts logged per row by statu
 });
 
 await check('outreach: outreachTotals sums days for all mailboxes or one (\'\' = Unassigned), with reply and bounce rates', () => {
-  const r = (sent, replies, bounces, meetings) => ({ sent, replies, bounces, meetings, replyRate: sent ? replies / sent : 0, bounceRate: sent ? bounces / sent : 0 });
+  // Sheet rows: every email is a prospect (started = sent); no auto-replies.
+  const r = (sent, replies, bounces, meetings) => ({
+    sent, started: sent, replies, autos: 0, bounces, meetings, replyRate: sent ? replies / sent : 0, bounceRate: sent ? bounces / sent : 0,
+  });
   assert.deepEqual(outreach.outreachTotals(DAILY_WEEK), r(12, 3, 2, 2));
   assert.deepEqual(outreach.outreachTotals(DAILY_WEEK, null), r(12, 3, 2, 2));
   assert.deepEqual(outreach.outreachTotals(DAILY_WEEK, 'mb-a'), r(8, 2, 1, 1));
@@ -2570,6 +2573,154 @@ await check('outreach: gmailThreadUrl (the sending mailbox\'s Gmail, encoded) an
     .forEach((url) => assert.deepEqual(outreach.sheetFromUrl(url), { id: '', gid: '' }, String(url)));
 });
 
+// ── Outreach from Gmail (0010): the mirrors of outreach_gmail_daily() / _breakdown() / _threads() and mergeDaily ──
+const th = (id, mailbox, f = {}) => ({ ...outreach.threadFromRow({ id, mailbox_id: mailbox, thread_id: `t${id}` }), ...f });
+const msg = (thread, kind, d) => ({ mailbox: thread.mailbox, messageId: `${thread.threadId}-${kind}-${d}`, threadId: thread.threadId, kind, day: `2026-10-${d}` });
+// The week 2026-10-05 … 2026-10-11 again.
+const GMAIL_THREADS = () => [
+  th('1', 'mb-a', { firstDay: '2026-10-04', replyDay: '2026-10-05' }), // started the day before; only its reply is in the week
+  th('2', 'mb-a', { firstDay: '2026-10-05', sentCount: 3, autoDay: '2026-10-05', prospectEmail: 'pat@example.com' }),
+  th('3', 'mb-b', { firstDay: '2026-10-06', bounceDay: '2026-10-06', prospectName: 'Casey Ng' }),
+  th('4', 'mb-a', { firstDay: '2026-10-11', replyDay: '2026-10-12', subject: 'Bridges' }), // replied the day after
+  th('5', 'mb-b', { firstDay: '2026-10-12' }), // the day after
+  th('6', 'mb-a', { firstDay: '2026-10-07', autoDay: '2026-10-07', replyDay: '2026-10-08', prospectEmail: 'pat@example.com' }),
+];
+const GMAIL_MESSAGES = () => {
+  const [t1, t2, t3, t4, t5, t6] = GMAIL_THREADS();
+  return [
+    msg(t1, 'sent', '04'), msg(t1, 'reply', '05'),
+    msg(t2, 'sent', '05'), msg(t2, 'auto', '05'), msg(t2, 'sent', '08'), msg(t2, 'sent', '11'),
+    msg(t3, 'sent', '06'), msg(t3, 'bounce', '06'),
+    msg(t4, 'sent', '11'), msg(t5, 'sent', '12'),
+    msg(t6, 'sent', '07'), msg(t6, 'auto', '07'), msg(t6, 'reply', '08'),
+  ];
+};
+const g = (d, mailbox, sent, started, replies, autos, bounces) => ({ day: `2026-10-${d}`, mailbox, sent, started, replies, autos, bounces });
+const GMAIL_WEEK = [
+  g('05', 'mb-a', 1, 1, 1, 1, 0), g('06', 'mb-b', 1, 1, 0, 0, 1), g('07', 'mb-a', 1, 1, 0, 1, 0), g('08', 'mb-a', 1, 0, 1, 0, 0),
+  g('11', 'mb-a', 2, 1, 0, 0, 0),
+];
+
+await check('outreach gmail: threadFromRow maps outreach_gmail_threads() rows (defaults for a blank row; extra columns dropped)', () => {
+  assert.deepEqual(outreach.threadFromRow(), {
+    id: '', mailbox: '', threadId: '', sender: '', prospectEmail: '', prospectName: '', recipients: 1, subject: '', firstAt: '', firstDay: '',
+    lastSentAt: '', sentCount: 1, replyAt: '', replyDay: '', autoAt: '', autoDay: '', bounceAt: '', bounceDay: '', replyKind: '',
+    organisation: '', contactRole: '', tier: '', sheetReplyStatus: '',
+  });
+  assert.deepEqual(outreach.threadFromRow({
+    id: 'gt-1', mailbox_id: 'mb-1', thread_id: '18c2f0a1b2c3d4e5', sender: ' david@example.com ', prospect_email: 'pat@example.com',
+    prospect_name: 'Pat Example', recipients: 2, subject: 'Asset data', first_at: '2026-10-05T23:30:00+00:00', first_day: '2026-10-06',
+    last_sent_at: '2026-10-13T23:30:00+00:00', sent_count: 3, reply_at: null, reply_day: null, auto_at: '2026-10-05T23:31:00+00:00',
+    auto_day: '2026-10-06', bounce_at: null, bounce_day: null, reply_kind: '', organisation: 'Northbrook Shire Council', contact_role: 'Asset Manager',
+    tier: 'A', sheet_reply_status: 'positive', reply_message_id: 'm9', synced_at: '2026-10-18T00:00:00+00:00',
+  }), {
+    id: 'gt-1', mailbox: 'mb-1', threadId: '18c2f0a1b2c3d4e5', sender: 'david@example.com', prospectEmail: 'pat@example.com', prospectName: 'Pat Example',
+    recipients: 2, subject: 'Asset data', firstAt: '2026-10-05T23:30:00+00:00', firstDay: '2026-10-06', lastSentAt: '2026-10-13T23:30:00+00:00',
+    sentCount: 3, replyAt: '', replyDay: '', autoAt: '2026-10-05T23:31:00+00:00', autoDay: '2026-10-06', bounceAt: '', bounceDay: '', replyKind: '',
+    organisation: 'Northbrook Shire Council', contactRole: 'Asset Manager', tier: 'A', sheetReplyStatus: 'positive',
+  });
+});
+
+await check('outreach gmail: gmailOutcome — bounced, else replied, else an auto-reply, else waiting', () => {
+  assert.equal(outreach.gmailOutcome({ bounceDay: '2026-10-05', replyDay: '2026-10-06', autoDay: '2026-10-05' }), 'bounced');
+  assert.equal(outreach.gmailOutcome({ replyAt: '2026-10-06T00:00:00Z', autoDay: '2026-10-05' }), 'replied');
+  assert.equal(outreach.gmailOutcome({ autoDay: '2026-10-05' }), 'auto');
+  assert.equal(outreach.gmailOutcome(outreach.threadFromRow()), 'waiting');
+});
+
+await check('outreach gmail: gmailDaily counts our emails (follow-ups too) on their days, prospects on the first day, and replies, '
+  + 'auto-replies and bounces on theirs; by day then mailbox', () => {
+  assert.deepEqual(outreach.gmailDaily(GMAIL_THREADS(), GMAIL_MESSAGES(), '2026-10-05', '2026-10-11'), GMAIL_WEEK);
+  assert.deepEqual(outreach.gmailDaily(GMAIL_THREADS().reverse(), GMAIL_MESSAGES().reverse(), '2026-10-05', '2026-10-11'), GMAIL_WEEK, 'any order');
+  assert.deepEqual(outreach.gmailDaily(GMAIL_THREADS(), GMAIL_MESSAGES(), '2026-10-12', '2026-10-12'),
+    [g('12', 'mb-a', 0, 0, 1, 0, 0), g('12', 'mb-b', 1, 1, 0, 0, 0)], 'a reply after the period is on its own day');
+  assert.deepEqual(outreach.gmailDaily(GMAIL_THREADS(), GMAIL_MESSAGES(), '2026-10-11', '2026-10-05'), [], 'a reversed range');
+  assert.deepEqual(outreach.gmailDaily(null, undefined, '2026-10-05', '2026-10-11'), []);
+  const total = (k) => outreach.gmailDaily(GMAIL_THREADS(), GMAIL_MESSAGES(), '2026-10-01', '2026-10-31').reduce((t, d) => t + d[k], 0);
+  assert.deepEqual(['sent', 'started', 'replies', 'autos', 'bounces'].map(total), [8, 6, 3, 2, 1], 'replies and auto-replies are never sent');
+});
+
+await check('outreach gmail: gmailBreakdown — prospects first emailed in the period by outcome and by emails sent (1, 2, 3, 4+)', () => {
+  assert.deepEqual(sortedRows(outreach.gmailBreakdown(GMAIL_THREADS(), '2026-10-05', '2026-10-11')), sortedRows([
+    { mailbox: 'mb-a', kind: 'outcome', value: 'auto', n: 1 }, { mailbox: 'mb-a', kind: 'followups', value: '3', n: 1 },
+    { mailbox: 'mb-b', kind: 'outcome', value: 'bounced', n: 1 }, { mailbox: 'mb-b', kind: 'followups', value: '1', n: 1 },
+    { mailbox: 'mb-a', kind: 'outcome', value: 'replied', n: 2 }, { mailbox: 'mb-a', kind: 'followups', value: '1', n: 2 },
+  ]), 'a reply after the period still makes the prospect replied');
+  const counts = [0, 1, 2, 3, 4, 7].map((n) => th(`f${n}`, 'mb-a', { firstDay: '2026-10-05', sentCount: n }));
+  assert.deepEqual(sortedRows(outreach.gmailBreakdown(counts, '2026-10-05', '2026-10-05').filter((r) => r.kind === 'followups')), sortedRows([
+    { mailbox: 'mb-a', kind: 'followups', value: '1', n: 2 }, { mailbox: 'mb-a', kind: 'followups', value: '2', n: 1 },
+    { mailbox: 'mb-a', kind: 'followups', value: '3', n: 1 }, { mailbox: 'mb-a', kind: 'followups', value: '4+', n: 2 },
+  ]));
+  assert.deepEqual(outreach.gmailBreakdown(null, '2026-10-05', '2026-10-11'), []);
+});
+
+// Sheet rows for the threads: one by thread id, the prospect's by address (the newest still in the sheet wins).
+const SHEET_FOR_THREADS = () => [
+  em('s1', 'mb-a', { threadId: 't2', contactEmail: 'someone@example.com', organisation: 'Org by thread', sentOn: '2026-10-01' }),
+  em('s2', 'mb-a', { contactEmail: 'Pat@Example.com', organisation: 'Older', sentOn: '2026-10-01' }),
+  em('s3', 'mb-a', { contactEmail: 'pat@example.com', organisation: 'Newer', sentOn: '2026-10-03', contactRole: 'Asset Manager', tier: 'A', replyStatus: 'positive' }),
+  em('s4', 'mb-a', { contactEmail: 'pat@example.com', organisation: 'Gone', sentOn: '2026-10-09', inSheet: false }),
+];
+
+await check('outreach gmail: withSheet adds the sheet\'s details by thread id, else the prospect\'s newest row still in the sheet', () => {
+  const [, t2, t3, , , t6] = GMAIL_THREADS();
+  assert.equal(outreach.withSheet(t2, SHEET_FOR_THREADS()).organisation, 'Org by thread', 'the thread id beats a newer row for the address');
+  const six = outreach.withSheet(t6, SHEET_FOR_THREADS());
+  assert.deepEqual([six.organisation, six.contactRole, six.tier, six.sheetReplyStatus], ['Newer', 'Asset Manager', 'A', 'positive']);
+  assert.equal(outreach.withSheet(t3, SHEET_FOR_THREADS()), t3, 'no row: the thread as it is');
+  assert.equal(outreach.withSheet(t6, null), t6);
+  const tie = [em('a2', 'mb-a', { contactEmail: 'pat@example.com', organisation: 'B', sentOn: '2026-10-03', dateLogged: '2026-10-02' }),
+    em('a1', 'mb-a', { contactEmail: 'pat@example.com', organisation: 'A', sentOn: '2026-10-03', dateLogged: '2026-10-02' }),
+    em('a0', 'mb-a', { contactEmail: 'pat@example.com', organisation: 'Logged earlier', sentOn: '2026-10-03', dateLogged: '2026-10-01' })];
+  assert.equal(outreach.withSheet(t6, tie).organisation, 'A', 'same sent day: later logged, then the lower id');
+});
+
+await check('outreach gmail: filterThreads lists prospect threads by mode, mailbox and search (with the sheet\'s organisation), newest first, '
+  + 'a page at a time', () => {
+  const wk = { from: '2026-10-05', to: '2026-10-11' };
+  const ids = (opts) => outreach.filterThreads(GMAIL_THREADS(), SHEET_FOR_THREADS(), { ...wk, ...opts }).rows.map((t) => t.id);
+  assert.deepEqual(ids({}), ['4', '6', '3', '2'], 'sent: first emailed in the period');
+  assert.deepEqual(ids({ mailbox: 'mb-b' }), ['3']);
+  assert.deepEqual(ids({ mailbox: '' }), [], 'Unassigned: Gmail threads always have a mailbox');
+  assert.deepEqual(ids({ only: 'replies' }), ['6', '1'], 'replies: first replied to in the period');
+  assert.deepEqual(ids({ only: 'bounced' }), ['3']);
+  assert.deepEqual(ids({ search: ' NEWER ' }), ['6'], 'the sheet\'s organisation');
+  assert.deepEqual(ids({ search: 'org by' }), ['2']);
+  assert.deepEqual(ids({ search: 'casey' }), ['3'], 'the prospect\'s name');
+  assert.deepEqual(ids({ search: 'bridg' }), ['4'], 'the subject');
+  assert.deepEqual(ids({ search: 'pat@' }), ['6', '2'], 'the address');
+  assert.deepEqual(ids({ search: 'nothing like it' }), []);
+  const rows = outreach.filterThreads(GMAIL_THREADS(), SHEET_FOR_THREADS(), wk).rows;
+  assert.equal(rows.find((t) => t.id === '6').organisation, 'Newer', 'rows carry the sheet\'s details');
+  const page = (limit, offset) => { const r = outreach.filterThreads(GMAIL_THREADS(), [], { ...wk, limit, offset }); return [r.rows.map((t) => t.id), r.more]; };
+  assert.deepEqual(page(2, 0), [['4', '6'], true]);
+  assert.deepEqual(page(2, 2), [['3', '2'], false]);
+  const sameDay = [th('x', 'mb-a', { firstDay: '2026-10-05', firstAt: '2026-10-04T22:00:00Z' }), th('y', 'mb-a', { firstDay: '2026-10-05', firstAt: '2026-10-05T01:00:00Z' }),
+    th('w', 'mb-a', { firstDay: '2026-10-05', firstAt: '2026-10-05T01:00:00Z' })];
+  assert.deepEqual(outreach.filterThreads(sameDay, [], wk).rows.map((t) => t.id), ['w', 'y', 'x'], 'one day: the later first email, then the id');
+  assert.deepEqual(outreach.filterThreads(null, null, wk), { rows: [], more: false });
+});
+
+await check('outreach gmail: mergeDaily — a mailbox counted from Gmail takes everything but meetings from Gmail; the rest (and Unassigned) '
+  + 'stay on the sheet, each email a prospect', () => {
+  const m = (d, mailbox, sent, started, replies, autos, bounces, meetings) => ({ day: `2026-10-${d}`, mailbox, sent, started, replies, autos, bounces, meetings });
+  const sheet = [day('05', 'mb-a', 5, 1, 1, 0), day('05', 'mb-c', 2, 1, 0, 1), day('05', '', 1, 0, 0, 0), day('06', 'mb-a', 0, 0, 0, 1),
+    day('07', 'mb-a', 3, 0, 0, 0)];
+  const gmail = [g('05', 'mb-a', 1, 1, 1, 1, 0), g('06', 'mb-b', 1, 1, 0, 0, 1)];
+  const merged = outreach.mergeDaily(sheet, gmail, new Set(['mb-a']));
+  assert.deepEqual(merged, [
+    m('05', 'mb-a', 1, 1, 1, 1, 0, 0), m('05', 'mb-c', 2, 2, 1, 0, 0, 1), m('05', '', 1, 1, 0, 0, 0, 0), m('06', 'mb-a', 0, 0, 0, 0, 0, 1),
+  ], 'mb-a\'s sheet sends drop out (only its meeting stays); mb-b is not counted from Gmail yet; Unassigned last');
+  assert.deepEqual(outreach.mergeDaily(sheet, gmail), [
+    m('05', 'mb-a', 5, 5, 1, 0, 1, 0), m('05', 'mb-c', 2, 2, 1, 0, 0, 1), m('05', '', 1, 1, 0, 0, 0, 0), m('06', 'mb-a', 0, 0, 0, 0, 0, 1),
+    m('07', 'mb-a', 3, 3, 0, 0, 0, 0),
+  ], 'no Gmail: the sheet as it was');
+  assert.deepEqual(outreach.mergeDaily(null, null, new Set(['mb-a'])), []);
+  assert.deepEqual(outreach.outreachTotals(merged), { sent: 4, started: 4, replies: 2, autos: 1, bounces: 0, meetings: 2, replyRate: 0.5, bounceRate: 0 },
+    'reply rate: replies per prospect');
+  assert.deepEqual(outreach.outreachTotals(merged, 'mb-a'), { sent: 1, started: 1, replies: 1, autos: 1, bounces: 0, meetings: 1, replyRate: 1, bounceRate: 0 });
+});
+
 if (outreachDemo) {
   // Ids replaced by their order of appearance, so two runs (random ids) compare.
   const withoutIds = (demo) => {
@@ -2654,6 +2805,45 @@ if (outreachDemo) {
     const live = assemble(flatten({ users: [], org: {}, ...d }), { me: 'david' }).outreachNotes.map((n) => n.id);
     assert.deepEqual(d.outreachNotes.map((n) => n.id), live, `seed order ${d.outreachNotes.map((n) => `${n.author} ${n.createdAt}`).join(', ')}`);
   });
+
+  await check('seed: Gmail demo (0010) — David and Josh connected, Sarah on the sheet; every sheet email of theirs a thread, three sent by hand; '
+    + 'messages match the threads; headers only', () => {
+    const today = '2026-10-18';
+    const d = outreachDemo(today, counter());
+    const [david, josh, sarah] = d.mailboxes;
+    assert.deepEqual(Object.keys(d.outreachGmail).sort(), [david.id, josh.id].sort());
+    assert.deepEqual(Object.values(d.outreachGmail).map((x) => x.email).sort(), ['david@example.com', 'josh@example.com']);
+    Object.values(d.outreachGmail).forEach((x) => assert.ok(x.readyAt && x.syncedAt && x.connectedAt, 'read already'));
+    assert.ok(d.outreachThreads.every((t) => t.mailbox !== sarah.id) && d.outreachMessages.every((x) => x.mailbox !== sarah.id));
+    const keys = new Set([...Object.keys(outreach.threadFromRow()), 'replyMessageId']);
+    d.outreachThreads.forEach((t) => {
+      assert.deepEqual(Object.keys(t).filter((k) => !keys.has(k)), [], 'thread fields only (no text)');
+      assert.match(t.prospectEmail, /@example\.com$/);
+      assert.equal(t.prospectEmail, t.prospectEmail.toLowerCase());
+      const mine = d.outreachMessages.filter((x) => x.threadId === t.threadId);
+      assert.ok(mine.every((x) => x.mailbox === t.mailbox));
+      assert.equal(mine.filter((x) => x.kind === 'sent').length, t.sentCount, t.threadId);
+      assert.equal(mine.filter((x) => x.kind === 'sent').map((x) => x.day).sort()[0], t.firstDay);
+      ['reply', 'auto', 'bounce'].forEach((k) => assert.equal(mine.filter((x) => x.kind === k).length, t[`${k}Day`] ? 1 : 0, `${t.threadId} ${k}`));
+      assert.ok(t.firstDay <= today && (!t.replyDay || t.replyDay >= t.firstDay));
+      if (t.bounceDay) assert.equal(t.sentCount, 1, 'no follow-ups after a bounce');
+    });
+    assert.equal(new Set(d.outreachThreads.map((t) => t.threadId)).size, d.outreachThreads.length);
+    assert.equal(new Set(d.outreachMessages.map((x) => `${x.mailbox}|${x.messageId}`)).size, d.outreachMessages.length);
+    // Every email David's and Josh's sheet rows sent is a thread; David has three more the sheet never had.
+    [david, josh].forEach((mb) => {
+      const sheetEmails = new Set(d.outreachEmails.filter((e) => e.mailbox === mb.id && e.sentOn).map((e) => e.messageId || e.id));
+      const threads = d.outreachThreads.filter((t) => t.mailbox === mb.id);
+      assert.equal(threads.length, sheetEmails.size + (mb === david ? 3 : 0), mb.name);
+    });
+    assert.deepEqual(d.outreachThreads.filter((t) => t.threadId.startsWith('thr-hand')).map((t) => t.prospectEmail).sort(),
+      ['casey.ng@example.com', 'jordan.lee@example.com', 'sam.taylor@example.com']);
+    // Every number on the page has something to show.
+    const daily = outreach.gmailDaily(d.outreachThreads, d.outreachMessages, '2026-09-19', today);
+    ['sent', 'started', 'replies', 'autos', 'bounces'].forEach((k) => assert.ok(daily.reduce((t, x) => t + x[k], 0) > 0, k));
+    assert.ok(daily.reduce((t, x) => t + x.sent, 0) > daily.reduce((t, x) => t + x.started, 0), 'follow-ups');
+  });
+
 }
 
 if (createSeed && migrate) {
@@ -2732,6 +2922,24 @@ if (createSeed && migrate) {
     assert.deepEqual([emptied.mailboxes, emptied.outreachNotes, emptied.outreachEmails, emptied.outreachSheet], [[], [], [], '']);
     const partial = migrate({ ...structuredClone(old), mailboxes: own.mailboxes });
     assert.deepEqual([partial.mailboxes, partial.outreachNotes, partial.outreachEmails, partial.outreachSheet], [own.mailboxes, [], [], '']);
+  });
+
+  await check('migrate: older demo data gets the Gmail demo (0010) once, for its own emails and mailboxes; a disconnected demo stays so', () => {
+    const old = createSeed();
+    ['outreachGmail', 'outreachThreads', 'outreachMessages'].forEach((k) => { delete old[k]; });
+    const m = migrate(structuredClone(old));
+    assert.deepEqual(Object.keys(m.outreachGmail).sort(), m.mailboxes.slice(0, 2).map((x) => x.id).sort());
+    assert.ok(m.outreachThreads.length > 10 && m.outreachMessages.length > m.outreachThreads.length);
+    assert.ok(m.outreachThreads.every((t) => m.outreachGmail[t.mailbox]));
+    assert.deepEqual(migrate(structuredClone(m)), m, 'running it again adds nothing');
+    const none = migrate({ ...structuredClone(old), outreachGmail: {}, outreachThreads: [], outreachMessages: [] });
+    assert.deepEqual([none.outreachGmail, none.outreachThreads, none.outreachMessages], [{}, [], []], 'every mailbox disconnected: stays so');
+    const noMailboxes = migrate({ ...structuredClone(old), mailboxes: [], outreachEmails: [] });
+    assert.deepEqual([noMailboxes.outreachGmail, noMailboxes.outreachThreads, noMailboxes.outreachMessages], [{}, [], []]);
+    const partial = structuredClone(old);
+    partial.outreachGmail = {};
+    const filled = migrate(partial);
+    assert.deepEqual([filled.outreachThreads, filled.outreachMessages], [[], []], 'missing lists start empty');
   });
 }
 

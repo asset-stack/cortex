@@ -402,7 +402,76 @@ export function outreachDemo(today, idf = (p) => `${p}_${uid()}`) {
     { id: idf('on'), mailbox: '', pinned: true, author: 'david', createdAt: `${addDays(today, -2)}T09:15:00.000Z`,
       body: 'What works now: open with the live tender or capital works item in the first line, keep it under 90 words, one ask (a 15-minute call).' },
   ];
-  return { mailboxes, outreachNotes: notes, outreachEmails: emails, outreachSheet: '' };
+  return { mailboxes, outreachNotes: notes, outreachEmails: emails, outreachSheet: '', ...outreachGmailDemo(emails, mailboxes, today) };
+}
+
+// Gmail (0010) for demo mode: the first two mailboxes (David's and Josh's) connected and read, Sarah's still counted from
+// the sheet, so the page shows both. A cold thread per email they sent (one per Gmail message), with follow-ups 3 and 7
+// days on while unanswered, the sheet's replies and bounces, some auto-replies, and two emails sent by hand (not in the
+// sheet). Shaped as the store reads them: threadFromRow() and { mailbox, messageId, threadId, kind, at, day }.
+export function outreachGmailDemo(emails, mailboxes, today) {
+  const connected = (mailboxes || []).slice(0, 2).filter((m) => m.active !== false);
+  const outreachGmail = Object.fromEntries(connected.map((m) => [m.id, {
+    email: m.addresses?.[0] || '', connectedAt: `${addDays(today, -21)}T01:00:00.000Z`, syncedAt: `${today}T00:00:00.000Z`,
+    readyAt: `${addDays(today, -21)}T01:20:00.000Z`,
+  }]));
+  const at = (day, hm) => `${day}T${hm}:00.000Z`; // UTC morning: the same day in Sydney
+  const threads = [];
+  const messages = [];
+  const add = (t, sentDays) => {
+    threads.push(t);
+    sentDays.forEach((day, k) => messages.push({ mailbox: t.mailbox, messageId: `${t.threadId}-s${k}`, threadId: t.threadId, kind: 'sent', at: at(day, '00:30'), day }));
+    if (t.replyDay) messages.push({ mailbox: t.mailbox, messageId: t.replyMessageId, threadId: t.threadId, kind: 'reply', at: t.replyAt, day: t.replyDay });
+    if (t.autoDay) messages.push({ mailbox: t.mailbox, messageId: `${t.threadId}-a`, threadId: t.threadId, kind: 'auto', at: t.autoAt, day: t.autoDay });
+    if (t.bounceDay) messages.push({ mailbox: t.mailbox, messageId: `${t.threadId}-b`, threadId: t.threadId, kind: 'bounce', at: t.bounceAt, day: t.bounceDay });
+  };
+  const groups = new Map();
+  (emails || []).filter((e) => e.sentOn && outreachGmail[e.mailbox]).forEach((e) => {
+    const k = e.messageId || e.id;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(e);
+  });
+  let n = 0;
+  groups.forEach((rows) => {
+    const e = rows[0];
+    n += 1;
+    const replied = rows.find((x) => x.replyOn);
+    const bounced = rows.some((x) => x.bounced);
+    const auto = !replied && !bounced && n % 8 === 3;
+    const sentDays = [e.sentOn];
+    [3, 7].forEach((d) => {
+      const day = addDays(e.sentOn, d);
+      if (day <= today && !bounced && (!replied || day < replied.replyOn)) sentDays.push(day);
+    });
+    const threadId = e.threadId || `thr-${e.id}`;
+    add({
+      id: `gt-${threadId}`, mailbox: e.mailbox, threadId, sender: e.sender, prospectEmail: e.contactEmail.toLowerCase(), prospectName: e.contactName,
+      recipients: rows.length, subject: e.subject, firstAt: at(e.sentOn, '00:30'), firstDay: e.sentOn, lastSentAt: at(sentDays.at(-1), '00:30'),
+      sentCount: sentDays.length, replyAt: replied ? at(replied.replyOn, '03:10') : '', replyDay: replied?.replyOn || '',
+      replyMessageId: replied ? `${threadId}-r` : '', autoAt: auto ? at(e.sentOn, '00:31') : '', autoDay: auto ? e.sentOn : '',
+      bounceAt: bounced ? at(e.sentOn, '00:31') : '', bounceDay: bounced ? e.sentOn : '', replyKind: '', organisation: '', contactRole: '', tier: '', sheetReplyStatus: '',
+    }, sentDays);
+  });
+  // Three cold emails David sent by hand: Gmail counts them (one answered, one bounced), the sheet never had them.
+  const david = connected[0];
+  if (david) {
+    [['casey.ng@example.com', 'Casey Ng', 'Following up from the asset management expo', 2, 'reply'],
+      ['jordan.lee@example.com', 'Jordan Lee', 'Condition data for your bridges', 1, ''],
+      ['sam.taylor@example.com', 'Sam Taylor', 'Your asset register', 3, 'bounce']].forEach(([email, name, subject, back, outcome]) => {
+      const day = addDays(today, -back);
+      const threadId = `thr-hand-${back}`;
+      const answered = outcome === 'reply';
+      const bounced = outcome === 'bounce';
+      add({
+        id: `gt-${threadId}`, mailbox: david.id, threadId, sender: david.addresses?.[0] || '', prospectEmail: email, prospectName: name, recipients: 1,
+        subject, firstAt: at(day, '01:00'), firstDay: day, lastSentAt: at(day, '01:00'), sentCount: 1,
+        replyAt: answered ? at(today, '00:10') : '', replyDay: answered ? today : '', replyMessageId: answered ? `${threadId}-r` : '',
+        autoAt: '', autoDay: '', bounceAt: bounced ? at(day, '01:01') : '', bounceDay: bounced ? day : '', replyKind: '',
+        organisation: '', contactRole: '', tier: '', sheetReplyStatus: '',
+      }, [day]);
+    });
+  }
+  return { outreachGmail, outreachThreads: threads, outreachMessages: messages };
 }
 
 const previousWeekday = (day) => { let d = addDays(day, -1); while (isoDow(d) > 5) d = addDays(d, -1); return d; };
@@ -684,6 +753,10 @@ export function migrate(data) {
   if (!Array.isArray(data.mailboxes)) Object.assign(data, outreachDemo(localYmd()));
   data.outreachNotes ??= [];
   data.outreachEmails ??= [];
+  // Gmail (0010): demo data saved before it gets David's and Josh's mailboxes connected, read from its sheet rows.
+  if (!data.outreachGmail || typeof data.outreachGmail !== 'object') Object.assign(data, outreachGmailDemo(data.outreachEmails, data.mailboxes, localYmd()));
+  data.outreachThreads ??= [];
+  data.outreachMessages ??= [];
   // Calendar (0009): Posting schedule's 3-month calendar is switched on once (as 0009 does), so switching it off stays off;
   // older demo data gets the demo team events.
   if (!data.calendarSeeded) {

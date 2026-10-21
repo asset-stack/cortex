@@ -1,16 +1,21 @@
 // @ts-nocheck
-// Cortex `google` Edge Function: Gmail, Drive and Docs as the calling admin's OWN Google account, and each staff
-// member's own Google Calendar (read only) for the Calendar page.
+// Cortex `google` Edge Function: Gmail, Drive and Docs as the calling admin's OWN Google account, each staff member's
+// own Google Calendar (read only) for the Calendar page, and each outreach mailbox's Gmail (read only, headers of cold
+// threads only) for Outreach.
 // One self-contained file with no imports, so it can be pasted into the Supabase dashboard editor (Edge Functions →
 // google); plain JavaScript in a .ts file, so scripts/test-google.mjs imports it in Node. Web APIs only.
 //
 // Routes (on the last path segment, so /google/send and /functions/v1/google/send both work):
-//   POST connect  {origin, purpose?}                     → {url}: Google's consent page (comes back to callback).
+//   POST connect  {origin, purpose?, mailbox?}           → {url}: Google's consent page (comes back to callback).
 //                                                          purpose 'calendar': any staff member, calendar.readonly only;
+//                                                          purpose 'mailbox' (admins only): that outreach mailbox's own
+//                                                          @assetstackai.com account, gmail.readonly only;
 //                                                          otherwise admins only, Gmail and Drive
 //   GET  callback ?code&state                            → 302 to <origin>/#/settings?tab=business&google=…, or for a
 //                                                          calendar connect <origin>/#/calendar?google=… (and only a
-//                                                          calendar connect turns sharing on: rpc calendar_share)
+//                                                          calendar connect turns sharing on: rpc calendar_share), or
+//                                                          for a mailbox <origin>/#/settings?tab=outreach&gmail=…&mailbox=…
+//                                                          (rpc outreach_gmail_connect; never google_save)
 //   POST send     {to, subject, text, attachment?}       → {id, from}: sent from the caller's own Gmail
 //   POST contract {template, folder, name, replacements} → {id, name, url}: the template copied into the folder, filled in
 //   POST outreach-sync {}                                → {ok, stats}: the outreach agent's sheet into outreach_emails,
@@ -21,13 +26,20 @@
 //                                                          primary calendar into
 //                                                          calendar_meetings (rpc calendar_save); titles only, never
 //                                                          descriptions, places, attendees or links
+//   POST outreach-gmail-sync {force?}                    → {ok, claimed, synced, failed, more, pending}: the connected
+//                                                          outreach mailboxes whose turn it is (rpc outreach_gmail_claim),
+//                                                          each one's cold threads (ones we started with a new outside
+//                                                          contact) into outreach_threads / outreach_messages (rpc
+//                                                          outreach_gmail_save): headers only, never a body or snippet;
+//                                                          more = call again (the claim was released)
 //
 // JWT verification is OFF for this function (Google's callback carries no JWT), so it checks callers itself: the
-// caller's JWT goes to rpc google_me (active staff only; send, contract and a plain connect then need admin), or rpc
-// outreach_access for outreach-sync (anyone who can see Outreach; the sheet is read with the Google account of the
-// admin who set its link), and PostgREST decides who that is. Refresh tokens are read and saved with the secret key
-// (rpc google_token / google_save), which exists only in the function runtime; so are the outreach tables the sync
-// writes and the calendar RPCs (calendar_share / calendar_claim / calendar_save).
+// caller's JWT goes to rpc google_me (active staff only; send, contract, a plain and a mailbox connect then need admin),
+// or rpc outreach_access for outreach-sync and outreach-gmail-sync (anyone who can see Outreach; the sheet is read with
+// the Google account of the admin who set its link, each mailbox with its own), and PostgREST decides who that is.
+// Refresh tokens are read and saved with the secret key (rpc google_token / google_save / outreach_gmail_connect /
+// outreach_gmail_job), which exists only in the function runtime; so are the outreach tables the syncs write and the
+// calendar RPCs (calendar_share / calendar_claim / calendar_save).
 //
 // Env (Supabase injects the first three): SUPABASE_URL; SUPABASE_PUBLISHABLE_KEYS (JSON, .default) or
 // SUPABASE_ANON_KEY; SUPABASE_SECRET_KEYS (JSON, .default) or SUPABASE_SERVICE_ROLE_KEY; function secrets
@@ -70,7 +82,9 @@ const MAX_REPLACEMENTS = 100;
 const SYNC_BATCH = 500; // outreach_emails rows per upsert
 const MAX_CELL = 50000; // Google Sheets' limit per cell
 
-const ROUTES = { connect: 'POST', callback: 'GET', send: 'POST', contract: 'POST', 'outreach-sync': 'POST', 'calendar-sync': 'POST' };
+const ROUTES = {
+  connect: 'POST', callback: 'GET', send: 'POST', contract: 'POST', 'outreach-sync': 'POST', 'calendar-sync': 'POST', 'outreach-gmail-sync': 'POST',
+};
 const EXPIRED = 'This sign-in link has expired. Go back to Cortex and try again.';
 const NOT_CONNECTED = 'Connect your Google account in Settings first.';
 const RECONNECT = 'Reconnect your Google account in Settings.';
@@ -426,6 +440,11 @@ async function readBody(req) {
 }
 
 const googleMessage = (data) => str(data?.error?.message || data?.error_description || (typeof data?.error === 'string' ? data.error : ''));
+// The reasons in a Google API error (error.details[].reason and error.errors[].reason).
+const googleReasons = (data) => (data?.error?.details || []).map((d) => d?.reason).concat((data?.error?.errors || []).map((e) => e?.reason));
+// A 403 that means the token lacks the scope the call needs.
+const scopeInsufficient = (status, data, reasons) => status === 403 && (reasons.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT')
+  || reasons.includes('insufficientPermissions') || /insufficient authentication scopes/i.test(googleMessage(data)));
 
 // A missing scope → what to reconnect and allow: the calendar (on the Calendar page) or Gmail and Drive (in Settings).
 const scopeMissing = (url) => (String(url).startsWith(CALENDAR_API)
@@ -439,11 +458,8 @@ async function google(fetch, url, init, notFound = '', forbidden = '') {
   const data = await readJson(res);
   if (res.ok) return data || {};
   const msg = googleMessage(data);
-  const reasons = (data?.error?.details || []).map((d) => d?.reason).concat((data?.error?.errors || []).map((e) => e?.reason));
-  if (res.status === 403 && (reasons.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT') || reasons.includes('insufficientPermissions')
-      || /insufficient authentication scopes/i.test(msg))) {
-    throw new HttpError(409, scopeMissing(url));
-  }
+  const reasons = googleReasons(data);
+  if (scopeInsufficient(res.status, data, reasons)) throw new HttpError(409, scopeMissing(url));
   if (res.status === 404 && notFound) throw new HttpError(404, notFound);
   if (res.status === 403 && forbidden && !reasons.includes('SERVICE_DISABLED') && !reasons.includes('accessNotConfigured')) {
     throw new HttpError(403, forbidden);
@@ -512,18 +528,25 @@ async function googleAccess(cfg, fetch, me, text = {}, needs = null) {
   const email = str(account.email).toLowerCase();
   if (!EMAIL.test(email) || !ASCII.test(email)) throw new HttpError(409, say.reconnect);
   if (needs && !needs(account.scopes)) throw new HttpError(409, say.reconnect);
+  const token = await refreshAccess(fetch, { id: cfg.clientId, secret: cfg.clientSecret }, account.refresh_token, say.reconnect);
+  return { token, email };
+}
 
+// A refresh token → a fresh access token from the OAuth client that issued it (`client`: { id, secret }). Google's
+// invalid_grant (revoked or expired) → 409 `reconnect`; any other failure → 502 with Google's short message. Never logs
+// or returns the refresh token.
+async function refreshAccess(fetch, client, refreshToken, reconnect) {
   const res = await fetch(GOOGLE_TOKEN, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: cfg.clientId, client_secret: cfg.clientSecret, refresh_token: account.refresh_token, grant_type: 'refresh_token',
+      client_id: client.id, client_secret: client.secret, refresh_token: refreshToken, grant_type: 'refresh_token',
     }).toString(),
   });
   const data = await readJson(res);
-  if (data?.error === 'invalid_grant') throw new HttpError(409, say.reconnect);
+  if (data?.error === 'invalid_grant') throw new HttpError(409, reconnect);
   if (!res.ok || !str(data?.access_token)) throw new HttpError(502, googleMessage(data) || 'Google sign-in failed.');
-  return { token: data.access_token, email };
+  return data.access_token;
 }
 
 // ── Routes ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -579,10 +602,37 @@ function logFailure(step, status, data) {
 // sharing and an existing one keeps what it had. A calendar connect then opts in with rpc calendar_share (secret key);
 // any other connect never calls it, so a plain connect after a Calendar disconnect doesn't start sharing again even
 // when Google hands back calendar.readonly (include_granted_scopes), and an admin already sharing keeps sharing.
+// The authorization code → Google's token answer ({ token }), or the failed step ({ step: 'exchange' | 'client' }, logged
+// in one token-free line). `client` is the OAuth client the consent page used ({ id, secret }).
+async function exchangeCode(url, cfg, fetch, client) {
+  const code = url.searchParams.get('code');
+  if (!code) { logFailure('exchange', 0, { error: 'no code' }); return { step: 'exchange' }; }
+  try {
+    const res = await fetch(GOOGLE_TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code, client_id: client.id, client_secret: client.secret, redirect_uri: callbackUrl(cfg), grant_type: 'authorization_code',
+      }).toString(),
+    });
+    const token = await readJson(res);
+    if (!res.ok || !token || token.error) {
+      const step = CLIENT_ERRORS.has(str(token?.error)) ? 'client' : 'exchange';
+      logFailure(step, res.status, token);
+      return { step };
+    }
+    return { token };
+  } catch (e) {
+    logFailure('exchange', 0, { error: str(e?.name) || 'network' });
+    return { step: 'exchange' };
+  }
+}
+
 async function callback(url, cfg, fetch) {
   const state = await verifyState(url.searchParams.get('state'), cfg.clientSecret);
   const origin = state ? allowedOrigin(state.origin, cfg.origins) : '';
   if (!origin) return page(400, EXPIRED);
+  if (state.purpose === 'mailbox') return mailboxCallback(url, state, origin, cfg, fetch);
   const calendar = state.purpose === 'calendar';
   const back = calendar
     ? (result) => redirect(`${origin}/#/calendar?google=${result}`)
@@ -592,28 +642,9 @@ async function callback(url, cfg, fetch) {
     : (reason) => back(`error&reason=${reason}`);
 
   if (url.searchParams.get('error')) return fail('denied');
-  const code = url.searchParams.get('code');
-  if (!code) { logFailure('exchange', 0, { error: 'no code' }); return fail('exchange'); }
-
-  let token;
-  try {
-    const res = await fetch(GOOGLE_TOKEN, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code, client_id: cfg.clientId, client_secret: cfg.clientSecret, redirect_uri: callbackUrl(cfg), grant_type: 'authorization_code',
-      }).toString(),
-    });
-    token = await readJson(res);
-    if (!res.ok || !token || token.error) {
-      const step = CLIENT_ERRORS.has(str(token?.error)) ? 'client' : 'exchange';
-      logFailure(step, res.status, token);
-      return fail(step);
-    }
-  } catch (e) {
-    logFailure('exchange', 0, { error: str(e?.name) || 'network' });
-    return fail('exchange');
-  }
+  const exchanged = await exchangeCode(url, cfg, fetch, { id: cfg.clientId, secret: cfg.clientSecret });
+  if (exchanged.step) return fail(exchanged.step);
+  const { token } = exchanged;
 
   // You can only connect your own account: the one Google signed in must be your Cortex email, and verified.
   const id = jwtPayload(token.id_token);
@@ -1347,9 +1378,740 @@ async function calendarSync(body, cfg, fetch) {
   return result;
 }
 
+// ── Outreach Gmail (0010) ───────────────────────────────────────────────────────────────────────────────────────
+// Each outreach mailbox's own Gmail, read only, to measure cold sales emails. An admin connects a mailbox by signing in
+// to that mailbox's Google account (rpc outreach_gmail_connect keeps its refresh token in private.outreach_gmail). The
+// sync reads only message headers (format=metadata): never a body, snippet or attachment. A thread is kept only when it
+// is COLD: we sent its first message, to 1–5 new outside contacts (not internal, not a known client, contact or user,
+// never wrote to this mailbox before). Its rows hold our first subject, the prospect's address and name, and when we
+// sent, they replied, an auto-reply came or the email bounced; nothing of a reply but its time.
+
+const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
+const GMAIL_READ = 'https://www.googleapis.com/auth/gmail.readonly';
+export const MAILBOX_SCOPES = `openid email ${GMAIL_READ}`; // a mailbox connect: nothing but Gmail read
+// Ours: mail to or from these (and every mailbox's own domain, from rpc outreach_gmail_known) is never cold.
+const INTERNAL_DOMAINS = ['assetstackai.com', 'assetstack.org', 'assetstackai.com.au'];
+/** The sync's limits per run (handle() takes overrides, for tests). */
+export const GMAIL_LIMITS = {
+  deadline: 60000, // ms for a run, shared out between the claimed mailboxes
+  mailboxes: 3, // claimed per run (p_limit)
+  listPages: 40, // messages.list pages of 500 on a first read or a restart
+  historyPages: 20, // history pages of 500 per run
+  threadsPerRun: 500, // threads read per mailbox per run
+  saveEvery: 100, // threads per rpc outreach_gmail_save
+  parallel: 6, // threads read at once
+  backoff: 2000, // ms to wait once on a Gmail rate limit before trying again
+};
+const DAY_MS = 86400000;
+const LOOKBACK_DAYS = 90; // a first read: our sent mail of the last 90 days
+const RESTART_OVERLAP_DAYS = 2; // a restart (history too old): from 2 days before the last sync
+// p_started when the job doesn't give the claim's own run_started: the time the claim answered plus this, so the
+// function's clock running a little behind the database's never makes its own run look older than its claim (a newer
+// run can only claim the mailbox 30 s later, or after this run released it).
+const START_MARGIN = 5000;
+const MAX_COLD_RECIPIENTS = 5;
+const MAX_NAME = 100;
+const GMAIL_METADATA = [
+  'From', 'To', 'Cc', 'Subject', 'Sender', 'In-Reply-To', 'Content-Type', 'Auto-Submitted', 'X-Autoreply', 'X-Autorespond',
+  'Precedence', 'X-Failed-Recipients',
+];
+const GMAIL_THREAD_FIELDS = 'id,messages(id,labelIds,internalDate,payload(mimeType,headers))'; // never snippet
+const GMAIL_LIST_FIELDS = 'messages(threadId),nextPageToken';
+const GMAIL_HISTORY_FIELDS = 'history(id,messagesAdded(message(id,threadId,labelIds))),nextPageToken,historyId';
+const RATE_REASONS = ['rateLimitExceeded', 'userRateLimitExceeded', 'RATE_LIMIT_EXCEEDED', 'quotaExceeded'];
+// Saved per mailbox (outreach_gmail_sync.error, which Outreach shows): short, never a token or an address.
+const GMAIL_RECONNECT = 'Reconnect this mailbox’s Gmail in Settings → Outreach.';
+const GMAIL_OTHER_ACCOUNT = 'Signed in as another account.';
+const GMAIL_BUSY = 'Gmail is busy. Cortex will try again shortly.';
+const GMAIL_FAILED = 'Something went wrong with Gmail.';
+const GMAIL_NO_KNOWN = 'Could not read Cortex’s contacts.';
+const MAILBOX_GONE = 'That mailbox isn’t in Cortex any more.';
+const MAILBOX_INACTIVE = 'That mailbox isn’t active.';
+const mailboxDomain = (hd) => `Connect Gmail needs an @${hd} address on this mailbox for now.`;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const THREAD_ID = /^[A-Za-z0-9_-]{1,100}$/;
+
+/** A Gmail rate limit that outlasted one short back-off: the run stops there with more to do. */
+class RateLimited extends Error {}
+
+/** Whether a space-separated scope list holds gmail.readonly as a whole entry (as private.has_gmail_read() in 0010). */
+export function hasGmailRead(scopes) {
+  return str(scopes).split(/\s+/).includes(GMAIL_READ);
+}
+
+/**
+ * The OAuth client a mailbox connection uses, by its key (private.outreach_gmail.client) → { id, secret, hd }, or null
+ * for a key this function doesn't know. Only 'default' for now: GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET, an app Internal
+ * to the assetstackai.com Workspace. Another Workspace (@assetstack.org, @assetstackai.com.au) gets its own key here.
+ */
+export function clientFor(cfg, key = 'default') {
+  if (key !== 'default') return null;
+  return { id: cfg.clientId, secret: cfg.clientSecret, hd: DOMAIN };
+}
+
+const domainOf = (email) => {
+  const s = str(email).toLowerCase();
+  const i = s.lastIndexOf('@');
+  return i < 0 ? '' : s.slice(i + 1);
+};
+const localOf = (email) => {
+  const s = str(email).toLowerCase();
+  const i = s.lastIndexOf('@');
+  return i < 0 ? s : s.slice(0, i);
+};
+const unique = (list) => [...new Set(list)];
+const threadIds = (list) => unique((Array.isArray(list) ? list : []).map(str).filter((t) => THREAD_ID.test(t)));
+const validTime = (v) => typeof v === 'string' && Number.isFinite(Date.parse(v));
+
+// Whether `email` is on one of `domains` (a Set of lower-case domains) or a subdomain of one.
+function onDomain(email, domains) {
+  const parts = domainOf(email).split('.');
+  for (let i = 0; i < parts.length - 1; i++) if (domains.has(parts.slice(i).join('.'))) return true;
+  return false;
+}
+
+// RFC 2047 Q encoding → bytes ('_' is a space, =XX a byte).
+function qBytes(text) {
+  const out = [];
+  for (let i = 0; i < text.length; i++) {
+    const hex = text.slice(i + 1, i + 3);
+    if (text[i] === '_') out.push(32);
+    else if (text[i] === '=' && /^[0-9A-Fa-f]{2}$/.test(hex)) { out.push(Number.parseInt(hex, 16)); i += 2; } else out.push(text.charCodeAt(i) & 0xff);
+  }
+  return new Uint8Array(out);
+}
+
+const ENCODED_WORD = /=\?([^?\s]+)\?([BbQq])\?([^?\s]*)\?=/g;
+
+/** A header value with its RFC 2047 encoded words (=?charset?B|Q?…?=) decoded; the space between two of them dropped. */
+export function decodeHeader(value) {
+  return String(value ?? '').replace(/\r?\n(?=[ \t])/g, '').replace(/(\?=)\s+(?==\?[^?\s]+\?[BbQq]\?)/g, '$1')
+    .replace(ENCODED_WORD, (word, charset, enc, text) => {
+      try {
+        const bytes = enc.toUpperCase() === 'B' ? fromBase64(text) : qBytes(text);
+        return new TextDecoder(charset.split('*')[0].toLowerCase(), { fatal: false }).decode(bytes);
+      } catch {
+        return word;
+      }
+    });
+}
+
+// A display name as read: quotes and their escapes removed, encoded words decoded, spaces collapsed.
+function displayName(raw) {
+  const unquoted = String(raw).replace(/"((?:[^"\\]|\\.)*)"/g, (_, q) => q.replace(/\\(.)/g, '$1'));
+  return decodeHeader(unquoted).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * An address-list header (From, To, Cc, Sender) → [{ name, email }] in order: display names (quoted, with commas or
+ * angle brackets inside, or RFC 2047 encoded words), comments, groups ("undisclosed-recipients:;") and bare addresses.
+ * Addresses are lower case; anything that isn't one is dropped.
+ */
+export function parseAddresses(value) {
+  const s = String(value ?? '').replace(/\r?\n(?=[ \t])/g, '');
+  const parts = [];
+  let cur = '';
+  let quoted = false;
+  let angle = false;
+  let comment = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quoted) {
+      cur += ch;
+      if (ch === '\\' && i + 1 < s.length) cur += s[++i];
+      else if (ch === '"') quoted = false;
+    } else if (comment) {
+      if (ch === '\\') i++;
+      else if (ch === '(') comment++;
+      else if (ch === ')') comment--;
+    } else if (ch === '(') {
+      comment = 1;
+    } else if (ch === '"') {
+      quoted = true;
+      cur += ch;
+    } else if (!angle && (ch === ',' || ch === ';')) {
+      parts.push(cur);
+      cur = '';
+    } else if (!angle && ch === ':') {
+      cur = ''; // a group's name
+    } else {
+      if (ch === '<') angle = true;
+      else if (ch === '>') angle = false;
+      cur += ch;
+    }
+  }
+  parts.push(cur);
+  const out = [];
+  for (const part of parts) {
+    const p = part.trim();
+    if (!p) continue;
+    const m = /<([^<>]*)>\s*$/.exec(p);
+    const email = str(m ? m[1] : p).replace(/^mailto:/i, '').toLowerCase();
+    if (!EMAIL.test(email)) continue;
+    out.push({ name: m ? displayName(p.slice(0, m.index)) : '', email });
+  }
+  return out;
+}
+
+const labelsOf = (msg) => (Array.isArray(msg?.labelIds) ? msg.labelIds : []);
+
+// A message's headers → { lower-case name: value } (To and Cc that appear twice are joined; others keep the first).
+function headersOf(msg) {
+  const out = Object.create(null);
+  for (const h of Array.isArray(msg?.payload?.headers) ? msg.payload.headers : []) {
+    const name = str(h?.name).toLowerCase();
+    if (!name) continue;
+    const value = String(h?.value ?? '');
+    if (!(name in out)) out[name] = value;
+    else if (name === 'to' || name === 'cc') out[name] = `${out[name]}, ${value}`;
+  }
+  return out;
+}
+
+const subjectOf = (h) => decodeHeader(h.subject ?? '').replace(/\s+/g, ' ').trim();
+const firstAddress = (value) => parseAddresses(value)[0]?.email || '';
+const isoOf = (msg) => {
+  const n = Number(msg?.internalDate);
+  return Number.isFinite(n) && n > 0 ? new Date(n).toISOString() : '';
+};
+
+const BOUNCE_FROM = /^(?:mailer-daemon|postmaster)$/i;
+const DELAY_NOTICE = /\bdelay(?:ed)?\b/i; // "Delivery Status Notification (Delay)", "Warning: message delayed": not a bounce
+const AUTO_SUBJECT = /^(automatic reply|auto[- ]?reply|out of (the )?office|ooo\b|abwesenheit|réponse automatique)/i;
+const CALENDAR_SUBJECT = /^(accepted|declined|tentatively accepted|invitation|updated invitation|canceled event|cancelled event):/i;
+const CALENDAR_SENDER = 'calendar-notification@google.com';
+const NO_REPLY = /^(?:no[-_.]?reply|do[-_.]?not[-_.]?reply|notifications?|notify)(?:[-+._].*)?$/i;
+const REPLY_SUBJECT = /^(re|fwd?)\s*:/i;
+const CONTEXT = Symbol('gmail context');
+
+// { internal, emails, domains } (arrays or Sets) → lower-case Sets, the internal domains always included.
+function gmailContext(ctx = {}) {
+  if (ctx?.[CONTEXT]) return ctx;
+  const set = (v) => (v instanceof Set ? v : new Set((Array.isArray(v) ? v : []).map((x) => str(x).toLowerCase()).filter(Boolean)));
+  return {
+    [CONTEXT]: true, internal: new Set([...INTERNAL_DOMAINS, ...set(ctx?.internal)]), emails: set(ctx?.emails), domains: set(ctx?.domains),
+  };
+}
+
+// Auto-Submitted (anything but "no"), X-Autoreply, X-Autorespond, or Precedence auto_reply / bulk / junk.
+function autoHeaders(h) {
+  if ('auto-submitted' in h && str(h['auto-submitted']).toLowerCase().split(';')[0].trim() !== 'no') return true;
+  if ('x-autoreply' in h || 'x-autorespond' in h) return true;
+  return ['auto_reply', 'bulk', 'junk'].includes(str(h.precedence).toLowerCase());
+}
+
+/**
+ * What one Gmail message (format=metadata) is, for a thread of ours. In this order:
+ * - 'ignored': a draft or chat;
+ * - 'ours': labelled SENT;
+ * - 'bounce': from mailer-daemon or postmaster, a multipart/report delivery-status report, or with X-Failed-Recipients
+ *   (a delay notice is 'ignored');
+ * - 'ignored': from an internal domain (or no readable From), or Google Calendar (its sender or an
+ *   Accepted:/Declined:/Invitation:… subject);
+ * - 'auto': an auto-reply or out-of-office (Auto-Submitted, X-Autoreply, X-Autorespond, Precedence, or the subject);
+ * - 'ignored': a no-reply or notifications sender;
+ * - 'reply': anything else.
+ * `ctx`: { internal: domains } (the defaults are always included).
+ */
+export function messageKind(msg, ctx = {}) {
+  const c = gmailContext(ctx);
+  const labels = labelsOf(msg);
+  if (labels.includes('DRAFT') || labels.includes('CHAT')) return 'ignored';
+  if (labels.includes('SENT')) return 'ours';
+  const h = headersOf(msg);
+  const from = firstAddress(h.from);
+  const subject = subjectOf(h);
+  const type = str(h['content-type'] || msg?.payload?.mimeType).toLowerCase();
+  if (BOUNCE_FROM.test(localOf(from)) || 'x-failed-recipients' in h
+      || (/^multipart\/report\b/.test(type) && /report-type\s*=\s*"?delivery-status"?/.test(type))) {
+    return DELAY_NOTICE.test(subject) ? 'ignored' : 'bounce';
+  }
+  if (!from || onDomain(from, c.internal)) return 'ignored';
+  if (from === CALENDAR_SENDER || firstAddress(h.sender) === CALENDAR_SENDER || CALENDAR_SUBJECT.test(subject)) return 'ignored';
+  if (autoHeaders(h) || AUTO_SUBJECT.test(subject)) return 'auto';
+  if (NO_REPLY.test(localOf(from))) return 'ignored';
+  return 'reply';
+}
+
+// A thread's messages (drafts and chats left out), oldest first.
+function threadMessages(thread) {
+  return (Array.isArray(thread?.messages) ? thread.messages : [])
+    .filter((m) => m && typeof m === 'object' && !labelsOf(m).includes('DRAFT') && !labelsOf(m).includes('CHAT'))
+    .map((m, i) => ({ m, i, at: Number(m.internalDate) || 0 }))
+    .sort((a, b) => a.at - b.at || a.i - b.i)
+    .map((x) => x.m);
+}
+
+// What the first (non-draft) message says, when it is ours; else null.
+function firstFacts(thread, c) {
+  const msgs = threadMessages(thread);
+  const first = msgs[0];
+  if (!first || messageKind(first, c) !== 'ours') return null;
+  const firstAt = isoOf(first);
+  if (!firstAt) return null;
+  const h = headersOf(first);
+  const to = parseAddresses(h.to);
+  const cc = parseAddresses(h.cc);
+  const seen = new Set();
+  const recipients = [...to, ...cc].filter((r) => !seen.has(r.email) && seen.add(r.email));
+  const outside = (r) => !onDomain(r.email, c.internal);
+  const type = str(h['content-type'] || first?.payload?.mimeType).toLowerCase();
+  return {
+    msgs, firstAt, h, subject: subjectOf(h), from: firstAddress(h.from), recipients,
+    prospect: to.find(outside) || cc.find(outside) || { name: '', email: '' },
+    calendar: type.startsWith('text/calendar') || firstAddress(h.sender) === CALENDAR_SENDER || firstAddress(h.from) === CALENDAR_SENDER,
+  };
+}
+
+/**
+ * Whether a thread we haven't stored yet is cold, from its headers alone: its first non-draft message is ours, isn't a
+ * reply or forward (no In-Reply-To, no Re:/Fw:/Fwd: subject) or a calendar invite (text/calendar, Google Calendar as
+ * Sender), and goes to 1–5 To/Cc recipients (Bcc isn't seen), none of them internal, a no-reply address, a known email
+ * or on a client's domain. The sync then asks Gmail whether the prospect ever wrote to the mailbox before (priorInbound).
+ * `ctx`: { internal, emails, domains } (rpc outreach_gmail_known plus the mailbox's own domains).
+ * → { cold: true, prospect, prospectName, recipients, firstAt } or { cold: false, why }
+ */
+export function coldThread(thread, ctx = {}) {
+  const c = gmailContext(ctx);
+  const f = firstFacts(thread, c);
+  if (!f) return { cold: false, why: 'not ours' };
+  if (str(f.h['in-reply-to'])) return { cold: false, why: 'in reply' };
+  if (REPLY_SUBJECT.test(f.subject)) return { cold: false, why: 'reply subject' };
+  if (f.calendar) return { cold: false, why: 'calendar' };
+  if (!f.recipients.length || f.recipients.length > MAX_COLD_RECIPIENTS) return { cold: false, why: 'recipients' };
+  for (const r of f.recipients) {
+    if (onDomain(r.email, c.internal)) return { cold: false, why: 'internal' };
+    if (NO_REPLY.test(localOf(r.email))) return { cold: false, why: 'no-reply' };
+    if (c.emails.has(r.email)) return { cold: false, why: 'known' };
+    if (onDomain(r.email, c.domains)) return { cold: false, why: 'client domain' };
+  }
+  return { cold: true, prospect: f.prospect.email, prospectName: f.prospect.name, recipients: f.recipients.length, firstAt: f.firstAt };
+}
+
+/**
+ * A cold thread (format=metadata) → its outreach_threads row and outreach_messages rows, or null when its first message
+ * isn't ours. The row: our From address, the prospect (the first outside To recipient, else Cc) and their display name
+ * (≤100), the To/Cc count, our first subject (≤200; never a reply's), when we first and last sent and how many we sent,
+ * the first reply (and its message id), auto-reply and bounce. Messages: each of ours ('sent') and each reply, auto-reply
+ * and bounce; ignored ones give nothing. Days are worked out by the database, never here.
+ */
+export function threadRows(thread, ctx = {}) {
+  const c = gmailContext(ctx);
+  const threadId = str(thread?.id);
+  const f = threadId ? firstFacts(thread, c) : null;
+  if (!f) return null;
+  const row = {
+    thread_id: threadId, sender: f.from, prospect_email: f.prospect.email, prospect_name: clip(f.prospect.name, MAX_NAME),
+    recipients: Math.max(1, f.recipients.length), subject: clip(f.subject, MAX_SUBJECT), first_at: f.firstAt, last_sent_at: null,
+    sent_count: 0, reply_at: null, reply_message_id: '', auto_at: null, bounce_at: null,
+  };
+  const messages = [];
+  for (const m of f.msgs) {
+    const at = isoOf(m);
+    const id = str(m.id);
+    const kind = messageKind(m, c);
+    if (!at || !id || kind === 'ignored') continue;
+    if (kind === 'ours') {
+      row.sent_count++;
+      row.last_sent_at = at;
+    } else if (kind === 'reply' && !row.reply_at) {
+      row.reply_at = at;
+      row.reply_message_id = id;
+    } else if (kind === 'auto' && !row.auto_at) row.auto_at = at;
+    else if (kind === 'bounce' && !row.bounce_at) row.bounce_at = at;
+    messages.push({ message_id: id, thread_id: threadId, kind: kind === 'ours' ? 'sent' : kind, at });
+  }
+  return { thread: row, messages };
+}
+
+// ── Mailbox connect and callback ──
+
+// purpose 'mailbox' (admins only, checked by the caller): the consent page for that mailbox's own @assetstackai.com
+// account, Gmail read only. include_granted_scopes false, so the mailbox's token never carries anything the account
+// granted Cortex before. → { url }
+async function mailboxConnect(body, me, cfg, fetch) {
+  const origin = allowedOrigin(body.origin, cfg.origins);
+  if (!origin) throw new HttpError(400, 'Open Cortex at its own address to connect Google.');
+  const mailbox = str(body.mailbox).toLowerCase();
+  if (!UUID.test(mailbox)) throw new HttpError(400, 'Choose a mailbox to connect.');
+  const email = str(me.email).toLowerCase();
+  if (!email) throw new HttpError(400, 'Your Cortex profile has no email.');
+  const client = clientFor(cfg, 'default');
+  const found = await rest(cfg, fetch, 'connect', `outreach_mailboxes?id=eq.${mailbox}&select=id,active,addresses`, {}, 'Could not read the mailbox.');
+  const box = Array.isArray(found) ? found[0] : null;
+  if (!box) throw new HttpError(400, MAILBOX_GONE);
+  if (box.active !== true) throw new HttpError(400, MAILBOX_INACTIVE);
+  const hint = (Array.isArray(box.addresses) ? box.addresses : []).map((a) => str(a).toLowerCase())
+    .find((a) => EMAIL.test(a) && domainOf(a) === client.hd);
+  if (!hint) throw new HttpError(400, mailboxDomain(client.hd));
+  const state = await signState({
+    uid: me.uid, email, origin, exp: Math.floor(Date.now() / 1000) + STATE_TTL, nonce: base64url(crypto.getRandomValues(new Uint8Array(16))),
+    purpose: 'mailbox', mailbox, client: 'default',
+  }, cfg.clientSecret);
+  const query = new URLSearchParams({
+    client_id: client.id,
+    redirect_uri: callbackUrl(cfg),
+    response_type: 'code',
+    scope: MAILBOX_SCOPES,
+    access_type: 'offline',
+    prompt: 'consent select_account',
+    include_granted_scopes: 'false',
+    hd: client.hd,
+    login_hint: hint,
+    state,
+  });
+  return { url: `${GOOGLE_AUTH}?${query}` };
+}
+
+// A mailbox connect comes back here: → <origin>/#/settings?tab=outreach&gmail=<result>&mailbox=<id>, result connected,
+// denied, wrong_account, gmail_scope (Gmail read left unticked: nothing saved), no_refresh_token or
+// error&reason=client|exchange|save. The account signed in is the mailbox's (not the admin's): rpc
+// outreach_gmail_connect checks it is one of the mailbox's addresses and that the admin still is one.
+async function mailboxCallback(url, state, origin, cfg, fetch) {
+  const mailbox = str(state.mailbox).toLowerCase();
+  if (!UUID.test(mailbox)) return page(400, EXPIRED);
+  const back = (result) => redirect(`${origin}/#/settings?tab=outreach&gmail=${result}&mailbox=${mailbox}`);
+  const fail = (step) => back(`error&reason=${step}`);
+  if (url.searchParams.get('error')) return back('denied');
+  const key = str(state.client) || 'default';
+  const client = clientFor(cfg, key);
+  if (!client) { logFailure('client', 0, { error: 'unknown client' }); return fail('client'); }
+  const exchanged = await exchangeCode(url, cfg, fetch, client);
+  if (exchanged.step) return fail(exchanged.step);
+  const { token } = exchanged;
+
+  const id = jwtPayload(token.id_token);
+  const email = str(id?.email).toLowerCase();
+  const verified = id?.email_verified === true || id?.email_verified === 'true';
+  if (!email || !verified) return back('wrong_account');
+  if (!hasGmailRead(token.scope)) return back('gmail_scope');
+  if (!str(token.refresh_token)) return back('no_refresh_token');
+
+  try {
+    const saved = await fetch(`${cfg.url}/rest/v1/rpc/outreach_gmail_connect`, {
+      method: 'POST',
+      headers: { ...keyHeaders(cfg.secretKey), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        p_mailbox: mailbox, p_email: email, p_token: token.refresh_token, p_scopes: str(token.scope), p_by: state.uid, p_client: key,
+      }),
+    });
+    const answer = await readJson(saved);
+    if (saved.ok && answer === 'ok') return back('connected');
+    if (saved.ok && answer === 'wrong_account') return back('wrong_account');
+    logFailure('save', saved.status, saved.ok ? { error: `answered ${JSON.stringify(answer)}`.slice(0, 60) } : answer);
+    return fail('save');
+  } catch (e) {
+    logFailure('save', 0, { error: str(e?.name) || 'network' });
+    return fail('save');
+  }
+}
+
+// ── Mailbox sync ──
+
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A Gmail GET → its JSON. A rate limit (429, or 403 with a rate-limit reason) waits `backoff` once and tries again, then
+// throws RateLimited; a missing scope → 409 (reconnect); 404 → null when `allow404`; anything else → 502 "Gmail returned
+// <status>." (Google's message is never kept: it could quote the mailbox).
+async function gmailGet(fetch, token, url, { sleep, backoff }, allow404 = false) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } });
+    const data = await readJson(res);
+    if (res.ok) return data || {};
+    const reasons = googleReasons(data);
+    if (res.status === 429 || (res.status === 403 && reasons.some((r) => RATE_REASONS.includes(r)))) {
+      if (attempt === 0) {
+        await sleep(backoff);
+        continue;
+      }
+      throw new RateLimited('rate limited');
+    }
+    if (res.status === 404 && allow404) return null;
+    if (scopeInsufficient(res.status, data, reasons)) throw new HttpError(409, GMAIL_RECONNECT);
+    throw new HttpError(502, `Gmail returned ${res.status}.`);
+  }
+}
+
+// messages.list for `q`, page after page (at most `pages`) → distinct thread ids, newest first (Gmail's order).
+async function listThreads(get, q, pages) {
+  const ids = [];
+  const seen = new Set();
+  let pageToken = '';
+  for (let n = 0; n < pages; n++) {
+    const params = new URLSearchParams({ q, maxResults: '500', fields: GMAIL_LIST_FIELDS });
+    if (pageToken) params.set('pageToken', pageToken);
+    const data = await get(`${GMAIL_API}/messages?${params}`);
+    for (const m of Array.isArray(data?.messages) ? data.messages : []) {
+      const t = str(m?.threadId);
+      if (THREAD_ID.test(t) && !seen.has(t)) {
+        seen.add(t);
+        ids.push(t);
+      }
+    }
+    pageToken = str(data?.nextPageToken);
+    if (!pageToken) break;
+  }
+  return ids;
+}
+
+// The messages added since `start` (drafts and chats left out) → { gone: true } when Gmail no longer has that history
+// (404), else { events: [{ thread, sent }] newest first, historyId, more }. Finished: historyId = the mailbox's current
+// one; stopped at the page cap: the last record read (more true, so the next run carries on from there).
+async function readHistory(get, start, pages) {
+  const events = [];
+  let lastId = '';
+  let pageToken = '';
+  for (let n = 0; n < pages; n++) {
+    const params = new URLSearchParams({ startHistoryId: start, historyTypes: 'messageAdded', maxResults: '500', fields: GMAIL_HISTORY_FIELDS });
+    if (pageToken) params.set('pageToken', pageToken);
+    const data = await get(`${GMAIL_API}/history?${params}`, true);
+    if (data === null) return { gone: true };
+    for (const h of Array.isArray(data?.history) ? data.history : []) {
+      for (const added of Array.isArray(h?.messagesAdded) ? h.messagesAdded : []) {
+        const labels = labelsOf(added?.message);
+        const thread = str(added?.message?.threadId);
+        if (!THREAD_ID.test(thread) || labels.includes('DRAFT') || labels.includes('CHAT')) continue;
+        events.push({ thread, sent: labels.includes('SENT') });
+      }
+      if (str(h?.id)) lastId = str(h.id);
+    }
+    pageToken = str(data?.nextPageToken);
+    if (!pageToken) return { gone: false, events: events.reverse(), historyId: str(data?.historyId), more: false };
+  }
+  return { gone: false, events: events.reverse(), historyId: lastId, more: true };
+}
+
+// Which of `ids` are this mailbox's stored cold threads (secret key; 100 ids a request). → Set
+async function storedThreads(db, mailbox, ids) {
+  const out = new Set();
+  const list = threadIds(ids);
+  for (let i = 0; i < list.length; i += 100) {
+    const rows = await db(`outreach_threads?select=thread_id&mailbox_id=eq.${encodeURIComponent(mailbox)}&thread_id=in.(${list.slice(i, i + 100).join(',')})`,
+      {}, 'Could not read the stored threads.');
+    for (const r of Array.isArray(rows) ? rows : []) out.add(str(r?.thread_id));
+  }
+  return out;
+}
+
+// threads.get with headers only: format=metadata, the headers the rules read, and a fields mask without snippet.
+function threadUrl(id) {
+  const q = new URLSearchParams({ format: 'metadata' });
+  for (const h of GMAIL_METADATA) q.append('metadataHeaders', h);
+  q.set('fields', GMAIL_THREAD_FIELDS);
+  return `${GMAIL_API}/threads/${encodeURIComponent(id)}?${q}`;
+}
+
+// Whether the prospect wrote to this mailbox before our first message (then they aren't a new contact).
+async function priorInbound(get, verdict) {
+  const before = Math.floor(Date.parse(verdict.firstAt) / 1000);
+  const q = new URLSearchParams({ q: `from:${verdict.prospect} before:${before}`, maxResults: '1', fields: 'messages(id)' });
+  const data = await get(`${GMAIL_API}/messages?${q}`);
+  return Array.isArray(data?.messages) && data.messages.length > 0;
+}
+
+// Runs `worker(item, index)` over `items`, `n` at a time; every worker finishes. → the first error thrown, or null.
+async function pool(items, n, worker) {
+  let next = 0;
+  let failure = null;
+  const lane = async () => {
+    while (next < items.length && !failure) {
+      const k = next++;
+      try {
+        await worker(items[k], k);
+      } catch (e) {
+        failure = failure || e;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(n, items.length)) }, lane));
+  return failure;
+}
+
+// A failure → what is saved for the mailbox: { error (short, never a token), reconnect }.
+function gmailError(e, secrets = []) {
+  if (e instanceof RateLimited) return { error: GMAIL_BUSY, reconnect: false };
+  if (!(e instanceof HttpError)) return { error: GMAIL_FAILED, reconnect: false };
+  let message = e.message;
+  for (const s of secrets) if (s) message = message.split(s).join('…');
+  return { error: clip(message.replace(/\s+/g, ' ').trim(), 200) || GMAIL_FAILED, reconnect: e.status === 409 };
+}
+
+// rpc outreach_gmail_known (+ the mailbox's own domains) → the classification context.
+function knownContext(known, addresses) {
+  const list = (v) => (Array.isArray(v) ? v : []);
+  return gmailContext({
+    internal: [...list(known?.internal), ...list(addresses).map(domainOf).filter(Boolean)], emails: list(known?.emails), domains: list(known?.domains),
+  });
+}
+
+// One claimed mailbox: what to read (a first read of the last 90 days of sent mail, Gmail's history since the last run,
+// or a restart when that history is gone), then the queued threads newest first, saved every `saveEvery` threads with the
+// rest of the queue as the cursor. → { status: 'synced' | 'failed' | 'skipped', more, pending }
+async function gmailMailbox(id, run) {
+  const { cfg, fetch, db, lim, now, sleep, until } = run;
+  let started = new Date(run.claimedAt + START_MARGIN).toISOString();
+  let pending = [];
+  let queue = 0; // the queue as last saved (or as the job read it): what a failed run leaves pending
+  let refresh = '';
+  let token = '';
+  let step = 'job';
+  const save = (fields) => db('rpc/outreach_gmail_save', {
+    method: 'POST',
+    body: {
+      p_mailbox: id, p_started: started, p_threads: fields.threads || [], p_messages: fields.messages || [], p_cursor: fields.cursor || {},
+      p_release: fields.release === true, p_error: fields.error || '', p_reconnect: fields.reconnect === true,
+    },
+  }, 'Could not save the Gmail sync.');
+  try {
+    if (!run.known || typeof run.known !== 'object' || Array.isArray(run.known)) throw new HttpError(502, GMAIL_NO_KNOWN);
+    const job = await db('rpc/outreach_gmail_job', { method: 'POST', body: { p_mailbox: id } }, 'Could not read the mailbox’s connection.');
+    if (!job || typeof job !== 'object' || Array.isArray(job)) return { status: 'skipped', more: false, pending: 0 }; // not connected
+    if (validTime(job.run_started)) started = job.run_started; // the claim's own time, when the job gives it
+    pending = threadIds(job.pending);
+    queue = pending.length;
+    refresh = str(job.refresh_token);
+    const email = str(job.email).toLowerCase();
+    const client = clientFor(cfg, str(job.client) || 'default');
+    if (!client || !refresh || !EMAIL.test(email) || !hasGmailRead(job.scopes)) throw new HttpError(409, GMAIL_RECONNECT);
+    step = 'token';
+    token = await refreshAccess(fetch, client, refresh, GMAIL_RECONNECT);
+    const ctx = knownContext(run.known, job.addresses);
+    const get = (url, allow404) => gmailGet(fetch, token, url, { sleep, backoff: lim.backoff }, allow404);
+    const stored = (ids) => storedThreads(db, id, ids);
+
+    // 1. What to read.
+    const fromScratch = async (fromMs, touched) => {
+      step = 'profile';
+      const profile = await get(`${GMAIL_API}/profile`);
+      if (str(profile?.emailAddress).toLowerCase() !== email) throw new HttpError(409, GMAIL_OTHER_ACCOUNT);
+      step = 'list';
+      const after = Math.floor(fromMs / 1000);
+      let ids = await listThreads(get, `in:sent after:${after}`, lim.listPages);
+      if (touched) {
+        const inbound = await listThreads(get, `-in:sent after:${after}`, lim.listPages);
+        const keep = inbound.length ? await stored(inbound) : new Set();
+        ids = unique([...ids, ...inbound.filter((t) => keep.has(t))]);
+      }
+      return { ids, historyId: str(profile?.historyId) || null };
+    };
+    let queued;
+    let cursor;
+    let historyMore = false;
+    const history = str(job.history_id);
+    if (!history) {
+      const fromMs = now() - LOOKBACK_DAYS * DAY_MS;
+      const r = await fromScratch(fromMs, false);
+      queued = r.ids;
+      cursor = { history_id: r.historyId, scan_from: new Date(fromMs).toISOString() };
+    } else {
+      step = 'history';
+      const h = await readHistory(get, history, lim.historyPages);
+      if (h.gone) {
+        const last = Date.parse(str(job.synced_at));
+        const fromMs = Math.max(Number.isFinite(last) ? last - RESTART_OVERLAP_DAYS * DAY_MS : 0, now() - LOOKBACK_DAYS * DAY_MS);
+        const r = await fromScratch(fromMs, true);
+        queued = r.ids;
+        cursor = { history_id: r.historyId, ...(validTime(job.scan_from) ? {} : { scan_from: new Date(fromMs).toISOString() }) };
+      } else {
+        const inbound = unique(h.events.filter((e) => !e.sent).map((e) => e.thread));
+        const keep = inbound.length ? await stored(inbound) : new Set();
+        queued = unique(h.events.filter((e) => e.sent || keep.has(e.thread)).map((e) => e.thread));
+        cursor = { history_id: h.historyId || null };
+        historyMore = h.more;
+      }
+    }
+    pending = unique([...queued, ...pending]);
+
+    // 2. The queued threads, newest first: a stored cold thread is refreshed; any other is kept only when it is cold.
+    step = 'threads';
+    const batch = pending.slice(0, lim.threadsPerRun);
+    const cold = batch.length ? await stored(batch) : new Set();
+    const done = new Set();
+    let stop = false; // the deadline, or a rate limit
+    for (let i = 0; ; i += lim.saveEvery) {
+      const chunk = batch.slice(i, i + lim.saveEvery);
+      const rows = new Array(chunk.length).fill(null);
+      const failure = await pool(chunk, lim.parallel, async (tid, k) => {
+        if (stop) return;
+        if (now() >= until) {
+          stop = true;
+          return;
+        }
+        try {
+          const thread = await get(threadUrl(tid), true);
+          if (thread && cold.has(tid)) rows[k] = threadRows(thread, ctx);
+          else if (thread) {
+            const verdict = coldThread(thread, ctx);
+            if (verdict.cold && !(await priorInbound(get, verdict))) rows[k] = threadRows(thread, ctx);
+          }
+          done.add(tid); // read (or gone from Gmail: 404)
+        } catch (e) {
+          if (!(e instanceof RateLimited)) throw e;
+          stop = true;
+        }
+      });
+      if (failure) throw failure;
+      const remaining = pending.filter((t) => !done.has(t));
+      const last = stop || i + lim.saveEvery >= batch.length;
+      const more = last && (remaining.length > 0 || historyMore);
+      const kept = rows.filter(Boolean);
+      step = 'save';
+      const saved = await save({
+        threads: kept.map((r) => r.thread), messages: kept.flatMap((r) => r.messages), cursor: { ...cursor, pending: remaining }, release: more,
+      });
+      if (saved !== true) return { status: 'skipped', more: false, pending: 0 }; // no longer connected or active
+      queue = remaining.length;
+      if (last) return { status: 'synced', more, pending: queue };
+      cursor = {};
+      step = 'threads';
+    }
+  } catch (e) {
+    const { error, reconnect } = gmailError(e, [token, refresh]);
+    console.error('google/outreach-gmail-sync: mailbox failed at', step, e instanceof RateLimited ? 'rate limited' : e instanceof HttpError ? e.status : str(e?.name) || 'Error');
+    try {
+      await save({ error, reconnect });
+    } catch {
+      // logged by rest(); the mailbox counts as failed either way
+    }
+    return { status: 'failed', more: false, pending: queue };
+  }
+}
+
+// Claims the connected mailboxes whose turn it is (not read in the last 10 minutes, or 1 minute when forced; at most
+// three) and reads them one at a time, each with its own Google account and its share of the run's time. One mailbox's
+// failure (saved as its error, with reconnect when its connection needs it) never stops the others. more: a mailbox has
+// more to read and its claim was released, so the client may call again straight away.
+async function gmailSync(body, cfg, fetch, { limits = {}, now = Date.now, sleep = pause } = {}) {
+  const lim = { ...GMAIL_LIMITS, ...limits };
+  const end = now() + lim.deadline;
+  const db = (path, init, fail) => rest(cfg, fetch, 'outreach-gmail-sync', path, init, fail);
+  const claimed = claimedIds(await db('rpc/outreach_gmail_claim', {
+    method: 'POST', body: { p_gap: body.force === true ? 60 : 600, p_limit: lim.mailboxes },
+  }, 'Could not start the Gmail sync.'));
+  const claimedAt = now();
+  const result = { ok: true, claimed: claimed.length, synced: 0, failed: 0, more: false, pending: 0 };
+  if (!claimed.length) return result;
+  let known = null;
+  try {
+    known = await db('rpc/outreach_gmail_known', { method: 'POST', body: {} }, GMAIL_NO_KNOWN);
+  } catch {
+    known = null; // each mailbox saves the error
+  }
+  for (let i = 0; i < claimed.length; i++) {
+    const until = now() + Math.max(0, end - now()) / (claimed.length - i);
+    const r = await gmailMailbox(claimed[i], { cfg, fetch, db, lim, now, sleep, known, until, claimedAt });
+    if (r.status === 'synced') result.synced++;
+    else if (r.status === 'failed') result.failed++;
+    result.more = result.more || r.more;
+    result.pending += r.pending;
+  }
+  return result;
+}
+
 // ── Entry ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-export async function handle(req, { env = {}, fetch = globalThis.fetch } = {}) {
+// `limits` (GMAIL_LIMITS overrides), `now` (ms) and `sleep` are only for tests of outreach-gmail-sync.
+export async function handle(req, { env = {}, fetch = globalThis.fetch, limits = {}, now = Date.now, sleep = pause } = {}) {
   const cfg = config(env);
   const origin = allowedOrigin(req.headers.get('origin'), cfg.origins);
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(origin) });
@@ -1377,11 +2139,16 @@ export async function handle(req, { env = {}, fetch = globalThis.fetch } = {}) {
       await staffCaller(req, cfg, fetch);
       return json(200, await calendarSync(await readBody(req), cfg, fetch), origin);
     }
+    if (route === 'outreach-gmail-sync') {
+      await outreachCaller(req, cfg, fetch);
+      return json(200, await gmailSync(await readBody(req), cfg, fetch, { limits, now, sleep }), origin);
+    }
     if (route === 'connect') {
-      // Any staff member may connect their calendar; anything else stays admins only.
+      // Any staff member may connect their calendar; anything else (a mailbox's Gmail too) stays admins only.
       const me = await staffCaller(req, cfg, fetch);
       const body = await readBody(req);
       if (body.purpose !== 'calendar') adminOnly(me);
+      if (body.purpose === 'mailbox') return json(200, await mailboxConnect(body, me, cfg, fetch), origin);
       return json(200, await connect(body, me, cfg), origin);
     }
     const me = await caller(req, cfg, fetch);

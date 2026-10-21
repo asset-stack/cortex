@@ -3,7 +3,8 @@
 Cortex is AssetStack's internal ops platform (Vite + React 18 + Tailwind 3 + lucide-react, Supabase in live mode).
 It is separate from the marketing site (`AssetLanding`) and from the signed-in product
 (bunburycouncil.assetstack.site). The backend contract is `docs/BACKEND.md` (phase 1) plus `docs/PHASE2.md`
-(team workflow: roles, module access, My Work, finance, timesheets, boards, Outreach, Calendar); setup steps are in `DEPLOY.md`.
+(team workflow: roles, module access, My Work, finance, timesheets, boards, Outreach, Calendar, Outreach from Gmail);
+setup steps are in `DEPLOY.md`.
 
 ## Rules
 - All data access goes through `src/data/store.jsx` (`useStore()` → `{ state, actions }`), in both modes. Screens
@@ -43,6 +44,17 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
   `outreach_breakdown()` ⇄ `src/lib/outreach.js` ⇄ the function's Summary tab. The sync never writes the agent's tab
   and never deletes tabs (it writes Summary, Notes and one tab per mailbox). Mailbox addresses and the sheet link are
   data (Settings → Outreach), never code. Cortex never sends outreach email (the agent does).
+- **Outreach from Gmail (0010)**: admins connect each mailbox's Gmail in Settings → Outreach (connect purpose
+  `mailbox`: `gmail.readonly` only, `include_granted_scopes=false`, signed in as one of that mailbox's addresses). Only
+  the `google` function's `outreach-gmail-sync` writes `outreach_threads` / `outreach_messages` (through
+  `outreach_gmail_save()`); the app reads them through `useStore().outreach`, never in synced state. Store no message
+  text: headers of cold threads only (who, when, our first subject), never bodies, snippets or reply subjects, and no
+  addresses, subjects or tokens in function logs. A cold thread is one we start with a new outside contact (the cold
+  rule in `docs/PHASE2.md` §16), decided once. One rule set for the numbers: `outreach_gmail_daily()` /
+  `outreach_gmail_breakdown()` / `outreach_gmail_threads()` ⇄ `gmailDaily()` / `gmailBreakdown()` / `filterThreads()`,
+  and `mergeDaily()` decides which mailboxes count from Gmail (first read done) and which from the sheet. Disconnecting,
+  another account, losing the scope or the address forgets a mailbox's Gmail data (triggers in live mode, `forgetGmail`
+  in the store's demo mode).
 - **Calendar (0009)** has no module key: `collectEntries()` (`src/lib/calendar.js`) gathers what each source already
   lets the viewer see, with that source's rule (boards: `canViewBoard`; invoices and contracts: Clients view; team events
   and Google meetings: everyone). `calendar_events` is synced (anyone adds; the creator or an admin edits and deletes).

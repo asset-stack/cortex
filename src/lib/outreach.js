@@ -89,13 +89,150 @@ export function outreachBreakdown(rows, from, to) {
   return [...out.values()];
 }
 
-/** Totals of outreachDaily() rows, for one mailbox ('' = Unassigned) or all (null). Reply rate = replies ÷ sent. */
+/**
+ * Totals of daily rows (outreachDaily(), or mergeDaily() with Gmail's), for one mailbox ('' = Unassigned) or all (null).
+ * `started` is prospects emailed (Gmail threads started; a sheet row's emails otherwise). Reply rate = replies ÷ started,
+ * bounce rate = bounces ÷ started.
+ */
 export function outreachTotals(daily, mailbox = null) {
-  const t = { sent: 0, replies: 0, bounces: 0, meetings: 0 };
+  const t = { sent: 0, started: 0, replies: 0, autos: 0, bounces: 0, meetings: 0 };
   (daily || []).filter((d) => mailbox === null || d.mailbox === mailbox).forEach((d) => {
-    t.sent += d.sent; t.replies += d.replies; t.bounces += d.bounces; t.meetings += d.meetings;
+    t.sent += d.sent; t.started += d.started ?? d.sent; t.replies += d.replies; t.autos += d.autos || 0; t.bounces += d.bounces;
+    t.meetings += d.meetings || 0;
   });
-  return { ...t, replyRate: t.sent ? t.replies / t.sent : 0, bounceRate: t.sent ? t.bounces / t.sent : 0 };
+  return { ...t, replyRate: t.started ? t.replies / t.started : 0, bounceRate: t.started ? t.bounces / t.started : 0 };
+}
+
+// ── Gmail (0010, docs/PHASE2.md §16): cold emails read from each connected mailbox ─────────────────────────────────
+// A cold thread is one we started with a new outside contact (the google function's outreach-gmail-sync decides, once).
+// Its messages are ours ('sent': the first email and each follow-up) and the prospect's answer ('reply', 'auto' for an
+// auto-reply or out-of-office, 'bounce'). Days are Sydney days, worked out by the database (outreach_gmail_save).
+
+const num = (v) => Number(v) || 0;
+
+// A thread row (snake_case, from outreach_gmail_threads() or the demo seed) → the app's shape. The sheet's details
+// (organisation, role, tier, the agent's reply status) come along when a sheet row matches.
+export function threadFromRow(r = {}) {
+  return {
+    id: str(r.id), mailbox: str(r.mailbox_id), threadId: str(r.thread_id), sender: str(r.sender), prospectEmail: str(r.prospect_email),
+    prospectName: str(r.prospect_name), recipients: num(r.recipients) || 1, subject: str(r.subject), firstAt: str(r.first_at),
+    firstDay: ymd(r.first_day), lastSentAt: str(r.last_sent_at), sentCount: num(r.sent_count) || 1, replyAt: str(r.reply_at),
+    replyDay: ymd(r.reply_day), autoAt: str(r.auto_at), autoDay: ymd(r.auto_day), bounceAt: str(r.bounce_at), bounceDay: ymd(r.bounce_day),
+    replyKind: str(r.reply_kind), organisation: str(r.organisation), contactRole: str(r.contact_role), tier: str(r.tier),
+    sheetReplyStatus: str(r.sheet_reply_status),
+  };
+}
+
+/** What became of a cold thread: bounced, else replied, else an auto-reply, else waiting (same order as the database). */
+export function gmailOutcome(t) {
+  if (t.bounceAt || t.bounceDay) return 'bounced';
+  if (t.replyAt || t.replyDay) return 'replied';
+  if (t.autoAt || t.autoDay) return 'auto';
+  return 'waiting';
+}
+
+/**
+ * Per day and mailbox between `from` and `to` (inclusive): our cold emails sent (each first email and follow-up, on its
+ * Sydney day), prospects emailed (threads started), and threads first replied to, auto-replied to and bounced, on those
+ * days. Same rules as outreach_gmail_daily() in 0010. `threads` / `messages` in the app's shape (threadFromRow, and
+ * { mailbox, messageId, threadId, kind, day }). → [{ day, mailbox, sent, started, replies, autos, bounces }] by day, then
+ * mailbox.
+ */
+export function gmailDaily(threads, messages, from, to) {
+  const out = new Map();
+  const at = (day, mailbox) => {
+    const k = `${day}|${mailbox}`;
+    if (!out.has(k)) out.set(k, { day, mailbox, sent: 0, started: 0, replies: 0, autos: 0, bounces: 0 });
+    return out.get(k);
+  };
+  (messages || []).forEach((m) => { if (m.kind === 'sent' && inRange(m.day, from, to)) at(m.day, m.mailbox).sent++; });
+  (threads || []).forEach((t) => {
+    if (inRange(t.firstDay, from, to)) at(t.firstDay, t.mailbox).started++;
+    if (inRange(t.replyDay, from, to)) at(t.replyDay, t.mailbox).replies++;
+    if (inRange(t.autoDay, from, to)) at(t.autoDay, t.mailbox).autos++;
+    if (inRange(t.bounceDay, from, to)) at(t.bounceDay, t.mailbox).bounces++;
+  });
+  return [...out.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.mailbox < b.mailbox ? -1 : a.mailbox > b.mailbox ? 1 : 0));
+}
+
+/**
+ * Threads started between `from` and `to`, by mailbox: what became of them (kind 'outcome': bounced, replied, auto,
+ * waiting) and how many emails we sent in each (kind 'followups': '1', '2', '3', '4+'). Same rules as
+ * outreach_gmail_breakdown() in 0010. → [{ mailbox, kind, value, n }]
+ */
+export function gmailBreakdown(threads, from, to) {
+  const out = new Map();
+  const add = (mailbox, kind, value) => {
+    const k = `${mailbox}|${kind}|${value}`;
+    if (!out.has(k)) out.set(k, { mailbox, kind, value, n: 0 });
+    out.get(k).n++;
+  };
+  (threads || []).filter((t) => inRange(t.firstDay, from, to)).forEach((t) => {
+    add(t.mailbox, 'outcome', gmailOutcome(t));
+    add(t.mailbox, 'followups', t.sentCount >= 4 ? '4+' : String(Math.max(1, t.sentCount)));
+  });
+  return [...out.values()];
+}
+
+// The sheet row that tells us more about a thread: one with its Gmail thread id, else the newest for the prospect's
+// address (latest sent, then logged, then id). Same order as outreach_gmail_threads().
+function sheetRowFor(t, sheetRows) {
+  const later = (a, b) => (a > b ? -1 : a < b ? 1 : 0);
+  return (sheetRows || []).filter((e) => e.inSheet !== false
+    && ((t.threadId && e.threadId === t.threadId) || (t.prospectEmail && e.contactEmail.toLowerCase() === t.prospectEmail)))
+    .sort((a, b) => (b.threadId === t.threadId) - (a.threadId === t.threadId) || later(a.sentOn, b.sentOn)
+      || later(a.dateLogged, b.dateLogged) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))[0] || null;
+}
+
+/** A thread with the sheet's details for it (organisation, role, tier, the agent's reply status), when a row matches. */
+export function withSheet(t, sheetRows) {
+  const e = sheetRowFor(t, sheetRows);
+  return e ? { ...t, organisation: e.organisation, contactRole: e.contactRole, tier: e.tier, sheetReplyStatus: e.replyStatus } : t;
+}
+
+/**
+ * The cold threads list, for one mailbox (or all), newest first. `only`: 'sent' (started in the period), 'replies'
+ * (first replied to in the period) or 'bounced' (bounced in the period). `search` matches the prospect's address and
+ * name, the subject and the organisation (from the sheet). Same rules as outreach_gmail_threads() in 0010.
+ * → { rows, more }
+ */
+export function filterThreads(threads, sheetRows, { mailbox = null, from, to, search = '', only = 'sent', limit = 50, offset = 0 } = {}) {
+  const q = str(search).toLowerCase();
+  const day = (t) => (only === 'replies' ? t.replyDay : only === 'bounced' ? t.bounceDay : t.firstDay);
+  const list = (threads || [])
+    .filter((t) => (mailbox === null || t.mailbox === mailbox) && inRange(day(t), from, to))
+    .map((t) => withSheet(t, sheetRows))
+    .filter((t) => !q || [t.prospectEmail, t.prospectName, t.subject, t.organisation].some((v) => str(v).toLowerCase().includes(q)))
+    .sort((a, b) => (day(a) < day(b) ? 1 : day(a) > day(b) ? -1 : a.firstAt < b.firstAt ? 1 : a.firstAt > b.firstAt ? -1 : a.id < b.id ? -1 : 1));
+  return { rows: list.slice(offset, offset + limit), more: list.length > offset + limit };
+}
+
+/**
+ * The dashboard's daily rows: a mailbox whose Gmail has been read (`gmailBoxes`: a Set of mailbox ids) counts sent,
+ * prospects, replies, auto-replies and bounces from Gmail and only meetings from the sheet; every other mailbox (and
+ * Unassigned) counts everything from the sheet, each email a prospect. → [{ day, mailbox, sent, started, replies, autos,
+ * bounces, meetings }] by day, then mailbox (Unassigned last).
+ */
+export function mergeDaily(sheetDaily, gmailRows, gmailBoxes = new Set()) {
+  const out = new Map();
+  const at = (day, mailbox) => {
+    const k = `${day}|${mailbox}`;
+    if (!out.has(k)) out.set(k, { day, mailbox, sent: 0, started: 0, replies: 0, autos: 0, bounces: 0, meetings: 0 });
+    return out.get(k);
+  };
+  (sheetDaily || []).forEach((d) => {
+    const x = at(d.day, d.mailbox);
+    x.meetings += d.meetings;
+    if (gmailBoxes.has(d.mailbox)) return;
+    x.sent += d.sent; x.started += d.sent; x.replies += d.replies; x.bounces += d.bounces;
+  });
+  (gmailRows || []).filter((g) => gmailBoxes.has(g.mailbox)).forEach((g) => {
+    const x = at(g.day, g.mailbox);
+    x.sent += g.sent; x.started += g.started; x.replies += g.replies; x.autos += g.autos; x.bounces += g.bounces;
+  });
+  const box = (m) => m || '\uffff';
+  return [...out.values()].filter((x) => x.sent || x.started || x.replies || x.autos || x.bounces || x.meetings)
+    .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : box(a.mailbox) < box(b.mailbox) ? -1 : box(a.mailbox) > box(b.mailbox) ? 1 : 0));
 }
 
 /**

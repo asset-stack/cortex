@@ -9,7 +9,9 @@
 // the agent's emails read from its sheet, notes and the sheet's link: who reads and writes what, the guards, and the
 // dashboard RPCs, which must give the same numbers as src/lib/outreach.js); then 0008_pipeline_stages.sql (Pipeline's
 // stages, Work in Progress); then 0009_calendar.sql (the team's calendar events, each person's Google meetings and the
-// calendar sync's RPCs, a calendar on boards). Last, the sync engine's writes of every synced table (flatten() rows as
+// calendar sync's RPCs, a calendar on boards); then 0010_outreach_gmail.sql (each outreach mailbox's Gmail connection,
+// the Gmail sync's RPCs, cold threads and their messages, the forgetting, and the dashboard RPCs, which must give the same
+// numbers and lists as src/lib/outreach.js). Last, the sync engine's writes of every synced table (flatten() rows as
 // PostgREST upserts), personal pages, Outreach and calendar events included.
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
@@ -29,6 +31,7 @@ const migration6 = await readFile(new URL('supabase/migrations/0006_boards.sql',
 const migration7 = await readFile(new URL('supabase/migrations/0007_outreach.sql', root), 'utf8');
 const migration8 = await readFile(new URL('supabase/migrations/0008_pipeline_stages.sql', root), 'utf8');
 const migration9 = await readFile(new URL('supabase/migrations/0009_calendar.sql', root), 'utf8');
+const migration10 = await readFile(new URL('supabase/migrations/0010_outreach_gmail.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -3324,6 +3327,937 @@ async function phase9(ctx) {
   return ctx;
 }
 
+// Phase 10: 0010_outreach_gmail.sql (each outreach mailbox's Gmail: the connection, the sync's RPCs, cold threads and
+// their messages, the forgetting, the dashboard's numbers and the threads list) -----------------------------------------
+
+async function applyMigration10() {
+  await as(null);
+  try {
+    await db.exec(migration10);
+    return null;
+  } catch (e) {
+    await db.exec('rollback').catch(() => {});
+    return e.message;
+  }
+}
+
+const GMAIL_TABLES = ['private.outreach_gmail', 'private.outreach_gmail_sync', 'public.outreach_messages', 'public.outreach_threads'];
+const GMAIL_FUNCTIONS = ['private.has_gmail_read', 'public.outreach_gmail_connect', 'public.outreach_gmail_known',
+  'public.outreach_gmail_claim', 'public.outreach_gmail_job', 'public.outreach_gmail_save', 'public.outreach_gmail_status',
+  'public.outreach_gmail_disconnect', 'public.outreach_gmail_daily', 'public.outreach_gmail_breakdown', 'public.outreach_gmail_threads',
+  'public.outreach_gmail_forget', 'public.outreach_gmail_addresses'];
+const GMAIL_SIGNATURES = {
+  connect: 'public.outreach_gmail_connect(uuid, text, text, text, uuid, text)',
+  known: 'public.outreach_gmail_known()',
+  claim: 'public.outreach_gmail_claim(int, int)',
+  job: 'public.outreach_gmail_job(uuid)',
+  save: 'public.outreach_gmail_save(uuid, timestamptz, jsonb, jsonb, jsonb, boolean, text, boolean)',
+  status: 'public.outreach_gmail_status()',
+  disconnect: 'public.outreach_gmail_disconnect(uuid)',
+  daily: 'public.outreach_gmail_daily(date, date)',
+  breakdown: 'public.outreach_gmail_breakdown(date, date)',
+  threads: 'public.outreach_gmail_threads(uuid, date, date, text, text, int, int)',
+  forget: 'public.outreach_gmail_forget()',
+  addresses: 'public.outreach_gmail_addresses()',
+  hasGmailRead: 'private.has_gmail_read(text)',
+};
+const GMAIL_READ = 'https://www.googleapis.com/auth/gmail.readonly';
+const GMAIL_INDEXES = ['outreach_emails_contact_email_lower_idx', 'outreach_emails_thread_id_idx'];
+
+// Everything 0010 makes (tables, columns, constraints, indexes, triggers, policies, functions, grants, realtime), in a
+// form that compares across runs and databases.
+async function gmailShape(dbx) {
+  const q = async (sql, params) => (await dbx.query(sql, params)).rows;
+  const ofTables = `(select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname || '.' || c.relname = any($1::text[]))`;
+  return {
+    tables: await q(`select c.oid::regclass::text as t, c.relrowsecurity as rls, (select array_agg(a::text order by a::text) from unnest(c.relacl) a) as acl
+      from pg_class c where c.oid in ${ofTables} order by 1`, [GMAIL_TABLES]),
+    columns: await q(`select table_schema, table_name, column_name, udt_name, is_nullable, column_default from information_schema.columns
+      where table_schema || '.' || table_name = any($1::text[]) order by 1, 2, ordinal_position`, [GMAIL_TABLES]),
+    constraints: await q(`select conrelid::regclass::text as t, conname, pg_get_constraintdef(oid) as def from pg_constraint
+      where conrelid in ${ofTables} order by 1, 2`, [GMAIL_TABLES]),
+    indexes: await q(`select schemaname, tablename, indexname, indexdef from pg_indexes
+      where schemaname || '.' || tablename = any($1::text[]) or indexname = any($2::text[]) order by 1, 2, 3`, [GMAIL_TABLES, GMAIL_INDEXES]),
+    triggers: await q(`select tgrelid::regclass::text as t, tgname, pg_get_triggerdef(oid) as def from pg_trigger
+      where not tgisinternal and (tgrelid in ${ofTables} or tgname in ('outreach_gmail_forget', 'outreach_gmail_addresses')) order by 1, 2`,
+    [GMAIL_TABLES]),
+    policies: await q(`select schemaname, tablename, policyname, cmd, permissive, roles::text as roles, qual, with_check from pg_policies
+      where schemaname || '.' || tablename = any($1::text[]) order by 1, 2, 3`, [GMAIL_TABLES]),
+    functions: await q(`select pronamespace::regnamespace::text as ns, proname, prosecdef, provolatile, proconfig, md5(prosrc) as src,
+        pg_get_function_identity_arguments(oid) as args, pg_get_function_result(oid) as result,
+        (select array_agg(a::text order by a::text) from unnest(proacl) a) as acl
+      from pg_proc where pronamespace::regnamespace::text || '.' || proname = any($1::text[]) order by 1, 2`, [GMAIL_FUNCTIONS]),
+    published: (await q(`select schemaname || '.' || tablename as t from pg_publication_tables where pubname = 'supabase_realtime'
+      and schemaname || '.' || tablename = any($1::text[]) order by 1`, [GMAIL_TABLES])).map((r) => r.t),
+  };
+}
+
+// Who may call each 0010 function, and whether it runs as its owner.
+async function gmailCallers(dbx) {
+  const r = (await dbx.query(`select k, has_function_privilege('anon', f, 'execute') as anon,
+      has_function_privilege('authenticated', f, 'execute') as signed_in, has_function_privilege('service_role', f, 'execute') as secret,
+      (select prosecdef from pg_proc where oid = f::regprocedure) as definer
+    from jsonb_each_text($1::jsonb) as x (k, f)`, [JSON.stringify(GMAIL_SIGNATURES)])).rows;
+  return Object.fromEntries(r.map(({ k, ...x }) => [k, x]));
+}
+
+// 79–93. 0010: Outreach reads cold email from each mailbox's Gmail (docs/PHASE2.md §16) ------------------------------------
+async function phase10(ctx) {
+  const { alice, boss, david, hello, carol, newcomer, early } = ctx;
+  const lib = await outreachLib();
+  const sorted = (...list) => [...list].sort();
+  const iso = (v) => (v instanceof Date ? v.toISOString() : v ?? null);
+  const T = (m) => new Date(Date.UTC(2026, 9, 21, 0, m)).toISOString(); // runs started on 21 October, m minutes past midnight UTC
+
+  // 79. On the database the phases above leave behind: whole, again, and statement by statement --------------------------
+
+  await as(null);
+  const publishedBefore = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'")).n;
+  const first = await applyMigration10();
+  const body = migration10.replace(/--.*$/gm, '').trim();
+  check('79. 0010 runs on top of 0009 and its rows, as one transaction (begin … commit when run whole)',
+    first === null && /^begin;/i.test(body) && /commit;$/i.test(body), first);
+  if (first) return null;
+  const shape = await gmailShape(db);
+  const second = await applyMigration10();
+  await as(null);
+  const splitErrors = await runSplit(db, migration10, { continueOnError: true });
+  const reshaped = await gmailShape(db);
+  check('79. 0010 re-runs whole and statement by statement (the editor) cleanly, changing nothing, and never mentions module_level',
+    second === null && !splitErrors.length && !shapeDiff(shape, reshaped).length && !migration10.includes('module_level'),
+    { second, splitErrors, changed: shapeDiff(shape, reshaped) });
+
+  // 80. On a fresh database after 0009: statement by statement ends as a whole run does; Supabase's default grants --------
+
+  const freshAt9 = async (supabaseDefaults = false) => {
+    const dbx = new PGlite({ extensions: { pgcrypto } });
+    await dbx.exec(SUPABASE_STUB);
+    if (supabaseDefaults) {
+      await dbx.exec(`alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+        alter default privileges in schema public grant all on tables to service_role`);
+    }
+    for (const m of [migration, migration2, migration3, migration4, migration5, migration6, migration7, migration8, migration9]) await dbx.exec(m);
+    return dbx;
+  };
+  const whole = await freshAt9();
+  const wholeError = await whole.exec(migration10).then(() => null, (e) => e.message);
+  const wholeShape = await gmailShape(whole);
+  await whole.close();
+  const stop = await freshAt9();
+  const stopErrors = await runSplit(stop, migration10);
+  const stopShape = await gmailShape(stop);
+  const againErrors = await runSplit(stop, migration10);
+  const againShape = await gmailShape(stop);
+  await stop.close();
+  const carry = await freshAt9();
+  const carryErrors = await runSplit(carry, migration10, { continueOnError: true });
+  const carryShape = await gmailShape(carry);
+  await carry.close();
+  const statements = splitSql(migration10).length;
+  check('80. 0010 run statement by statement on a fresh database (stopping at the first error, or carrying on) ends exactly as a '
+    + 'whole run does; a second statement-by-statement run changes nothing',
+    statements > 40 && wholeError === null && !stopErrors.length && !carryErrors.length && !againErrors.length
+      && !shapeDiff(wholeShape, stopShape).length && !shapeDiff(wholeShape, carryShape).length && !shapeDiff(wholeShape, againShape).length,
+    { statements, wholeError, stopErrors, carryErrors, againErrors, stop: shapeDiff(wholeShape, stopShape),
+      carry: shapeDiff(wholeShape, carryShape), again: shapeDiff(wholeShape, againShape) });
+  check('80. ...and a fresh database ends with the same tables, policies, functions, triggers and grants as the used one',
+    !shapeDiff(wholeShape, shape).length, shapeDiff(wholeShape, shape));
+
+  const SIGNED_IN = ['status', 'disconnect', 'daily', 'breakdown', 'threads'];
+  const SECRET = ['connect', 'known', 'claim', 'job', 'save'];
+  const INVOKER = ['daily', 'breakdown', 'threads'];
+  const callersOk = (c, defaults) => Object.keys(GMAIL_SIGNATURES).every((k) => c[k] && !c[k].anon
+      && c[k].signed_in === SIGNED_IN.includes(k) && (!SECRET.includes(k) || c[k].secret)
+      && c[k].definer === (k !== 'hasGmailRead' && !INVOKER.includes(k)))
+    && !c.hasGmailRead.secret && (defaults || SIGNED_IN.every((k) => !c[k].secret));
+  const supa = await freshAt9(true);
+  const supaRun = await supa.exec(migration10).then(() => null, (e) => e.message);
+  const supaFns = supaRun ?? await gmailCallers(supa);
+  const supaTables = supaRun ?? (await supa.query(`select t,
+      (select string_agg(p, ',') from unnest(array['select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger']) p
+        where has_table_privilege('anon', t, p)) as anon,
+      (select string_agg(p, ',') from unnest(array['select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger']) p
+        where has_table_privilege('authenticated', t, p)) as signed_in
+    from unnest($1::text[]) t order by t`, [GMAIL_TABLES])).rows;
+  await supa.close();
+  const callers = await gmailCallers(db);
+  check('80. with Supabase\'s defaults too (new functions granted to anon and everyone), anon calls none of the 0010 functions; '
+    + 'signed-in users only outreach_gmail_status, _disconnect, _daily, _breakdown and _threads; only the secret key connects, '
+    + 'reads the known addresses, claims, reads a job and saves; has_gmail_read and the triggers\' functions are nobody\'s; '
+    + 'the readers run as the caller (security invoker), the rest as definer',
+    supaRun === null && callersOk(supaFns, true) && callersOk(callers, false)
+      && supaTables.every((r) => r.anon === null)
+      && stable(supaTables.map((r) => [r.t, r.signed_in])) === stable([['private.outreach_gmail', null], ['private.outreach_gmail_sync', null],
+        ['public.outreach_messages', 'select'], ['public.outreach_threads', 'select']]),
+    { supaRun, supaFns, callers, supaTables });
+
+  // 81. Tables, grants, indexes and realtime -------------------------------------------------------------------------------
+
+  const tableInfo = await rows(`select t, (select relrowsecurity from pg_class where oid = t::regclass) as rls,
+      exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname || '.' || tablename = t) as published,
+      (select string_agg(p, ',') from unnest(array['select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger']) p
+        where has_table_privilege('anon', t, p)) as anon,
+      (select string_agg(p, ',') from unnest(array['select', 'insert', 'update', 'delete', 'truncate', 'references', 'trigger']) p
+        where has_table_privilege('authenticated', t, p)) as signed_in,
+      has_table_privilege('service_role', t, 'select') as secret_reads
+    from unnest($1::text[]) as t order by t`, [GMAIL_TABLES]);
+  const info = Object.fromEntries(tableInfo.map(({ t, ...r }) => [t, r]));
+  const noRls = await rows(`select n.nspname || '.' || c.relname as t from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname in ('public', 'private') and c.relkind = 'r' and not c.relrowsecurity`);
+  const publishedAfter = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'")).n;
+  const indexes = Object.fromEntries((await rows(`select indexname, indexdef from pg_indexes where indexname = any($1::text[])`, [[
+    'outreach_threads_first_day_idx', 'outreach_threads_reply_day_idx', 'outreach_threads_bounce_day_idx', 'outreach_threads_mailbox_id_idx',
+    'outreach_messages_day_idx', ...GMAIL_INDEXES]])).map((r) => [r.indexname, r.indexdef]));
+  const cons = (await rows(`select conrelid::regclass::text || ' ' || pg_get_constraintdef(oid) as d from pg_constraint
+    where conrelid = any(array['public.outreach_threads', 'public.outreach_messages', 'private.outreach_gmail']::regclass[])`)).map((r) => r.d);
+  const hasCon = (re) => cons.some((d) => re.test(d));
+  check('81. the four Gmail tables: RLS on (the private ones too), nothing for anon; signed-in users only read threads and messages and '
+    + 'never reach the private tables; the secret key reads the threads (the function checks which are stored)',
+    GMAIL_TABLES.every((t) => info[t]?.rls && info[t].anon === null) && !noRls.length
+      && info['public.outreach_threads'].signed_in === 'select' && info['public.outreach_messages'].signed_in === 'select'
+      && info['private.outreach_gmail'].signed_in === null && info['private.outreach_gmail_sync'].signed_in === null
+      && info['public.outreach_threads'].secret_reads,
+    { info, noRls });
+  check('81. realtime publishes none of them (39 tables before and after); the day, mailbox and sheet-matching indexes exist; '
+    + 'threads are unique per mailbox, messages belong to a thread (removed with it), the client key is checked',
+    publishedBefore === 39 && publishedAfter === 39 && GMAIL_TABLES.every((t) => !info[t].published)
+      && Object.keys(indexes).length === 7 && /lower\(contact_email\)/.test(indexes.outreach_emails_contact_email_lower_idx)
+      && /\(thread_id\)/.test(indexes.outreach_emails_thread_id_idx)
+      && hasCon(/^outreach_threads UNIQUE \(mailbox_id, thread_id\)$/)
+      && hasCon(/^outreach_messages FOREIGN KEY \(mailbox_id, thread_id\) REFERENCES outreach_threads\(mailbox_id, thread_id\) ON DELETE CASCADE$/)
+      && hasCon(/^outreach_messages PRIMARY KEY \(mailbox_id, message_id\)$/) && hasCon(/^private\.outreach_gmail CHECK .*client/)
+      && hasCon(/^outreach_threads CHECK \(\(char_length\(prospect_name\) <= 100\)\)$/) && hasCon(/^outreach_threads CHECK \(\(char_length\(subject\) <= 200\)\)$/),
+    { publishedBefore, publishedAfter, indexes, cons });
+
+  // 82. Which scopes read Gmail ------------------------------------------------------------------------------------------
+
+  const hasRead = await rows('select private.has_gmail_read(s) as ok from unnest($1::text[]) with ordinality as x (s, i) order by i', [[
+    null, '', GMAIL_READ, `openid email ${GMAIL_READ}`, `openid\n${GMAIL_READ}  email`, `${GMAIL_READ}x`, `x${GMAIL_READ}`,
+    `${GMAIL_READ}/`, 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.modify', 'gmail.readonly',
+  ]]);
+  check('82. has_gmail_read: true only when one whole space-separated scope is gmail.readonly (not gmail.send / modify, a longer or '
+    + 'shorter look-alike, or none)',
+    stable(hasRead.map((r) => r.ok)) === stable([false, false, true, true, true, false, false, false, false, false, false]), hasRead);
+
+  // 83. outreach_gmail_connect (the callback, secret key) ------------------------------------------------------------------
+
+  // Gmail mailboxes from here on (added by an admin): One (two addresses, one in capitals), Two, Three, and Paused
+  // (inactive). David and Josh (phase 7) are never connected.
+  await as(boss);
+  const addBox = async (name, addresses, position, active = true) => (await one(`insert into public.outreach_mailboxes (name, addresses, position, active)
+    values ($1, $2, $3, $4) returning id`, [name, addresses, position, active])).id;
+  const M1 = await addBox('Gmail One', ['One@AssetStackAI.com', 'one@assetstack.org'], 3);
+  const M2 = await addBox('Gmail Two', ['two@assetstackai.com'], 4);
+  const M3 = await addBox('Gmail Three', ['three@assetstackai.com'], 5);
+  const MP = await addBox('Paused', ['paused@assetstackai.com'], 6, false);
+  await as(null);
+  const [boxA, boxB] = (await rows("select id from public.outreach_mailboxes where name in ('David', 'Josh') order by position")).map((r) => r.id);
+  const READ = `openid email ${GMAIL_READ}`;
+  const RESULTS = ['ok', 'no_mailbox', 'not_admin', 'wrong_account'];
+  const gconnect = async (mailbox, email, { scopes = READ, by = boss, client, token = 'refresh-token-1' } = {}) => {
+    await asSecretKey();
+    const args = [mailbox, email, token, scopes, by];
+    const r = await attempt(client === undefined ? 'select public.outreach_gmail_connect($1, $2, $3, $4, $5) as r'
+      : 'select public.outreach_gmail_connect($1, $2, $3, $4, $5, $6) as r', client === undefined ? args : [...args, client]);
+    await as(null);
+    return r && typeof r === 'object' ? r.r : r;
+  };
+  const connOf = async (mailbox) => one(`select client, email, refresh_token, scopes, connected_by, connected_at from private.outreach_gmail
+    where mailbox_id = $1`, [mailbox]);
+  const connects = {
+    unknown: await gconnect(randomUUID(), 'one@assetstackai.com'),
+    inactive: await gconnect(MP, 'paused@assetstackai.com'),
+    staffView: await gconnect(M1, 'one@assetstackai.com', { by: hello }),
+    staffEdit: await gconnect(M1, 'one@assetstackai.com', { by: newcomer }),
+    inactiveStaff: await gconnect(M1, 'one@assetstackai.com', { by: carol }),
+    nobody: await gconnect(M1, 'one@assetstackai.com', { by: randomUUID() }),
+    noBy: await gconnect(M1, 'one@assetstackai.com', { by: null }),
+    otherMailbox: await gconnect(M1, 'two@assetstackai.com'),
+    empty: await gconnect(M1, ''),
+    lookalike: await gconnect(M1, 'one@assetstackai.com.au'),
+    noToken: await gconnect(M1, 'one@assetstackai.com', { token: '' }),
+    badClient: await gconnect(M1, 'one@assetstackai.com', { client: 'Bad-Client' }),
+  };
+  await as(david);
+  await db.query('update public.profiles set active = false where id = $1', [early]);
+  await as(null);
+  connects.inactiveAdmin = await gconnect(M1, 'one@assetstackai.com', { by: early });
+  await as(david);
+  await db.query('update public.profiles set active = true where id = $1', [early]);
+  await as(null);
+  const storedBefore = (await one('select count(*)::int as n from private.outreach_gmail')).n;
+  connects.one = await gconnect(M1, '  ONE@assetstackai.com ');
+  connects.two = await gconnect(M2, 'two@assetstackai.com', { by: david, client: 'default', token: 'refresh-token-2' });
+  connects.three = await gconnect(M3, 'three@assetstackai.com', { by: early, scopes: 'openid email', token: 'refresh-token-3' });
+  const stored = { one: await connOf(M1), two: await connOf(M2), three: await connOf(M3) };
+  // Paused's connection from before it was paused (the SQL editor here): connected, never read.
+  await db.query('insert into private.outreach_gmail (mailbox_id, email, refresh_token, scopes) values ($1, $2, $3, $4)',
+    [MP, 'paused@assetstackai.com', 'refresh-token-p', READ]);
+  const connectLocks = /from public\.outreach_mailboxes m where m\.id = p_mailbox and m\.active\s+for update of m;/.test(migration10);
+  const failed = (x) => typeof x === 'string' && !RESULTS.includes(x);
+  check('83. outreach_gmail_connect: no_mailbox for an unknown or inactive mailbox; not_admin unless the connecting person is an active '
+    + 'admin (staff with Outreach view or edit, inactive accounts, no one); wrong_account unless the Google account is one of the '
+    + 'mailbox\'s addresses (not another mailbox\'s, a look-alike or none); no token or a bad client key is an error; nothing stored',
+    connects.unknown === 'no_mailbox' && connects.inactive === 'no_mailbox' && connects.staffView === 'not_admin'
+      && connects.staffEdit === 'not_admin' && connects.inactiveStaff === 'not_admin' && connects.inactiveAdmin === 'not_admin'
+      && connects.nobody === 'not_admin' && connects.noBy === 'not_admin' && connects.otherMailbox === 'wrong_account'
+      && connects.empty === 'wrong_account' && connects.lookalike === 'wrong_account' && failed(connects.noToken)
+      && failed(connects.badClient) && storedBefore === 0,
+    { connects, storedBefore });
+  check('83. ...an admin signed in as one of its addresses (any case, spaces trimmed) connects it: the address lower-cased, the token, '
+    + 'scopes, client (\'default\' unless given) and who connected it; the mailbox row is locked for update meanwhile',
+    connects.one === 'ok' && connects.two === 'ok' && connects.three === 'ok' && connectLocks
+      && stored.one?.email === 'one@assetstackai.com' && stored.one.client === 'default' && stored.one.refresh_token === 'refresh-token-1'
+      && stored.one.scopes === READ && stored.one.connected_by === boss
+      && stored.two?.connected_by === david && stored.two.client === 'default' && stored.two.refresh_token === 'refresh-token-2'
+      && stored.three?.connected_by === early && stored.three.scopes === 'openid email',
+    { connects, stored, connectLocks });
+
+  // 84. outreach_gmail_claim: which mailboxes are due a read, at most once per gap ------------------------------------------
+
+  const gclaim = async (...args) => {
+    await asSecretKey();
+    const r = await db.query(`select c as id from public.outreach_gmail_claim(${args.map((_, i) => `$${i + 1}`).join(', ')}) c`, args);
+    await as(null);
+    return r.rows.map((x) => x.id).sort();
+  };
+  const claimedAgo = (mailbox, seconds) => db.query(`update private.outreach_gmail_sync set claimed_at = now() - make_interval(secs => $2)
+    where mailbox_id = $1`, [mailbox, seconds]);
+  const claims = { first: await gclaim(), again: await gclaim(), forced: await gclaim(60) };
+  const claimedRow = await one('select claimed_at, run_started from private.outreach_gmail_sync where mailbox_id = $1', [M1]);
+  const nowish = (d) => d instanceof Date && Math.abs(Date.now() - d.getTime()) < 10 * 60e3;
+  await claimedAgo(M1, 61);
+  await claimedAgo(M2, 45);
+  claims.after61 = await gclaim(60);
+  claims.floor = await gclaim(0);
+  await claimedAgo(M1, 599);
+  claims.before600 = await gclaim();
+  await claimedAgo(M1, 601);
+  claims.after600 = await gclaim();
+  // Three gets the Gmail scope (a reconnect as the same account); then all three are free, Two never synced, Three
+  // synced before One: a limit of 2 takes Two and Three, the next One; a limit of 0 none.
+  connects.threeRead = await gconnect(M3, 'three@assetstackai.com', { by: early, token: 'refresh-token-3' });
+  await db.query('update private.outreach_gmail_sync set claimed_at = null, synced_at = $2 where mailbox_id = $1', [M1, T(10)]);
+  await db.query('update private.outreach_gmail_sync set claimed_at = null, synced_at = null where mailbox_id = $1', [M2]);
+  await db.query(`insert into private.outreach_gmail_sync (mailbox_id, synced_at) values ($1, $2)
+    on conflict (mailbox_id) do update set synced_at = excluded.synced_at, claimed_at = null`, [M3, T(5)]);
+  claims.none = await gclaim(600, 0);
+  claims.oldestTwo = await gclaim(600, 2);
+  claims.rest = await gclaim(600, 2);
+  claims.empty = await gclaim(600, 2);
+  const syncRows = (await rows('select mailbox_id from private.outreach_gmail_sync order by mailbox_id')).map((r) => r.mailbox_id);
+  check('84. outreach_gmail_claim claims active mailboxes connected with the Gmail read scope (not without it, not inactive, not '
+    + 'unconnected), each at most once per p_gap seconds (600 by default, never under 30), stamping claimed_at and run_started; a '
+    + 'second claim at once gets none',
+    stable(claims.first) === stable(sorted(M1, M2)) && stable(claims.again) === stable([]) && stable(claims.forced) === stable([])
+      && nowish(claimedRow?.claimed_at) && +claimedRow.claimed_at === +claimedRow.run_started
+      && stable(claims.after61) === stable([M1]) && stable(claims.floor) === stable([M2]) && stable(claims.before600) === stable([])
+      && stable(claims.after600) === stable([M1]),
+    { claims, claimedRow, expected: { M1, M2, M3, MP } });
+  check('84. ...at most p_limit at a time, the least recently synced first (never synced first); Paused and the unconnected '
+    + 'mailboxes never get a sync row',
+    connects.threeRead === 'ok' && stable(claims.none) === stable([]) && stable(claims.oldestTwo) === stable(sorted(M2, M3))
+      && stable(claims.rest) === stable([M1]) && stable(claims.empty) === stable([])
+      && stable(syncRows) === stable(sorted(M1, M2, M3)) && ![MP, boxA, boxB].some((m) => syncRows.includes(m)),
+    { claims, syncRows });
+
+  // 85. outreach_gmail_save: a run's threads, messages and cursor -----------------------------------------------------------
+
+  // A run is claimed at a known time here (the claim stamps now(); the function passes the job's run_started back).
+  const claimAt = (mailbox, started) => db.query(`insert into private.outreach_gmail_sync (mailbox_id, claimed_at, run_started)
+    values ($1, now(), $2) on conflict (mailbox_id) do update set claimed_at = now(), run_started = excluded.run_started`, [mailbox, started]);
+  const gsave = async (mailbox, started, threads, messages, cursor, { release = false, err = '', reconnect = false, raw = false } = {}) => {
+    await asSecretKey();
+    const j = (v) => (raw || v === null ? v : JSON.stringify(v));
+    const r = await attempt(`select public.outreach_gmail_save($1::uuid, $2::timestamptz, $3::jsonb, $4::jsonb, $5::jsonb, $6, $7, $8) as ok`,
+      [mailbox, started, j(threads), j(messages), j(cursor), release, err, reconnect]);
+    await as(null);
+    return r && typeof r === 'object' ? r.ok : r;
+  };
+  const thread = (id, f = {}) => ({
+    thread_id: id, sender: f.sender ?? 'one@assetstackai.com', prospect_email: f.email ?? `${id}@prospect.example`,
+    prospect_name: f.name ?? `Prospect ${id}`, recipients: f.recipients ?? 1, subject: f.subject ?? `Subject ${id}`, first_at: f.first,
+    last_sent_at: f.last ?? f.first, sent_count: f.sent ?? 1, reply_at: f.reply ?? null,
+    reply_message_id: f.replyId ?? (f.reply ? `${id}-r` : ''), auto_at: f.auto ?? null, bounce_at: f.bounce ?? null,
+  });
+  const message = (id, threadId, kind, at) => ({ message_id: id, thread_id: threadId, kind, at });
+  const threadsOf = async (mailbox) => Object.fromEntries((await rows(`select thread_id, sender, prospect_email, prospect_name, recipients,
+      subject, first_at, first_day::text as first_day, last_sent_at, sent_count, reply_at, reply_day::text as reply_day, reply_message_id,
+      auto_at, auto_day::text as auto_day, bounce_at, bounce_day::text as bounce_day, reply_kind, synced_at
+    from public.outreach_threads where mailbox_id = $1 order by thread_id`, [mailbox]))
+    .map((r) => [r.thread_id, Object.fromEntries(Object.entries(r).map(([k, v]) => [k, iso(v)]))]));
+  const messagesOf = async (mailbox) => Object.fromEntries((await rows(`select message_id, thread_id, kind, at, day::text as day, synced_at
+    from public.outreach_messages where mailbox_id = $1 order by message_id`, [mailbox]))
+    .map((r) => [r.message_id, { thread: r.thread_id, kind: r.kind, at: iso(r.at), day: r.day, synced_at: iso(r.synced_at) }]));
+  const syncOf = async (mailbox) => {
+    const r = await one(`select claimed_at, run_started, synced_at, ready_at, history_id, scan_from, pending, error, reconnect
+      from private.outreach_gmail_sync where mailbox_id = $1`, [mailbox]);
+    return r ? Object.fromEntries(Object.entries(r).map(([k, v]) => [k, iso(v)])) : null;
+  };
+  const LONG_NAME = `  ${'N'.repeat(120)}`;
+  const LONG_SUBJECT = 'S'.repeat(250);
+  // t1 starts at 01:30 on 22 October in Sydney (14:30 UTC the day before); t2 one second before Sydney midnight, its reply
+  // on the stroke of it; t3 auto-replied and bounced. Messages: one of a thread never stored, and one of an unknown kind,
+  // are skipped; one sent twice is saved once.
+  const t1 = thread('t1', { email: ' Pat.Example@Prospect.EXAMPLE ', name: LONG_NAME, subject: LONG_SUBJECT, first: '2026-10-21T14:30:00.000Z', recipients: 2 });
+  const t2 = thread('t2', { first: '2026-10-21T12:59:59.000Z', sent: 2, last: '2026-10-22T00:00:00.000Z', reply: '2026-10-21T13:00:00.000Z' });
+  const t3 = thread('t3', { first: '2026-10-21T20:00:00.000Z', auto: '2026-10-22T01:00:00.000Z', bounce: '2026-10-22T02:00:00.000Z' });
+  const MSGS = [
+    message('m-t1-1', 't1', 'sent', '2026-10-21T14:30:00.000Z'), message('m-t2-1', 't2', 'sent', '2026-10-21T12:59:59.000Z'),
+    message('m-t2-2', 't2', 'sent', '2026-10-22T00:00:00.000Z'), message('t2-r', 't2', 'reply', '2026-10-21T13:00:00.000Z'),
+    message('m-t3-1', 't3', 'sent', '2026-10-21T20:00:00.000Z'), message('m-t3-a', 't3', 'auto', '2026-10-22T01:00:00.000Z'),
+    message('m-t3-b', 't3', 'bounce', '2026-10-22T02:00:00.000Z'), message('m-x', 'never-stored', 'sent', '2026-10-21T20:00:00.000Z'),
+    message('m-bad', 't3', 'draft', '2026-10-21T20:00:00.000Z'), message('m-t3-1', 't3', 'sent', '2026-10-21T20:00:00.000Z'),
+  ];
+  const runs = {};
+  await claimAt(M1, T(10));
+  runs.first = await gsave(M1, T(10), [t1, t2, t3], MSGS, { history_id: '1001', scan_from: '2026-07-23T00:00:00.000Z', pending: ['p1', 'p2'] });
+  const afterFirst = await threadsOf(M1);
+  const msgsFirst = await messagesOf(M1);
+  const syncFirst = await syncOf(M1);
+  check('85. outreach_gmail_save stores a run\'s cold threads (Sydney days worked out here: 14:30 UTC on 21 October is 22 October; '
+    + 'the prospect\'s address trimmed and lower-cased; the name cut to 100 and the subject to 200) and their messages (each on its '
+    + 'Sydney day; one whose thread isn\'t stored, or of an unknown kind, skipped; one sent twice saved once)',
+    runs.first === true && Object.keys(afterFirst).join() === 't1,t2,t3'
+      && afterFirst.t1.first_day === '2026-10-22' && afterFirst.t1.prospect_email === 'pat.example@prospect.example'
+      && afterFirst.t1.prospect_name === 'N'.repeat(100) && afterFirst.t1.subject === 'S'.repeat(200) && afterFirst.t1.recipients === 2
+      && afterFirst.t1.first_at === '2026-10-21T14:30:00.000Z' && afterFirst.t1.reply_day === null && afterFirst.t1.reply_kind === ''
+      && afterFirst.t2.first_day === '2026-10-21' && afterFirst.t2.reply_day === '2026-10-22' && afterFirst.t2.reply_message_id === 't2-r'
+      && afterFirst.t2.sent_count === 2 && afterFirst.t2.last_sent_at === '2026-10-22T00:00:00.000Z'
+      && afterFirst.t3.auto_day === '2026-10-22' && afterFirst.t3.bounce_day === '2026-10-22' && afterFirst.t3.first_day === '2026-10-22'
+      && Object.values(afterFirst).every((t) => t.synced_at === T(10))
+      && Object.keys(msgsFirst).join() === 'm-t1-1,m-t2-1,m-t2-2,m-t3-1,m-t3-a,m-t3-b,t2-r'
+      && msgsFirst['m-t2-1'].day === '2026-10-21' && msgsFirst['t2-r'].day === '2026-10-22' && msgsFirst['t2-r'].kind === 'reply'
+      && msgsFirst['m-t1-1'].day === '2026-10-22' && Object.values(msgsFirst).every((m) => m.synced_at === T(10)),
+    { runs, afterFirst, msgsFirst });
+  check('85. ...and where the read got to: history id, scan start and the threads still queued; not ready while some are queued',
+    syncFirst?.synced_at === T(10) && syncFirst.history_id === '1001' && syncFirst.scan_from === '2026-07-23T00:00:00.000Z'
+      && stable(syncFirst.pending) === stable(['p1', 'p2']) && syncFirst.ready_at === null && syncFirst.error === ''
+      && syncFirst.reconnect === false && syncFirst.run_started === T(10) && syncFirst.claimed_at !== null,
+    syncFirst);
+
+  // The same run saves again (an updated thread; reply_kind set meanwhile, as AI sorting will); a cursor without
+  // history_id or scan_from keeps them.
+  await db.query("update public.outreach_threads set reply_kind = 'interested' where mailbox_id = $1 and thread_id = 't2'", [M1]);
+  runs.again = await gsave(M1, T(10), [{ ...t2, sent_count: 3, subject: 'Subject t2 (again)' }], [], { pending: ['p2'] });
+  const afterAgain = await threadsOf(M1);
+  const syncAgain = await syncOf(M1);
+  // The next run (claimed at T(20)) finishes the queue: history_id null keeps it, pending [] → ready, once.
+  await claimAt(M1, T(20));
+  runs.second = await gsave(M1, T(20), [{ ...t1, sent_count: 2, last_sent_at: '2026-10-23T00:00:00.000Z' }],
+    [message('m-t1-2', 't1', 'sent', '2026-10-23T00:00:00.000Z')], { history_id: null, pending: [] });
+  const afterSecond = await threadsOf(M1);
+  const syncSecond = await syncOf(M1);
+  // The first run's late save (a newer run has claimed the mailbox) changes nothing, released or not.
+  runs.late = await gsave(M1, T(10), [{ ...t1, subject: 'Late' }], [message('m-late', 't1', 'sent', '2026-10-21T15:00:00.000Z')],
+    { history_id: '999', pending: ['p9'] }, { release: true });
+  const afterLate = { threads: await threadsOf(M1), messages: await messagesOf(M1), sync: await syncOf(M1) };
+  check('85. a run saving again updates its rows and never touches reply_kind; a cursor key left out or null keeps what\'s stored; '
+    + 'the queue emptying marks the mailbox ready',
+    runs.again === true && afterAgain.t2.sent_count === 3 && afterAgain.t2.subject === 'Subject t2 (again)'
+      && afterAgain.t2.reply_kind === 'interested' && syncAgain.history_id === '1001' && syncAgain.scan_from === '2026-07-23T00:00:00.000Z'
+      && stable(syncAgain.pending) === stable(['p2']) && syncAgain.ready_at === null
+      && runs.second === true && afterSecond.t1.sent_count === 2 && afterSecond.t1.synced_at === T(20) && afterSecond.t2.synced_at === T(10)
+      && afterSecond.t2.reply_kind === 'interested' && syncSecond.history_id === '1001' && syncSecond.scan_from === '2026-07-23T00:00:00.000Z'
+      && stable(syncSecond.pending) === stable([]) && nowish(new Date(syncSecond.ready_at)) && syncSecond.synced_at === T(20),
+    { runs, afterAgain, syncAgain, afterSecond, syncSecond });
+  check('85. once a newer run has claimed the mailbox, an older run\'s save changes nothing (threads, messages, cursor, claim) and '
+    + 'still answers true',
+    runs.late === true && stable(afterLate.threads) === stable(afterSecond) && !afterLate.messages['m-late']
+      && stable(afterLate.sync) === stable(syncSecond),
+    afterLate);
+
+  runs.failed = await gsave(M1, T(20), [thread('t9', { first: '2026-10-21T20:00:00.000Z' })], [message('m-t9', 't9', 'sent', '2026-10-21T20:00:00.000Z')],
+    { history_id: '2002', pending: ['p5'] }, { err: `Gmail said no ${'E'.repeat(600)}`, reconnect: true });
+  const afterFailed = { threads: await threadsOf(M1), sync: await syncOf(M1) };
+  await claimAt(M1, T(30));
+  runs.recovered = await gsave(M1, T(30), [], [], { pending: ['p3'] });
+  const syncRecovered = await syncOf(M1);
+  runs.done = await gsave(M1, T(30), [], [], { pending: [] }, { release: true });
+  const syncDone = await syncOf(M1);
+  check('85. a run with an error writes no threads or messages, keeps the cursor and the last good save\'s time, and records the error '
+    + '(cut to 500) and whether to reconnect; the next good save clears both; ready_at is set once and kept; p_release frees the claim',
+    runs.failed === true && !afterFailed.threads.t9 && afterFailed.sync.history_id === '1001' && stable(afterFailed.sync.pending) === stable([])
+      && afterFailed.sync.synced_at === T(20) && afterFailed.sync.error.length === 500 && afterFailed.sync.error.startsWith('Gmail said no')
+      && afterFailed.sync.reconnect === true && afterFailed.sync.ready_at === syncSecond.ready_at
+      && runs.recovered === true && syncRecovered.error === '' && syncRecovered.reconnect === false && stable(syncRecovered.pending) === stable(['p3'])
+      && syncRecovered.ready_at === syncSecond.ready_at && syncRecovered.synced_at === T(30) && syncRecovered.claimed_at !== null
+      && runs.done === true && syncDone.ready_at === syncSecond.ready_at && syncDone.claimed_at === null && stable(syncDone.pending) === stable([]),
+    { runs, afterFailed, syncRecovered, syncDone });
+
+  // An older save never overwrites a newer one's rows (here with no run on record: the sync row was removed).
+  await db.query('delete from private.outreach_gmail_sync where mailbox_id = $1', [M1]);
+  runs.stale = await gsave(M1, T(5), [{ ...t1, subject: 'Stale' }], [message('m-t1-1', 't1', 'reply', '2026-10-21T14:31:00.000Z')], {});
+  const afterStale = { threads: await threadsOf(M1), messages: await messagesOf(M1) };
+  // A malformed payload doesn't stop a save: not arrays, a null cursor, rows without a thread id or first time, a thread
+  // twice, a zero or missing count.
+  await claimAt(M1, T(40));
+  runs.malformed = await gsave(M1, T(40), '{"thread_id": "x"}', 'null', null, { raw: true });
+  runs.messy = await gsave(M1, T(40), [
+    { ...thread('t4', { first: '2026-10-22T03:00:00.000Z' }), sent_count: 0, recipients: null, prospect_email: null, prospect_name: null },
+    thread('t4', { first: '2026-10-22T03:00:00.000Z' }), { ...thread('t5', { first: '2026-10-22T03:00:00.000Z' }), thread_id: '' },
+    { ...thread('t6', {}), first_at: null },
+  ], [{ message_id: 'm-t4-1', thread_id: 't4', kind: 'sent', at: null }, { message_id: '', thread_id: 't4', kind: 'sent', at: '2026-10-22T03:00:00.000Z' }],
+  { history_id: '3003', scan_from: null, pending: 'not a list' });
+  const afterMessy = { threads: await threadsOf(M1), messages: await messagesOf(M1), sync: await syncOf(M1) };
+  check('85. an older save never overwrites a newer one\'s threads or messages; a malformed payload doesn\'t stop a save (non-arrays and '
+    + 'a null cursor are nothing; rows without a thread id, first time, message id or time skipped; a repeated thread saved once; '
+    + 'counts at least 1); a cursor key that isn\'t a list keeps what\'s stored',
+    runs.stale === true && afterStale.threads.t1.subject === 'S'.repeat(200) && afterStale.threads.t1.synced_at === T(20)
+      && afterStale.messages['m-t1-1'].kind === 'sent' && runs.malformed === true && runs.messy === true
+      && Object.keys(afterMessy.threads).join() === 't1,t2,t3,t4' && afterMessy.threads.t4.sent_count >= 1 && afterMessy.threads.t4.recipients >= 1
+      && !Object.keys(afterMessy.messages).some((k) => k === '' || k === 'm-t4-1')
+      && afterMessy.sync.history_id === '3003' && afterMessy.sync.scan_from === null && afterMessy.sync.synced_at === T(40),
+    { runs, afterStale, afterMessy });
+
+  // A mailbox made inactive: its save is refused (false) and its sync row goes, but what was read stays.
+  await claimAt(M2, T(10));
+  runs.two = await gsave(M2, T(10), [thread('n0', { sender: 'two@assetstackai.com', first: '2026-10-20T01:00:00.000Z' })],
+    [message('m-n0', 'n0', 'sent', '2026-10-20T01:00:00.000Z')], { history_id: '50', pending: [] });
+  await as(boss);
+  const paused = await affected('update public.outreach_mailboxes set active = false where id = $1', [M2]);
+  await as(null);
+  runs.inactive = await gsave(M2, T(20), [thread('n1', { first: '2026-10-20T02:00:00.000Z' })], [], { pending: [] });
+  const inactiveLeft = { threads: Object.keys(await threadsOf(M2)), messages: Object.keys(await messagesOf(M2)), sync: await syncOf(M2),
+    connection: (await connOf(M2))?.email ?? null, claimed: (await gclaim(30)).includes(M2) };
+  await as(boss);
+  const resumed = await affected('update public.outreach_mailboxes set active = true where id = $1', [M2]);
+  await as(null);
+  runs.unknown = await gsave(randomUUID(), T(20), [], [], {});
+  runs.unconnected = await gsave(boxA, T(20), [], [], {});
+  const saveLocks = /perform 1 from public\.outreach_mailboxes m join private\.outreach_gmail g[^;]*private\.has_gmail_read\(g\.scopes\)\s+for share of m, g;/
+    .test(migration10);
+  check('85. a mailbox made inactive (or unknown, or not connected) gets no save (false, its sync row removed) but keeps the threads and '
+    + 'messages already read, and its connection; claims skip it; the save\'s check locks the mailbox and connection (for share)',
+    runs.two === true && paused === 1 && runs.inactive === false && stable(inactiveLeft) === stable({ threads: ['n0'], messages: ['m-n0'],
+      sync: null, connection: 'two@assetstackai.com', claimed: false })
+      && resumed === 1 && runs.unknown === false && runs.unconnected === false && saveLocks,
+    { runs, inactiveLeft, resumed, saveLocks });
+
+  // 86. outreach_gmail_job: one mailbox's work, for the function only ------------------------------------------------------
+
+  await asSecretKey();
+  const jobs = {
+    one: (await one('select public.outreach_gmail_job($1) as j', [M1])).j,
+    two: (await one('select public.outreach_gmail_job($1) as j', [M2])).j,
+    none: (await one('select public.outreach_gmail_job($1) as j', [boxA])).j,
+  };
+  await as(null);
+  check('86. outreach_gmail_job gives the connection (account, token, scopes, client), the mailbox\'s addresses (lower case, once), the '
+    + 'cursor, the last save, whether it\'s ready and the run holding it; null for a mailbox with no connection',
+    stable(Object.keys(jobs.one || {}).sort()) === stable(['addresses', 'client', 'email', 'history_id', 'pending', 'ready', 'refresh_token',
+      'run_started', 'scan_from', 'scopes', 'synced_at'])
+      && jobs.one.email === 'one@assetstackai.com' && jobs.one.refresh_token === 'refresh-token-1' && jobs.one.scopes === READ
+      && jobs.one.client === 'default' && stable([...jobs.one.addresses].sort()) === stable(['one@assetstack.org', 'one@assetstackai.com'])
+      && jobs.one.history_id === '3003' && stable(jobs.one.pending) === stable([]) && jobs.one.ready === true
+      && iso(new Date(jobs.one.run_started)) === T(40) && iso(new Date(jobs.one.synced_at)) === T(40)
+      && jobs.two?.history_id === '' && jobs.two.ready === false && jobs.two.synced_at === null && stable(jobs.two.pending) === stable([])
+      && jobs.none === null,
+    jobs);
+
+  // 87. outreach_gmail_status: each mailbox's connection and sync, never a token or scope ------------------------------------
+
+  // Two's last run failed and needs reconnecting.
+  await claimAt(M2, T(50));
+  runs.twoFailed = await gsave(M2, T(50), [], [], {}, { err: 'Google needs reconnecting', reconnect: true });
+  const statusOf = async (user) => {
+    if (user === 'anon') { await as(null); await db.exec('set role anon'); } else await as(user);
+    const r = await attempt('select public.outreach_gmail_status() as s');
+    await as(null);
+    return r && typeof r === 'object' ? r.s : r;
+  };
+  const status = await statusOf(hello);
+  const order = (await rows('select id from public.outreach_mailboxes order by position, id')).map((r) => r.id);
+  const box = (id) => status?.mailboxes?.find((m) => m.mailbox_id === id);
+  const KEYS = ['client', 'connected', 'connected_at', 'email', 'error', 'mailbox_id', 'pending', 'ready', 'reconnect', 'synced_at'];
+  const refusedStatus = { alice: await statusOf(alice), carol: await statusOf(carol), anon: await statusOf('anon') };
+  const allowedStatus = { david: await statusOf(david), newcomer: await statusOf(newcomer) };
+  check('87. outreach_gmail_status (Outreach view): every mailbox by position with its connection (account, client, when) and sync '
+    + '(last save, ready, threads queued, error, reconnect); nulls for one never connected; never a token or scope',
+    stable(Object.keys(status || {})) === stable(['mailboxes']) && stable(status.mailboxes.map((m) => m.mailbox_id)) === stable(order)
+      && status.mailboxes.every((m) => stable(Object.keys(m).sort()) === stable(KEYS))
+      && stable(box(boxA)) === stable({ mailbox_id: boxA, connected: false, email: null, client: null, connected_at: null, synced_at: null,
+        ready: null, pending: null, error: null, reconnect: null })
+      && box(M1).connected === true && box(M1).email === 'one@assetstackai.com' && box(M1).client === 'default' && box(M1).connected_at !== null
+      && iso(new Date(box(M1).synced_at)) === T(40) && box(M1).ready === true && box(M1).pending === 0 && box(M1).error === ''
+      && box(M1).reconnect === false
+      && box(M2).connected === true && box(M2).error === 'Google needs reconnecting' && box(M2).reconnect === true && box(M2).ready === false
+      && box(M2).synced_at === null && box(M3).connected === true && box(M3).ready === false && box(MP).connected === true
+      && !/refresh|googleapis|scope/.test(JSON.stringify(status)),
+    { status, order });
+  check('87. ...admins and staff with Outreach edit read it too; staff without Outreach, inactive accounts and anon are refused',
+    stable(allowedStatus.david) === stable(status) && stable(allowedStatus.newcomer) === stable(status)
+      && Object.values(refusedStatus).every((e) => typeof e === 'string'),
+    { refusedStatus });
+
+  // 88. Threads and messages: read with Outreach view; written by nobody signed in; the private tables by no one ---------------
+
+  const counts = async () => ({
+    threads: await one('select count(*)::int as n from public.outreach_threads').then((r) => r.n, (e) => e.message),
+    messages: await one('select count(*)::int as n from public.outreach_messages').then((r) => r.n, (e) => e.message),
+  });
+  await as(null);
+  const everything = await counts();
+  const readers = {};
+  for (const [name, user] of Object.entries({ david, boss, hello, newcomer, alice, carol })) {
+    await as(user);
+    readers[name] = await counts();
+  }
+  await as(null);
+  await db.exec('set role anon');
+  readers.anon = await counts();
+  await as(null);
+  const t1Id = (await one("select id from public.outreach_threads where mailbox_id = $1 and thread_id = 't1'", [M1])).id;
+  const writes = {};
+  for (const [name, user] of Object.entries({ david, boss, newcomer })) {
+    await as(user);
+    writes[name] = {
+      insert: await error(`insert into public.outreach_threads (mailbox_id, thread_id, first_at, first_day) values ($1, 'mine', now(), current_date)`, [M1]),
+      update: await error("update public.outreach_threads set reply_kind = 'mine' where id = $1", [t1Id]),
+      delete: await error('delete from public.outreach_threads where id = $1', [t1Id]),
+      message: await error(`insert into public.outreach_messages (mailbox_id, message_id, thread_id, kind, at, day) values ($1, 'mine', 't1', 'sent', now(), current_date)`, [M1]),
+      messageDelete: await error('delete from public.outreach_messages where mailbox_id = $1', [M1]),
+      connection: await error('select * from private.outreach_gmail'),
+      sync: await error('select * from private.outreach_gmail_sync'),
+    };
+  }
+  await asSecretKey();
+  const secretRead = await one('select count(*)::int as n from public.outreach_threads where mailbox_id = $1 and thread_id = any($2::text[])',
+    [M1, ['t1', 't2', 'nope']]).then((r) => r.n, (e) => e.message);
+  await as(null);
+  const none = { threads: 0, messages: 0 };
+  check('88. threads and messages: admins and staff with Outreach view or edit read them all; staff without Outreach and inactive '
+    + 'accounts read none; anon is refused; nobody signed in (not even the SuperAdmin) writes one or reaches the private tables; the '
+    + 'secret key reads which threads are stored',
+    everything.threads > 0 && everything.messages > 0 && ['david', 'boss', 'hello', 'newcomer'].every((n) => stable(readers[n]) === stable(everything))
+      && stable(readers.alice) === stable(none) && stable(readers.carol) === stable(none)
+      && Object.values(readers.anon).every((e) => typeof e === 'string')
+      && Object.values(writes).every((w) => Object.values(w).every((e) => typeof e === 'string')) && secretRead === 2,
+    { everything, readers, writes, secretRead });
+
+  // 89. The dashboard's numbers and the threads list: outreach_gmail_daily / _breakdown / _threads ⇄ src/lib/outreach.js ------
+
+  // A second run of One and Two (T(100)) over two weeks in October; the sheet has rows for some of the prospects (by thread
+  // id, or by address: the newest sent, then logged, then id; rows out of the sheet never).
+  const H = (month, day, h, m = 0) => new Date(Date.UTC(2026, month - 1, day, h, m)).toISOString();
+  const mirror = (id, first, f = {}) => {
+    const sent = f.sent ?? 1;
+    const sends = Array.from({ length: sent }, (_, k) => new Date(Date.parse(first) + k * 2 * 86400e3).toISOString());
+    return {
+      thread: thread(id, { first, last: sends[sends.length - 1], sent, reply: f.reply, auto: f.auto, bounce: f.bounce, email: f.email,
+        name: f.name, subject: f.subject, sender: f.sender }),
+      messages: [...sends.map((at, k) => message(`${id}-s${k}`, id, 'sent', at)),
+        ...['reply', 'auto', 'bounce'].filter((k) => f[k]).map((k) => message(`${id}-${k}`, id, k, f[k]))],
+    };
+  };
+  const ONE = [
+    mirror('mA', H(10, 5, 22), { name: 'Avery Example', subject: 'Asset data for Avery' }),
+    mirror('mB', H(10, 6, 12, 59), { sent: 2, reply: H(10, 9, 13, 30), subject: 'Condition data' }), // 23:59 in Sydney
+    mirror('mC', H(10, 6, 13), { sent: 3, auto: H(10, 7, 1), subject: 'Condition data' }), // midnight in Sydney: the next day
+    mirror('mD', H(10, 7, 23), { sent: 4, auto: H(10, 8, 2), reply: H(10, 12, 3) }),
+    mirror('mE', H(10, 8, 0), { bounce: H(10, 8, 0, 5) }),
+    mirror('mF', H(10, 8, 0), { sent: 6, reply: H(10, 9, 0), bounce: H(10, 9, 1) }), // the same first time as mE
+    mirror('mG', H(9, 30, 5), { sent: 2, reply: H(10, 6, 5) }), // started the week before
+    mirror('mH', H(10, 11, 12, 30), { reply: H(10, 11, 13, 30) }), // the last day; replied the day after
+    mirror('shared-1', H(10, 10, 1)),
+    mirror('mirror-1', H(10, 9, 3), { sent: 2, email: 'kim@council-a.example', name: 'Kim Example' }),
+  ];
+  const TWO = [
+    mirror('nA', H(10, 6, 1), { bounce: H(10, 6, 1, 1) }),
+    mirror('nB', H(10, 9, 1), { sent: 2, reply: H(10, 10, 1) }),
+    mirror('nC', H(10, 10, 1), { auto: H(10, 10, 2) }),
+    mirror('shared-1', H(10, 10, 1)), // the same Gmail thread id as One's (ids are per mailbox) and the same first time
+    mirror('mirror-2', H(10, 10, 4), { email: 'lee@council-b.example', reply: H(10, 11, 4) }),
+    mirror('mirror-3', H(10, 7, 4), { email: 'ash@council-c.example', bounce: H(10, 7, 5) }),
+    mirror('mirror-4', H(10, 8, 4), { email: 'sam@council-d.example' }),
+    mirror('mirror-5', H(10, 9, 4), { email: 'pat.a1@example.com' }), // phase 7's sheet row a1
+  ].map((x) => ({ ...x, thread: { ...x.thread, sender: 'two@assetstackai.com' } }));
+  await asSecretKey();
+  const sheetRow = (key, f) => db.query(`insert into public.outreach_emails (row_key, thread_id, contact_email, sent_on, date_logged,
+      organisation, contact_role, tier, reply_status, in_sheet) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+  [key, f.thread ?? '', f.email ?? '', f.sent ?? null, f.logged ?? null, f.org ?? '', f.role ?? '', f.tier ?? '', f.reply ?? '', f.inSheet ?? true]);
+  await sheetRow('g-s1', { thread: 'mirror-1', email: 'other@council-a.example', sent: '2026-10-01', org: 'Council A (thread)', role: 'Director', tier: 'A', reply: 'positive' });
+  await sheetRow('g-s2', { email: 'KIM@Council-A.example', sent: '2026-10-20', org: 'Council A (by address)' });
+  await sheetRow('g-s3', { email: 'lee@council-b.example', sent: '2026-10-05', org: 'Council B (older)' });
+  await sheetRow('g-s4', { email: 'lee@council-b.example', sent: '2026-10-09', org: 'Council B (newest)', tier: 'B', role: 'Manager' });
+  await sheetRow('g-s5', { email: 'lee@council-b.example', logged: '2026-10-30', org: 'Council B (not sent)' });
+  await sheetRow('g-s6', { email: 'lee@council-b.example', sent: '2026-10-15', org: 'Council B (gone)', inSheet: false });
+  await sheetRow('g-s7', { email: 'ash@council-c.example', logged: '2026-10-01', org: 'Council C (older)' });
+  await sheetRow('g-s8', { email: 'ash@council-c.example', logged: '2026-10-02', org: 'Council C (newer)' });
+  await sheetRow('g-s9', { email: 'sam@council-d.example', sent: '2026-10-08', logged: '2026-10-08', org: 'Council D (one)' });
+  await sheetRow('g-s10', { email: 'sam@council-d.example', sent: '2026-10-08', logged: '2026-10-08', org: 'Council D (two)' });
+  await as(null);
+  await claimAt(M1, T(100));
+  await claimAt(M2, T(100));
+  runs.mirrorOne = await gsave(M1, T(100), ONE.map((x) => x.thread), ONE.flatMap((x) => x.messages), { pending: [] });
+  runs.mirrorTwo = await gsave(M2, T(100), TWO.map((x) => x.thread), TWO.flatMap((x) => x.messages), { pending: [] });
+
+  // What the app has: the threads (threadFromRow), messages and sheet rows as PostgREST returns them (json).
+  const appData = async () => {
+    await as(null);
+    return {
+      threads: (await one("select coalesce(json_agg(t), '[]') as r from public.outreach_threads t")).r.map(lib.threadFromRow),
+      messages: (await one("select coalesce(json_agg(m), '[]') as r from public.outreach_messages m")).r
+        .map((m) => ({ mailbox: m.mailbox_id, messageId: m.message_id, threadId: m.thread_id, kind: m.kind, day: m.day })),
+      sheet: (await one("select coalesce(json_agg(e), '[]') as r from public.outreach_emails e")).r.map(lib.emailFromRow),
+    };
+  };
+  // An RPC's rows (PostgREST returns json) in the lib's shape, or the error.
+  const gmailRpc = async (user, fn, args) => {
+    if (user === 'anon') { await as(null); await db.exec('set role anon'); } else await as(user);
+    const out = await db.query(`select to_json(x) as r from public.${fn}(${args.map((_, i) => `$${i + 1}`).join(', ')}) x`, args)
+      .then((r) => r.rows.map((x) => x.r), (e) => e.message);
+    await as(null);
+    if (typeof out === 'string') return out;
+    if (fn === 'outreach_gmail_daily') {
+      return out.map((r) => ({ day: String(r.day).slice(0, 10), mailbox: r.mailbox_id, sent: r.sent, started: r.started, replies: r.replies,
+        autos: r.autos, bounces: r.bounces }));
+    }
+    if (fn === 'outreach_gmail_breakdown') return out.map((r) => ({ mailbox: r.mailbox_id, kind: r.kind, value: r.value, n: r.n }));
+    return out.map(lib.threadFromRow);
+  };
+  // The list as live mode would ask for it: one row more than the page, for `more`.
+  const sqlList = async (user, { mailbox = null, from, to, search = '', only = 'sent', limit = 50, offset = 0 }) => {
+    const got = await gmailRpc(user, 'outreach_gmail_threads', [mailbox, from, to, only, search, limit + 1, offset]);
+    return typeof got === 'string' ? got : { rows: got.slice(0, limit), more: got.length > limit };
+  };
+  const canon = (list) => (Array.isArray(list) ? list.map((r) => stable(r)).sort() : list);
+  const app = await appData();
+  const RANGES = [['2026-10-05', '2026-10-11'], ['2026-10-06', '2026-10-06'], ['2026-10-07', '2026-10-07'], ['2026-10-10', '2026-10-12'],
+    ['2026-09-01', '2026-12-31'], ['2026-10-22', '2026-10-22'], ['2026-10-11', '2026-10-05'], ['2027-01-01', '2027-01-31']];
+  const wk = { from: '2026-10-05', to: '2026-10-11' };
+  const LISTS = [{ ...wk }, { ...wk, only: 'replies' }, { ...wk, only: 'bounced' }, { ...wk, mailbox: M1 }, { ...wk, mailbox: M2, only: 'replies' },
+    { from: '2026-09-01', to: '2026-12-31', limit: 100 }, { from: '2026-09-01', to: '2026-12-31', only: 'replies', limit: 100 },
+    { ...wk, search: 'council b' }, { ...wk, search: ' KIM@ ' }, { ...wk, search: 'condition' }, { ...wk, search: 'Council C (newer)' },
+    { ...wk, search: 'avery' }, { ...wk, search: 'zzz' }, { ...wk, search: '%' }, { ...wk, search: '_' }, { ...wk, limit: 3 },
+    { ...wk, limit: 3, offset: 3 }, { ...wk, limit: 3, offset: 30 }, { from: '2026-10-22', to: '2026-10-22', mailbox: M1 }];
+  const compare = async (user) => {
+    const out = [];
+    for (const [from, to] of RANGES) {
+      const daily = await gmailRpc(user, 'outreach_gmail_daily', [from, to]);
+      const jsDaily = lib.gmailDaily(app.threads, app.messages, from, to);
+      if (stable(daily) !== stable(jsDaily)) out.push({ fn: 'daily', from, to, sql: daily, js: jsDaily });
+      const breakdown = await gmailRpc(user, 'outreach_gmail_breakdown', [from, to]);
+      const jsBreakdown = lib.gmailBreakdown(app.threads, from, to);
+      if (stable(canon(breakdown)) !== stable(canon(jsBreakdown))) out.push({ fn: 'breakdown', from, to, sql: breakdown, js: jsBreakdown });
+    }
+    for (const opts of LISTS) {
+      const sql = await sqlList(user, opts);
+      const js = lib.filterThreads(app.threads, app.sheet, opts);
+      if (stable(sql) !== stable(js)) out.push({ fn: 'threads', opts, sql, js });
+    }
+    return out;
+  };
+  const mismatches = await compare(david);
+  check('89. outreach_gmail_daily, _breakdown and _threads give exactly what gmailDaily(), gmailBreakdown() and filterThreads() in '
+    + 'src/lib/outreach.js give on the same rows (via threadFromRow): daily in the same order, every range (inclusive; reversed or '
+    + 'empty: none), and the list\'s rows, sheet details, order and `more` for each mode, mailbox, search and page',
+    runs.mirrorOne === true && runs.mirrorTwo === true && app.threads.length >= 22 && !mismatches.length, mismatches);
+
+  // By hand: Sydney days across midnight; the sheet row each thread gets; Two's week.
+  const byId = Object.fromEntries((await sqlList(david, { from: '2026-09-01', to: '2026-12-31', limit: 100 })).rows
+    .map((t) => [`${t.mailbox === M1 ? 'one' : 'two'}:${t.threadId}`, t]));
+  const days = ['one:mB', 'one:mC', 'one:mG', 'one:mH'].map((k) => [byId[k]?.firstDay, byId[k]?.replyDay || byId[k]?.autoDay || null]);
+  const orgs = ['one:mirror-1', 'two:mirror-2', 'two:mirror-3', 'two:mirror-4', 'two:mirror-5', 'two:nA']
+    .map((k) => byId[k]?.organisation);
+  const sheetD = app.sheet.filter((e) => e.contactEmail === 'sam@council-d.example').sort((a, b) => (a.id < b.id ? -1 : 1))[0]?.organisation;
+  const twoWeek = (await gmailRpc(david, 'outreach_gmail_breakdown', ['2026-10-05', '2026-10-11'])).filter((r) => r.mailbox === M2)
+    .map((r) => `${r.kind} ${r.value} ${r.n}`).sort();
+  check('89. ...by hand: a thread at 23:59 Sydney time is that day, one at midnight the next; the sheet row by thread id first (Council '
+    + 'A), else the newest sent (B), then logged (C), then id (D), never one out of the sheet; Two\'s week: 2 bounced, 2 replied, '
+    + '1 auto-reply, 3 waiting, one thread with a follow-up',
+    stable(days) === stable([['2026-10-06', '2026-10-10'], ['2026-10-07', '2026-10-07'], ['2026-09-30', '2026-10-06'], ['2026-10-11', '2026-10-12']])
+      && stable(orgs) === stable(['Council A (thread)', 'Council B (newest)', 'Council C (newer)', sheetD, 'Example Council a1', ''])
+      && byId['one:mirror-1'].contactRole === 'Director' && byId['one:mirror-1'].tier === 'A' && byId['one:mirror-1'].sheetReplyStatus === 'positive'
+      && stable(twoWeek) === stable(['followups 1 7', 'followups 2 1', 'outcome auto 1', 'outcome bounced 2', 'outcome replied 2', 'outcome waiting 3']),
+    { days, orgs, sheetD, twoWeek });
+
+  const asStaff = await compare(hello);
+  const hidden = {};
+  for (const [name, user] of Object.entries({ alice, carol })) {
+    hidden[name] = [await gmailRpc(user, 'outreach_gmail_daily', ['2026-01-01', '2026-12-31']),
+      await gmailRpc(user, 'outreach_gmail_breakdown', ['2026-01-01', '2026-12-31']),
+      await gmailRpc(user, 'outreach_gmail_threads', [null, '2026-01-01', '2026-12-31', 'sent', '', 100, 0])];
+  }
+  const anonCalls = [await gmailRpc('anon', 'outreach_gmail_daily', ['2026-01-01', '2026-12-31']),
+    await gmailRpc('anon', 'outreach_gmail_breakdown', ['2026-01-01', '2026-12-31']),
+    await gmailRpc('anon', 'outreach_gmail_threads', [null, '2026-01-01', '2026-12-31', 'sent', '', 100, 0])];
+  const openEnded = await gmailRpc(david, 'outreach_gmail_threads', [M2, null, null, 'sent', '', 100, 0]);
+  check('89. the readers go through RLS: staff with Outreach view get the same; without Outreach, or inactive, nothing; anon is refused; '
+    + 'a null p_from / p_to leaves that end open',
+    !asStaff.length && Object.values(hidden).every((list) => list.every((r) => stable(r) === '[]'))
+      && anonCalls.every((e) => typeof e === 'string') && Array.isArray(openEnded)
+      && stable(openEnded.map((t) => t.threadId).sort()) === stable(['mirror-2', 'mirror-3', 'mirror-4', 'mirror-5', 'n0', 'nA', 'nB', 'nC', 'shared-1']),
+    { asStaff, hidden, anonCalls, openEnded: Array.isArray(openEnded) ? openEnded.length : openEnded });
+
+  // 90. outreach_gmail_disconnect: admins only; forgets ----------------------------------------------------------------------
+
+  await claimAt(M3, T(10));
+  runs.three = await gsave(M3, T(10), [thread('x1', { sender: 'three@assetstackai.com', first: '2026-10-20T01:00:00.000Z' })],
+    [message('m-x1', 'x1', 'sent', '2026-10-20T01:00:00.000Z')], { pending: [] });
+  const leftFor = async (mailbox) => (await one(`select (select count(*)::int from public.outreach_threads where mailbox_id = $1)
+    + (select count(*)::int from public.outreach_messages where mailbox_id = $1)
+    + (select count(*)::int from private.outreach_gmail_sync where mailbox_id = $1)
+    + (select count(*)::int from private.outreach_gmail where mailbox_id = $1) as n`, [mailbox])).n;
+  const disconnect = async (user, mailbox) => {
+    if (user === 'anon') { await as(null); await db.exec('set role anon'); } else await as(user);
+    const r = await attempt('select public.outreach_gmail_disconnect($1) as ok', [mailbox]);
+    await as(null);
+    return r && typeof r === 'object' ? r.ok : r;
+  };
+  const threeBefore = await leftFor(M3);
+  const disconnects = {
+    editor: await disconnect(newcomer, M3), viewer: await disconnect(hello, M3), noAccess: await disconnect(alice, M3),
+    inactive: await disconnect(carol, M3), anon: await disconnect('anon', M3),
+  };
+  const threeKept = await leftFor(M3);
+  disconnects.admin = await disconnect(boss, M3);
+  disconnects.again = await disconnect(boss, M3);
+  disconnects.superUnknown = await disconnect(david, randomUUID());
+  const threeAfter = await leftFor(M3);
+  check('90. outreach_gmail_disconnect: admins only (staff with Outreach edit or view, without it, inactive and anon are refused); it '
+    + 'removes the connection and forgets the mailbox\'s threads, messages and sync; again, or for a mailbox with none, false',
+    runs.three === true && threeBefore === 4 && ['editor', 'viewer', 'noAccess', 'inactive', 'anon'].every((k) => typeof disconnects[k] === 'string')
+      && threeKept === 4 && disconnects.admin === true && disconnects.again === false && disconnects.superUnknown === false && threeAfter === 0,
+    { runs, disconnects, threeBefore, threeKept, threeAfter });
+
+  // 91. The forgetting --------------------------------------------------------------------------------------------------------
+
+  const countsFor = async (mailbox) => one(`select (select count(*)::int from public.outreach_threads where mailbox_id = $1) as threads,
+    (select count(*)::int from public.outreach_messages where mailbox_id = $1) as messages,
+    (select count(*)::int from private.outreach_gmail_sync where mailbox_id = $1) as sync,
+    (select count(*)::int from private.outreach_gmail where mailbox_id = $1) as connection`, [mailbox]);
+  const seed = async (mailbox, started, id) => {
+    await claimAt(mailbox, started);
+    return gsave(mailbox, started, [thread(id, { first: '2026-10-20T01:00:00.000Z' })], [message(`m-${id}`, id, 'sent', '2026-10-20T01:00:00.000Z')],
+      { pending: [] });
+  };
+  const forget = {};
+  const oneBefore = await countsFor(M1);
+  // A token refresh (the same account, client and scope) keeps everything.
+  await db.query("update private.outreach_gmail set refresh_token = 'refresh-token-1b' where mailbox_id = $1", [M1]);
+  forget.refresh = await countsFor(M1);
+  // A failed run, then an admin reconnects the same account (another case): kept, and the error and reconnect flag clear.
+  forget.errorSave = await gsave(M1, T(100), [], [], {}, { err: 'Token has been expired or revoked.', reconnect: true });
+  forget.errored = await syncOf(M1);
+  forget.reconnect = await gconnect(M1, 'One@AssetStackAI.com', { by: david, token: 'refresh-token-1c' });
+  forget.sameAccount = await countsFor(M1);
+  const sameSync = await syncOf(M1);
+  const sameConn = await connOf(M1);
+  // Signed in as the mailbox's other address: another account, so what was read is forgotten.
+  forget.other = await gconnect(M1, 'one@assetstack.org');
+  forget.otherAccount = { ...(await countsFor(M1)), email: (await connOf(M1))?.email };
+  // Another OAuth client (a later Workspace), set in the SQL editor here: forgotten.
+  forget.seedClient = await seed(M1, T(110), 'c1');
+  forget.beforeClient = await countsFor(M1);
+  await db.query("update private.outreach_gmail set client = 'second' where mailbox_id = $1", [M1]);
+  forget.client = await countsFor(M1);
+  // Back to the default client (forgets again, nothing there); then the Gmail scope goes: forgotten, the connection stays
+  // (shown not connected, needing a reconnect) and it is no longer claimed or saved.
+  forget.back = await gconnect(M1, 'one@assetstack.org');
+  forget.seedScope = await seed(M1, T(120), 's1');
+  forget.beforeScope = await countsFor(M1);
+  await db.query("update private.outreach_gmail set scopes = 'openid email' where mailbox_id = $1", [M1]);
+  forget.scope = await countsFor(M1);
+  const statusNoScope = (await statusOf(hello)).mailboxes.find((m) => m.mailbox_id === M1);
+  forget.scopeClaimed = (await gclaim(30)).includes(M1);
+  forget.scopeSave = await gsave(M1, T(130), [thread('s2', { first: '2026-10-20T01:00:00.000Z' })], [], {});
+  forget.scopeLeft = await countsFor(M1);
+  check('91. a token refresh, and an admin reconnecting the same account (any case) with the Gmail scope, keep what was read (and the '
+    + 'reconnect clears the last error); another account (the mailbox\'s other address) or another client forgets it',
+    oneBefore.threads > 0 && oneBefore.messages > 0 && oneBefore.sync === 1 && stable(forget.refresh) === stable(oneBefore)
+      && forget.errorSave === true && forget.errored.reconnect === true && forget.errored.error !== ''
+      && forget.reconnect === 'ok' && stable(forget.sameAccount) === stable(oneBefore) && sameSync.error === '' && sameSync.reconnect === false
+      && sameConn.refresh_token === 'refresh-token-1c' && sameConn.connected_by === david && sameConn.email === 'one@assetstackai.com'
+      && forget.other === 'ok' && stable(forget.otherAccount) === stable({ threads: 0, messages: 0, sync: 0, connection: 1, email: 'one@assetstack.org' })
+      && forget.seedClient === true && forget.beforeClient.threads === 1 && forget.beforeClient.sync === 1
+      && stable(forget.client) === stable({ threads: 0, messages: 0, sync: 0, connection: 1 }),
+    { oneBefore, forget, sameSync, sameConn });
+  check('91. ...so does losing the Gmail scope: the connection stays, shown not connected and needing a reconnect, and is no longer '
+    + 'claimed or saved',
+    forget.back === 'ok' && forget.seedScope === true && forget.beforeScope.threads === 1
+      && stable(forget.scope) === stable({ threads: 0, messages: 0, sync: 0, connection: 1 })
+      && statusNoScope.connected === false && statusNoScope.reconnect === true && statusNoScope.email === 'one@assetstack.org'
+      && forget.scopeClaimed === false && forget.scopeSave === false && stable(forget.scopeLeft) === stable(forget.scope),
+    { forget, statusNoScope });
+
+  // Addresses: Two keeps its connection while its address stays (any case); taken off, the connection and data go.
+  const twoBefore = await countsFor(M2);
+  await as(boss);
+  forget.addressKept = await affected("update public.outreach_mailboxes set addresses = array['TWO@assetstackai.com', 'two.b@assetstackai.com'] where id = $1", [M2]);
+  await as(null);
+  const twoKept = await countsFor(M2);
+  await as(boss);
+  forget.nameOnly = await affected("update public.outreach_mailboxes set name = 'Gmail 2', active = false where id = $1", [M2]);
+  await as(null);
+  const twoInactive = await countsFor(M2);
+  await as(boss);
+  forget.addressGone = await affected("update public.outreach_mailboxes set addresses = array['two.b@assetstackai.com'], active = true where id = $1", [M2]);
+  await as(null);
+  const twoGone = await countsFor(M2);
+  // A mailbox removed takes its connection, sync, threads and messages with it.
+  await as(boss);
+  const M4 = await addBox('Gmail Four', ['four@assetstackai.com'], 7);
+  await as(null);
+  forget.four = await gconnect(M4, 'four@assetstackai.com');
+  forget.seedFour = await seed(M4, T(10), 'f1');
+  const fourBefore = await countsFor(M4);
+  await as(boss);
+  forget.removed = await affected('delete from public.outreach_mailboxes where id = $1', [M4]);
+  await as(null);
+  const fourAfter = await countsFor(M4);
+  const triggers = (await rows(`select tgrelid::regclass::text || ':' || tgname as t from pg_trigger
+    where tgname in ('outreach_gmail_forget', 'outreach_gmail_addresses') order by 1`)).map((r) => r.t);
+  check('91. a mailbox address change that keeps the connected address (any case), or a rename or pause, keeps everything; taking the '
+    + 'address off removes the connection and forgets its data; removing the mailbox removes it all',
+    twoBefore.threads >= 9 && twoBefore.connection === 1 && forget.addressKept === 1 && stable(twoKept) === stable(twoBefore)
+      && forget.nameOnly === 1 && stable(twoInactive) === stable(twoBefore) && forget.addressGone === 1
+      && stable(twoGone) === stable({ threads: 0, messages: 0, sync: 0, connection: 0 })
+      && forget.four === 'ok' && forget.seedFour === true && fourBefore.threads === 1 && fourBefore.connection === 1 && forget.removed === 1
+      && stable(fourAfter) === stable({ threads: 0, messages: 0, sync: 0, connection: 0 })
+      && stable(triggers) === stable(['outreach_mailboxes:outreach_gmail_addresses', 'private.outreach_gmail:outreach_gmail_forget']),
+    { twoBefore, twoKept, twoInactive, twoGone, fourBefore, fourAfter, forget, triggers });
+
+  // 92. outreach_gmail_known: who is never a cold prospect ----------------------------------------------------------------
+
+  await as(null);
+  const knownClient = (await one("insert into public.clients (name, email) values ('Gmail Known Client', ' Legacy@Example-Legacy.com.au ') returning id")).id;
+  await db.query(`insert into public.client_contacts (client_id, name, email) values ($1, 'Kim', 'Kim@Example-Water.com.au '),
+    ($1, 'Friend', 'friend@bigpond.com'), ($1, 'Ours', 'someone@assetstack.org'), ($1, 'Nobody', '')`, [knownClient]);
+  await db.query("insert into public.client_access (client_id, name, email) values ($1, 'Ops', ' ops@Example-Port.com.au')", [knownClient]);
+  await db.query(`insert into public.invoices (client_id, number, sent_to) values ($1, 'GMAIL-KNOWN-1',
+    'pat@example-rail.com.au; Billing <Accounts@Example-Rail.com.au>,someone@gmail.com  ')`, [knownClient]);
+  await db.query("insert into public.contacts (name, org, email) values ('Lead Example', 'Prospect Co', 'lead@prospect-co.example')");
+  await asSecretKey();
+  const known = (await one('select public.outreach_gmail_known() as k')).k;
+  await as(hello);
+  const knownStaff = await error('select public.outreach_gmail_known()');
+  await as(null);
+  const profileEmails = (await rows('select lower(email) as e from public.profiles')).map((r) => r.e);
+  const FREE = ['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'yahoo.com', 'yahoo.com.au', 'icloud.com',
+    'me.com', 'aol.com', 'proton.me', 'protonmail.com', 'bigpond.com', 'bigpond.net.au', 'optusnet.com.au', 'tpg.com.au', 'iinet.net.au'];
+  const tidy = (list) => Array.isArray(list) && stable(list) === stable([...new Set(list)].sort()) && list.every((x) => x === x.toLowerCase() && x === x.trim() && x);
+  const has = (list, ...xs) => xs.every((x) => list.includes(x));
+  const lacks = (list, ...xs) => xs.every((x) => !list.includes(x));
+  check('92. outreach_gmail_known (secret key only): internal domains (ours, every mailbox address\'s, every profile\'s); known '
+    + 'addresses (every profile, client contacts and access, the old clients.email, invoice recipients; lower case, once); client '
+    + 'organisation domains (not free mail or internal); never the Outreach prospects',
+    stable(Object.keys(known || {}).sort()) === stable(['domains', 'emails', 'internal']) && tidy(known.internal) && tidy(known.emails)
+      && tidy(known.domains) && typeof knownStaff === 'string'
+      && has(known.internal, 'assetstackai.com', 'assetstack.org', 'assetstackai.com.au', 'example.com', 'old.example.com', 'new.example.com')
+      && has(known.emails, ...profileEmails, 'kim@example-water.com.au', 'friend@bigpond.com', 'someone@assetstack.org', 'ops@example-port.com.au',
+        'legacy@example-legacy.com.au', 'pat@example-rail.com.au', 'accounts@example-rail.com.au', 'someone@gmail.com')
+      && known.emails.every((e) => e.includes('@')) && lacks(known.emails, 'lead@prospect-co.example', 'billing')
+      && has(known.domains, 'example-water.com.au', 'example-port.com.au', 'example-rail.com.au', 'example-legacy.com.au')
+      && known.domains.every((d) => !FREE.includes(d) && !known.internal.includes(d))
+      && lacks(known.domains, 'prospect-co.example', 'assetstack.org', 'gmail.com', 'bigpond.com', 'example.com'),
+    known);
+
+  await as(null);
+  return ctx;
+}
+
 async function phase7(ctx) {
   const { alice, boss, david, hello, carol, newcomer, early, late } = ctx;
 
@@ -3884,7 +4818,8 @@ async function phase7(ctx) {
       '2026-10-09 C 1/0/0/0',
       '2026-10-08 U 2/0/1/0', '2026-10-09 U 0/1/0/0', '2026-10-10 U 1/0/0/0', '2026-10-11 U 0/1/0/0',
     ].sort())
-      && stable(totals) === stable({ sent: 23, replies: 10, bounces: 4, meetings: 3, replyRate: 10 / 23, bounceRate: 4 / 23 })
+      // outreachTotals() counts each sheet email as a prospect (started), with no auto-replies (those come from Gmail).
+      && stable(totals) === stable({ sent: 23, started: 23, replies: 10, autos: 0, bounces: 4, meetings: 3, replyRate: 10 / 23, bounceRate: 4 / 23 })
       && stable(per) === stable({ A: [15, 6, 2, 2], B: [4, 2, 1, 1], C: [1, 0, 0, 0], U: [3, 2, 1, 0] }),
     { unassignedLast, weekNamed, totals, per });
   check('54. ...and the breakdown: contacts logged per row by status (in the sheet only), emails replied to by the first reply\'s '
@@ -4445,7 +5380,8 @@ try {
   const ctx7 = ctx6 && await phase7(ctx6);
   const ctx8 = ctx7 && await phase8(ctx7);
   const ctx9 = ctx8 && await phase9(ctx8);
-  if (ctx9) await syncWriteCheck(ctx9);
+  const ctx10 = ctx9 && await phase10(ctx9);
+  if (ctx10) await syncWriteCheck(ctx10);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);

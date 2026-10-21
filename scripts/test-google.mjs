@@ -5,8 +5,10 @@
 // MIME message Gmail gets), contract (Drive copy, .docx conversion, placeholders), outreach-sync (the agent's sheet
 // into outreach_emails, the Summary, Notes and mailbox tabs back, never over the agent's tab, sync_error) and the
 // calendar (a staff member's calendar connect and callback, which alone opts in with calendar_share; calendar-sync:
-// claim, events.list, the rows calendar_save gets, reconnects and per-person failures). Exits non-zero when any check
-// fails.
+// claim, events.list, the rows calendar_save gets, reconnects and per-person failures) and Outreach from Gmail (a
+// mailbox connect and its callback; outreach-gmail-sync: claim, first read, history, restart, the headers-only thread
+// read, the cold rule and message kinds, caps, deadline, rate limits, the save bodies, per-mailbox failures; never a
+// token, body, snippet or reply subject saved, and no address or subject logged). Exits non-zero when any check fails.
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
 
@@ -2270,6 +2272,901 @@ await check('calendar-sync: a missing calendar scope (stored or at Google) → r
   assert.deepEqual(save.saved.map((b) => b.p_user), [U1, U2]);
   assert.ok(save.logs.some((l) => l.startsWith('google/calendar-sync: POST rpc/calendar_save → 500')));
   noTokens(save);
+});
+
+// ── Outreach Gmail ──────────────────────────────────────────────────────────────────────────────────────────────
+// Fictional prospects only (example.org / example.net). The mailboxes are placeholders on Cortex's own domain, which a
+// mailbox connect needs.
+
+const GMAIL_API = 'https://gmail.googleapis.com/gmail/v1/users/me';
+const GMAIL_READ = 'https://www.googleapis.com/auth/gmail.readonly';
+const MB_SCOPES = `openid email ${GMAIL_READ}`;
+const MB1 = 'b0000000-0000-4000-8000-0000000000b1';
+const MB2 = 'b0000000-0000-4000-8000-0000000000b2';
+const MB3 = 'b0000000-0000-4000-8000-0000000000b3';
+const BOX1 = 'mailbox-one@assetstackai.com';
+const BOXES = { [MB1]: BOX1, [MB2]: 'mailbox-two@assetstackai.com', [MB3]: 'mailbox-three@assetstackai.com' };
+const GMAIL_RECONNECT = 'Reconnect this mailbox’s Gmail in Settings → Outreach.';
+const GMAIL_BUSY = 'Gmail is busy. Cortex will try again shortly.';
+const GNOW = Date.parse('2026-10-21T00:00:00Z');
+const DAY = 86400000;
+const AFTER_90 = Math.floor((GNOW - 90 * DAY) / 1000);
+const THREAD_FIELDS = 'id,messages(id,labelIds,internalDate,payload(mimeType,headers))';
+const HISTORY_FIELDS = 'history(id,messagesAdded(message(id,threadId,labelIds))),nextPageToken,historyId';
+const METADATA = ['From', 'To', 'Cc', 'Subject', 'Sender', 'In-Reply-To', 'Content-Type', 'Auto-Submitted', 'X-Autoreply', 'X-Autorespond', 'Precedence', 'X-Failed-Recipients'];
+const SAVE_KEYS = ['p_mailbox', 'p_started', 'p_threads', 'p_messages', 'p_cursor', 'p_release', 'p_error', 'p_reconnect'];
+const THREAD_KEYS = ['thread_id', 'sender', 'prospect_email', 'prospect_name', 'recipients', 'subject', 'first_at', 'last_sent_at', 'sent_count', 'reply_at', 'reply_message_id', 'auto_at', 'bounce_at'];
+const KNOWN = { internal: ['assetstackai.com', 'assetstack.org', 'assetstackai.com.au'], emails: ['kim@example.net', 'ana@example.com'], domains: ['client.example.com'] };
+const outreachPage = (result, mailbox = MB1) => `${ORIGIN}/#/settings?tab=outreach&gmail=${result}&mailbox=${mailbox}`;
+const params = (c) => new URL(c.url).searchParams;
+const pick = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]));
+const iso = (ms) => new Date(ms).toISOString();
+
+// Gmail messages and threads as threads.get?format=metadata returns them.
+const gHeaders = (o) => Object.entries(o).filter(([, v]) => v !== undefined).map(([name, value]) => ({ name, value }));
+const gm = (id, at, headers, labelIds = ['INBOX'], mimeType = 'text/plain') => ({ id, labelIds, internalDate: String(Date.parse(at)), payload: { mimeType, headers: gHeaders(headers) } });
+const sentMsg = (id, at, headers = {}, mimeType) => gm(id, at, { From: `Mailbox One <${BOX1}>`, ...headers }, ['SENT'], mimeType);
+const gThread = (id, ...messages) => ({ id, historyId: '1', messages });
+const coldFirst = (id, to, subject = 'Asset registers', extra = {}) => sentMsg(id, '2026-10-14T00:00:00Z', { To: to, Subject: subject, ...extra });
+// What a full message would carry: never asked for, and never copied anywhere if Google sent it anyway.
+const withBody = (m) => ({ ...m, snippet: 'SECRET SNIPPET', payload: { ...m.payload, body: { size: 9, data: 'U0VDUkVUIEJPRFk' }, parts: [{ mimeType: 'text/plain', body: { data: 'U0VDUkVUIEJPRFk' } }] } });
+const b64 = (s) => Buffer.from(s).toString('base64');
+
+const THREADS = {
+  tA: gThread('tA',
+    withBody(sentMsg('mA1', '2026-10-13T22:00:00Z', { To: '"Example, Alex" <Alex@Example.org>', Subject: 'Asset registers for Example Shire' })),
+    sentMsg('mA2', '2026-10-15T22:00:00Z', { To: 'alex@example.org', Subject: 'Re: Asset registers for Example Shire', 'In-Reply-To': '<a1@mail.example.org>' }),
+    gm('mA3', '2026-10-15T22:01:00Z', { From: 'Alex Example <alex@example.org>', Subject: 'Automatic reply: Asset registers for Example Shire', 'Auto-Submitted': 'auto-replied' }),
+    withBody(gm('mA4', '2026-10-16T01:00:00Z', { From: 'Alex Example <alex@example.org>', Subject: 'Re: Asset registers — sounds good, call me' })),
+    sentMsg('mA5', '2026-10-16T02:00:00Z', { To: 'alex@example.org', Subject: 'Re: Asset registers for Example Shire' }),
+    gm('dA6', '2026-10-16T03:00:00Z', { From: BOX1, To: 'alex@example.org', Subject: 'Draft' }, ['DRAFT'])),
+  tB: gThread('tB',
+    sentMsg('mB1', '2026-10-14T01:00:00Z', { To: 'Bo Example <bo@example.net>', Cc: 'cy@example.net', Subject: `=?UTF-8?B?${b64('Grüße from AssetStack')}?=` }),
+    gm('mB2', '2026-10-14T01:05:00Z', { From: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>', Subject: 'Delivery Status Notification (Delay)' }),
+    gm('mB3', '2026-10-14T02:00:00Z', {
+      From: 'Mail Delivery Subsystem <mailer-daemon@googlemail.com>', Subject: 'Delivery Status Notification (Failure)', 'X-Failed-Recipients': 'bo@example.net',
+      'Content-Type': 'multipart/report; report-type=delivery-status; boundary="b1"',
+    })),
+  tC: gThread('tC',
+    sentMsg('mC1', '2026-10-14T02:00:00Z', { To: 'Dee Example <dee@example.org>, "Eve, Ops" <eve@example.org>', Subject: 'Quick question about your asset data' }),
+    gm('mC2', '2026-10-14T03:00:00Z', { From: 'Dee Example <dee@example.org>', Subject: 'Accepted: Demo @ Thu 22 Oct' }),
+    gm('mC3', '2026-10-14T04:00:00Z', { From: 'Example Helpdesk <notifications@example.org>', Subject: 'Ticket 123 received' }),
+    gm('mC4', '2026-10-14T05:00:00Z', { From: 'Pat Colleague <pat@assetstackai.com>', Subject: 'Re: Quick question' })),
+  tDraftFirst: gThread('tDraftFirst',
+    gm('dD1', '2026-10-12T00:00:00Z', { From: BOX1, To: 'fay@example.org', Subject: 'draft' }, ['DRAFT']),
+    sentMsg('mD2', '2026-10-14T06:00:00Z', { To: 'fay@example.org', Subject: 'Hello from AssetStack' })),
+  tReply: gThread('tReply', coldFirst('mR1', 'gus@example.org', 'RE: catch up')),
+  tFwd: gThread('tFwd', coldFirst('mF1', 'gus@example.org', 'Fwd: the deck')),
+  tInReplyTo: gThread('tInReplyTo', coldFirst('mI1', 'gus@example.org', 'Asset registers', { 'In-Reply-To': '<x@example.org>' })),
+  tCal: gThread('tCal', coldFirst('mK1', 'gus@example.org', 'Demo', { Sender: 'Google Calendar <calendar-notification@google.com>' })),
+  tCal2: gThread('tCal2', sentMsg('mK2', '2026-10-14T00:00:00Z', { To: 'gus@example.org', Subject: 'Demo', 'Content-Type': 'text/calendar; method=REQUEST' })),
+  tMany: gThread('tMany', coldFirst('mM1', ['a', 'b', 'c', 'd', 'e', 'f'].map((x) => `${x}@example.org`).join(', '))),
+  tBcc: gThread('tBcc', coldFirst('mBcc1', BOX1, 'To ourselves, prospects in Bcc')),
+  tNoTo: gThread('tNoTo', sentMsg('mN1', '2026-10-14T00:00:00Z', { Subject: 'Bcc only' })),
+  tKnown: gThread('tKnown', coldFirst('mKn1', 'Kim <KIM@example.net>')),
+  tClient: gThread('tClient', coldFirst('mCl1', 'lee@sub.client.example.com')),
+  tInternal: gThread('tInternal', coldFirst('mIn1', 'gus@example.org', 'Asset registers', { Cc: 'ops@assetstack.org' })),
+  tNoReply: gThread('tNoReply', coldFirst('mNr1', 'no-reply@example.org')),
+  tInbound: gThread('tInbound',
+    gm('mIb1', '2026-10-13T00:00:00Z', { From: 'hal@example.org', To: BOX1, Subject: 'Question' }),
+    sentMsg('mIb2', '2026-10-13T01:00:00Z', { To: 'hal@example.org', Subject: 'Re: Question' })),
+  tPrior: gThread('tPrior', coldFirst('mP1', 'Sam Example <sam@example.org>')),
+};
+const WHY = {
+  tA: 'cold', tB: 'cold', tC: 'cold', tDraftFirst: 'cold', tPrior: 'cold', tReply: 'reply subject', tFwd: 'reply subject', tInReplyTo: 'in reply',
+  tCal: 'calendar', tCal2: 'calendar', tMany: 'recipients', tBcc: 'internal', tNoTo: 'recipients', tKnown: 'known', tClient: 'client domain',
+  tInternal: 'internal', tNoReply: 'no-reply', tInbound: 'not ours',
+};
+const SENT_PAGES = [
+  ['tA', 'tB', 'tA', 'tC', 'tReply', 'tFwd', 'tInReplyTo', 'tCal', 'tCal2'],
+  ['tMany', 'tBcc', 'tNoTo', 'tKnown', 'tClient', 'tInternal', 'tNoReply', 'tInbound', 'tPrior', 'tDraftFirst'],
+];
+const LISTED = [...new Set(SENT_PAGES.flat())];
+const ROW_A = {
+  thread_id: 'tA', sender: BOX1, prospect_email: 'alex@example.org', prospect_name: 'Example, Alex', recipients: 1,
+  subject: 'Asset registers for Example Shire', first_at: '2026-10-13T22:00:00.000Z', last_sent_at: '2026-10-16T02:00:00.000Z', sent_count: 3,
+  reply_at: '2026-10-16T01:00:00.000Z', reply_message_id: 'mA4', auto_at: '2026-10-15T22:01:00.000Z', bounce_at: null,
+};
+const MSGS_A = [
+  ['mA1', 'sent', '2026-10-13T22:00:00.000Z'], ['mA2', 'sent', '2026-10-15T22:00:00.000Z'], ['mA3', 'auto', '2026-10-15T22:01:00.000Z'],
+  ['mA4', 'reply', '2026-10-16T01:00:00.000Z'], ['mA5', 'sent', '2026-10-16T02:00:00.000Z'],
+].map(([message_id, kind, at]) => ({ message_id, thread_id: 'tA', kind, at }));
+const ROW_B = {
+  thread_id: 'tB', sender: BOX1, prospect_email: 'bo@example.net', prospect_name: 'Bo Example', recipients: 2, subject: 'Grüße from AssetStack',
+  first_at: '2026-10-14T01:00:00.000Z', last_sent_at: '2026-10-14T01:00:00.000Z', sent_count: 1, reply_at: null, reply_message_id: '', auto_at: null,
+  bounce_at: '2026-10-14T02:00:00.000Z',
+};
+const MSGS_B = [
+  { message_id: 'mB1', thread_id: 'tB', kind: 'sent', at: '2026-10-14T01:00:00.000Z' }, { message_id: 'mB3', thread_id: 'tB', kind: 'bounce', at: '2026-10-14T02:00:00.000Z' },
+];
+const ROW_C = {
+  thread_id: 'tC', sender: BOX1, prospect_email: 'dee@example.org', prospect_name: 'Dee Example', recipients: 2, subject: 'Quick question about your asset data',
+  first_at: '2026-10-14T02:00:00.000Z', last_sent_at: '2026-10-14T02:00:00.000Z', sent_count: 1, reply_at: null, reply_message_id: '', auto_at: null, bounce_at: null,
+};
+const MSGS_C = [{ message_id: 'mC1', thread_id: 'tC', kind: 'sent', at: '2026-10-14T02:00:00.000Z' }];
+const ROW_D = {
+  thread_id: 'tDraftFirst', sender: BOX1, prospect_email: 'fay@example.org', prospect_name: '', recipients: 1, subject: 'Hello from AssetStack',
+  first_at: '2026-10-14T06:00:00.000Z', last_sent_at: '2026-10-14T06:00:00.000Z', sent_count: 1, reply_at: null, reply_message_id: '', auto_at: null, bounce_at: null,
+};
+const MSGS_D = [{ message_id: 'mD2', thread_id: 'tDraftFirst', kind: 'sent', at: '2026-10-14T06:00:00.000Z' }];
+// Never sent anywhere: message text, a reply's subject, the snippet and body Google wasn't asked for.
+const NEVER = ['SECRET SNIPPET', 'U0VDUkVUIEJPRFk', 'sounds good', 'call me', 'Automatic reply', 'Ticket 123', 'Delivery Status'];
+
+const gJob = (mb = MB1, over = {}) => ({
+  email: BOXES[mb], refresh_token: `gmail-refresh-${mb}`, scopes: MB_SCOPES, client: 'default', addresses: [BOXES[mb], 'old-box@old.example.com'],
+  history_id: '', scan_from: null, pending: [], synced_at: null, ready: false, ...over,
+});
+const boxOf = (c) => c.headers.get('authorization').replace('Bearer gmail-access-', '');
+// messages.list pages (?pageToken=pN) of thread ids.
+const listPages = (pages) => (c) => {
+  const token = params(c).get('pageToken') || '';
+  const i = token ? Number(token.slice(1)) : 0;
+  return reply(200, {
+    messages: (pages[i] || []).map((threadId, n) => ({ id: `${threadId}-m${n}`, threadId })), ...(i + 1 < pages.length ? { nextPageToken: `p${i + 1}` } : {}),
+    resultSizeEstimate: 9,
+  });
+};
+
+// PostgREST and Gmail for outreach-gmail-sync. Each mailbox has its own refresh token (gmail-refresh-<id>), swapped for
+// its own access token (gmail-access-<id>), so every Gmail call says whose mailbox it read.
+function gmailRoutes({
+  access = { view: true, edit: false, admin: false }, claim = [MB1], known = KNOWN, jobs = { [MB1]: gJob(MB1) }, save = () => reply(200, true),
+  stored = [], profile = (mb) => reply(200, { emailAddress: BOXES[mb].toUpperCase(), messagesTotal: 42, historyId: `9${mb.slice(-1)}00` }),
+  sent = SENT_PAGES, inbound = [[]], list = null, history = () => reply(200, { historyId: '8999' }), threads = THREADS,
+  prior = (c, q) => reply(200, q.includes('sam@example.org') ? { messages: [{ id: 'older-1' }] } : { resultSizeEstimate: 0 }),
+} = {}) {
+  return {
+    [`${RPC}/outreach_access`]: () => reply(200, access),
+    [`${RPC}/outreach_gmail_claim`]: () => reply(200, claim),
+    [`${RPC}/outreach_gmail_known`]: typeof known === 'function' ? known : () => reply(200, known),
+    [`${RPC}/outreach_gmail_job`]: (c) => reply(200, jobs[c.json().p_mailbox] ?? null),
+    [`${RPC}/outreach_gmail_save`]: save,
+    [`${REST}/outreach_threads`]: (c) => {
+      const q = params(c);
+      const mb = q.get('mailbox_id').replace(/^eq\./, '');
+      const ids = q.get('thread_id').replace(/^in\.\(|\)$/g, '').split(',');
+      const have = typeof stored === 'function' ? stored(mb) : stored;
+      return reply(200, ids.filter((t) => have.includes(t)).map((thread_id) => ({ thread_id })));
+    },
+    [TOKEN_URL]: (c) => reply(200, { access_token: c.form.get('refresh_token').replace('gmail-refresh-', 'gmail-access-'), expires_in: 3599, token_type: 'Bearer' }),
+    [`${GMAIL_API}/profile`]: (c) => profile(boxOf(c), c),
+    [`${GMAIL_API}/messages?`]: (c) => {
+      const q = params(c).get('q');
+      if (q.startsWith('from:')) return prior(c, q);
+      if (list) return list(c, q);
+      return listPages(q.startsWith('-in:sent') ? inbound : sent)(c);
+    },
+    [`${GMAIL_API}/history?`]: history,
+    [`${GMAIL_API}/threads/`]: (c) => {
+      const id = decodeURIComponent(new URL(c.url).pathname.split('/').pop());
+      const t = typeof threads === 'function' ? threads(id, c) : threads[id];
+      if (t instanceof Response) return t;
+      return t === undefined ? reply(404, { error: { code: 404, message: 'Requested entity was not found.' } }) : reply(200, t);
+    },
+  };
+}
+
+/** One outreach-gmail-sync request through handle() with a fixed clock (`now`) and a recorded `sleep`. */
+async function gSync({ body = {}, routes = {}, auth = USER_JWT, method = 'POST', limits = {}, now: clock = () => GNOW, ...opts } = {}) {
+  const logs = [];
+  const sleeps = [];
+  const original = console.error;
+  console.error = (...args) => logs.push(args.map(String).join(' '));
+  try {
+    const headers = { Origin: ORIGIN };
+    if (auth) headers.Authorization = auth;
+    if (body !== undefined && method === 'POST') headers['Content-Type'] = 'application/json';
+    const req = new Request(`${SUPABASE}/functions/v1/google/outreach-gmail-sync`, { method, headers, body: method === 'POST' ? JSON.stringify(body) : undefined });
+    const f = fakeFetch({ ...gmailRoutes(opts), ...routes });
+    const res = await g.handle(req, { env: ENV, fetch: f.fetch, limits, now: clock, sleep: async (ms) => { sleeps.push(ms); } });
+    assert.deepEqual(f.unexpected, [], 'no unexpected fetches');
+    const text = await res.text();
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null;
+    }
+    const saves = f.to(`${RPC}/outreach_gmail_save`);
+    return {
+      status: res.status, headers: res.headers, text, data, calls: f.calls, to: f.to, logs, sleeps, saves, saved: saves.map((c) => c.json()),
+      threads: f.to(`${GMAIL_API}/threads/`), lists: f.to(`${GMAIL_API}/messages?`).filter((c) => !params(c).get('q').startsWith('from:')),
+      priors: f.to(`${GMAIL_API}/messages?`).filter((c) => params(c).get('q').startsWith('from:')), gmail: f.to('https://gmail.googleapis.com/'),
+    };
+  } finally {
+    console.error = original;
+  }
+}
+const fetched = (r) => r.threads.map((c) => decodeURIComponent(new URL(c.url).pathname.split('/').pop()));
+// No Google token in anything sent to Supabase, the response or the logs; no address or subject in the logs.
+function gNoTokens(r) {
+  const toSupabase = r.calls.filter((c) => c.url.startsWith(SUPABASE)).map((c) => c.body || '');
+  const everything = [r.text, ...toSupabase, ...r.logs].join('\n');
+  assert.ok(!/gmail-refresh-|gmail-access-|fresh-access-token|stored-refresh-token/.test(everything), 'no Google token sent to Supabase, returned or logged');
+  const logs = r.logs.join('\n');
+  assert.ok(!/@/.test(logs), `no address in the logs: ${logs}`);
+  for (const s of ['Asset registers', 'Grüße', 'Quick question', 'Hello from AssetStack', ...NEVER]) assert.ok(!logs.includes(s), `no subject in the logs: ${s}`);
+}
+// Nothing of a message's text in any save: no such key anywhere, and none of NEVER's strings.
+function noText(r) {
+  const keys = new Set();
+  const walk = (v) => {
+    if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) { keys.add(k); walk(x); }
+  };
+  r.saved.forEach(walk);
+  for (const k of ['snippet', 'body', 'text', 'raw', 'payload', 'headers', 'parts', 'data', 'html']) assert.ok(!keys.has(k), `no ${k} key in a save`);
+  for (const b of r.saves) for (const s of NEVER) assert.ok(!b.body.includes(s), `never saved: ${s}`);
+}
+
+await check('gmail helpers: hasGmailRead wants gmail.readonly as a whole entry; clientFor knows only the default client; the limits', () => {
+  for (const yes of [MB_SCOPES, GMAIL_READ, ` ${GMAIL_READ} `, `openid\t${GMAIL_READ}\nemail`, `${g.SCOPES} ${GMAIL_READ}`]) assert.equal(g.hasGmailRead(yes), true, yes);
+  for (const no of [
+    '', null, undefined, 'openid email', g.SCOPES, `${GMAIL_READ}.x`, `x${GMAIL_READ}`, 'https://www.googleapis.com/auth/gmail.metadata',
+    'https://www.googleapis.com/auth/gmail.modify', 'gmail.readonly', 'https://mail.google.com/',
+  ]) assert.equal(g.hasGmailRead(no), false, String(no));
+  assert.equal(g.MAILBOX_SCOPES, MB_SCOPES);
+  const cfg = g.config(ENV);
+  assert.deepEqual(g.clientFor(cfg, 'default'), { id: ENV.GOOGLE_CLIENT_ID, secret: SECRET, hd: 'assetstackai.com' });
+  assert.deepEqual(g.clientFor(cfg), g.clientFor(cfg, 'default'));
+  for (const key of ['', 'org', 'Default', 'au', null]) assert.equal(g.clientFor(cfg, key), null, String(key));
+  assert.deepEqual(g.GMAIL_LIMITS, {
+    deadline: 60000, mailboxes: 3, listPages: 40, historyPages: 20, threadsPerRun: 500, saveEvery: 100, parallel: 6, backoff: 2000,
+  });
+});
+
+await check('gmail helpers: parseAddresses reads display names (quoted commas, escapes, RFC 2047 B and Q), groups and comments', () => {
+  const p = g.parseAddresses;
+  assert.deepEqual(p('"Example, Alex" <Alex@Example.org>, bo@example.net'), [{ name: 'Example, Alex', email: 'alex@example.org' }, { name: '', email: 'bo@example.net' }]);
+  assert.deepEqual(p('"a, b; c" <c@example.org>; d@example.org'), [{ name: 'a, b; c', email: 'c@example.org' }, { name: '', email: 'd@example.org' }]);
+  assert.deepEqual(p(`=?UTF-8?B?${b64('Éloïse Example')}?= <eloise@example.org>`), [{ name: 'Éloïse Example', email: 'eloise@example.org' }]);
+  assert.deepEqual(p('=?ISO-8859-1?Q?Andr=E9_Example?= <andre@example.org>'), [{ name: 'André Example', email: 'andre@example.org' }]);
+  assert.deepEqual(p('=?utf-8?q?Jos=C3=A9?= =?utf-8?q?_Example?= <jose@example.org>'), [{ name: 'José Example', email: 'jose@example.org' }], 'adjacent encoded words join');
+  assert.deepEqual(p(`"=?UTF-8?B?${b64('Zoë, Ops')}?=" <zoe@example.org>`), [{ name: 'Zoë, Ops', email: 'zoe@example.org' }], 'an encoded word inside quotes');
+  assert.deepEqual(p('"Quote \\"Q\\" Example" <q@example.org>'), [{ name: 'Quote "Q" Example', email: 'q@example.org' }]);
+  assert.deepEqual(p('"<not@example.org>" <real@example.org>'), [{ name: '<not@example.org>', email: 'real@example.org' }]);
+  assert.deepEqual(p('pat@example.org (Pat, Example)'), [{ name: '', email: 'pat@example.org' }], 'a comment, commas and all');
+  assert.deepEqual(p('Team: a@example.org, B@example.org;, c@example.org'), ['a', 'b', 'c'].map((x) => ({ name: '', email: `${x}@example.org` })));
+  assert.deepEqual(p('Alex <alex@example.org>,\r\n bo@example.net'), [{ name: 'Alex', email: 'alex@example.org' }, { name: '', email: 'bo@example.net' }], 'a folded header');
+  for (const none of ['undisclosed-recipients:;', '', null, undefined, 'not an address', '<>', '@example.org', 'a@b', '"Pat" <>']) assert.deepEqual(p(none), [], String(none));
+  assert.equal(g.decodeHeader(`=?UTF-8?B?${b64('Grüße')}?= from =?UTF-8?Q?Sydney_=F0=9F=87=A6=F0=9F=87=BA?=`), 'Grüße from Sydney 🇦🇺');
+  assert.equal(g.decodeHeader('=?x-unknown?B?AAAA?= stays'), '=?x-unknown?B?AAAA?= stays', 'an unknown charset stays as it was');
+  assert.equal(g.decodeHeader('Plain = subject ?= here'), 'Plain = subject ?= here');
+});
+
+await check('gmail helpers: messageKind sorts each message (ours, bounce, auto, ignored, reply)', () => {
+  const ctx = { internal: ['old.example.com'] };
+  const m = (headers, labels, mime) => gm('x', '2026-10-14T00:00:00Z', headers, labels, mime);
+  const from = (f, more = {}) => m({ From: f, Subject: 'Re: Asset registers', ...more });
+  const cases = [
+    ['ours', m({ From: BOX1 }, ['SENT'])], ['ours', m({ From: 'Someone Else <x@example.org>' }, ['SENT', 'IMPORTANT'])],
+    ['ignored', m({ From: BOX1 }, ['SENT', 'DRAFT'])], ['ignored', m({ From: 'x@example.org' }, ['DRAFT'])], ['ignored', m({ From: 'x@example.org' }, ['CHAT'])],
+    ['bounce', from('Mail Delivery Subsystem <MAILER-DAEMON@googlemail.com>', { Subject: 'Delivery Status Notification (Failure)' })],
+    ['bounce', from('postmaster@example.org', { Subject: 'Undeliverable: Asset registers' })],
+    ['bounce', from('someone@example.org', { 'Content-Type': 'multipart/report; report-type="delivery-status"; boundary="z"' })],
+    ['bounce', from('someone@example.org', { 'X-Failed-Recipients': 'alex@example.org' })],
+    ['bounce', from('postmaster@assetstackai.com', { Subject: 'Undeliverable' }), 'our own postmaster still bounces'],
+    ['ignored', from('mailer-daemon@googlemail.com', { Subject: 'Delivery Status Notification (Delay)' }), 'a delay notice'],
+    ['ignored', from('postmaster@example.org', { Subject: 'Warning: message 1Abc delayed 24 hours' })],
+    ['reply', from('alex@example.org', { 'Content-Type': 'multipart/report; report-type=disposition-notification' }), 'not a delivery report'],
+    ['auto', from('alex@example.org', { 'Auto-Submitted': 'auto-replied' })], ['auto', from('alex@example.org', { 'Auto-Submitted': 'auto-generated; x=y' })],
+    ['reply', from('alex@example.org', { 'Auto-Submitted': 'No' })], ['auto', from('alex@example.org', { 'X-Autoreply': 'yes' })],
+    ['auto', from('alex@example.org', { 'X-Autorespond': 'Out of office' })], ['auto', from('alex@example.org', { Precedence: 'auto_reply' })],
+    ['auto', from('alex@example.org', { Precedence: 'Bulk' })], ['auto', from('alex@example.org', { Precedence: 'junk' })],
+    ['reply', from('alex@example.org', { Precedence: 'list' })],
+    ...['Automatic reply: Asset registers', 'Auto-Reply: away', 'AutoReply', 'auto reply', 'Out of Office: back Monday', 'Out of the office', 'OOO until Monday',
+      'Abwesenheitsnotiz: x', 'Réponse automatique : absent', `=?UTF-8?B?${b64('Réponse automatique')}?=`].map((s) => ['auto', from('alex@example.org', { Subject: s }), s]),
+    ['reply', from('alex@example.org', { Subject: 'oops, wrong file' })], ['reply', from('alex@example.org', { Subject: 'Re: Out of office ideas' })],
+    ['ignored', from('Pat <pat@AssetStackAI.com>')], ['ignored', from('x@mail.assetstack.org')], ['ignored', from('x@assetstackai.com.au')],
+    ['ignored', from('box@old.example.com'), 'the mailbox’s own other domain'], ['ignored', from('pat@assetstackai.com', { 'Auto-Submitted': 'auto-replied' }), 'an internal auto-reply'],
+    ['ignored', from('Google Calendar <calendar-notification@google.com>')], ['ignored', from('alex@example.org', { Sender: 'Google Calendar <calendar-notification@google.com>' })],
+    ...['Accepted: Demo @ Thu', 'Declined: Demo', 'Tentatively accepted: Demo', 'Invitation: Demo @ Thu', 'Updated invitation: Demo', 'Canceled event: Demo', 'Cancelled event: Demo']
+      .map((s) => ['ignored', from('alex@example.org', { Subject: s }), s]),
+    ...['no-reply@example.org', 'noreply@example.org', 'No_Reply@example.org', 'do-not-reply@example.org', 'donotreply@example.org', 'notifications@example.org',
+      'notification+abc@example.org', 'notify@example.org'].map((f) => ['ignored', from(f), f]),
+    ['auto', from('noreply@example.org', { 'Auto-Submitted': 'auto-replied' }), 'an auto-acknowledgement from a no-reply sender'],
+    ['reply', from('Alex Example <alex@example.org>')], ['reply', from('replies@example.org')], ['reply', from('notificationsteam@example.org')],
+    ['ignored', m({ Subject: 'No From' })], ['ignored', from('not an address')],
+  ];
+  for (const [want, msg, label] of cases) {
+    const h = Object.fromEntries(msg.payload.headers.map((x) => [x.name, x.value]));
+    assert.equal(g.messageKind(msg, ctx), want, label || `${msg.labelIds.join('+')} ${JSON.stringify(h)}`);
+  }
+  assert.equal(g.messageKind(from('x@old.example.com')), 'reply', 'without the mailbox’s domains it is outside');
+  assert.equal(g.messageKind(null), 'ignored');
+});
+
+await check('gmail helpers: coldThread — ours first, not a reply, forward or invite, 1–5 new outside To/Cc recipients', () => {
+  for (const [id, want] of Object.entries(WHY)) {
+    const v = g.coldThread(THREADS[id], KNOWN);
+    assert.equal(v.cold ? 'cold' : v.why, want, id);
+  }
+  assert.deepEqual(g.coldThread(THREADS.tA, KNOWN), { cold: true, prospect: 'alex@example.org', prospectName: 'Example, Alex', recipients: 1, firstAt: '2026-10-13T22:00:00.000Z' });
+  assert.deepEqual(g.coldThread(THREADS.tC, KNOWN), { cold: true, prospect: 'dee@example.org', prospectName: 'Dee Example', recipients: 2, firstAt: '2026-10-14T02:00:00.000Z' });
+  const to = (list, extra) => gThread('t', coldFirst('m', list, 'Asset registers', extra));
+  const five = ['a', 'b', 'c', 'd', 'e'].map((x) => `${x}@example.org`).join(', ');
+  assert.equal(g.coldThread(to(five), KNOWN).recipients, 5, 'five is fine');
+  assert.equal(g.coldThread(to('a@example.org, A@Example.org', { Cc: 'a@example.org' }), KNOWN).recipients, 1, 'the same address counts once');
+  assert.equal(g.coldThread(to(five, { Cc: 'f@example.org' }), KNOWN).why, 'recipients', 'To and Cc together');
+  assert.equal(g.coldThread(to(five, { Bcc: 'f@example.org, g@example.org' }), KNOWN).cold, true, 'Bcc is ignored');
+  assert.deepEqual(pick(g.coldThread(to('', { Cc: 'Cy <cy@example.org>' }), KNOWN), ['cold', 'prospect', 'prospectName']), { cold: true, prospect: 'cy@example.org', prospectName: 'Cy' }, 'Cc when no To');
+  assert.equal(g.coldThread(to('x@old.example.com'), { ...KNOWN, internal: ['old.example.com'] }).why, 'internal', 'a mailbox’s own other domain');
+  assert.equal(g.coldThread(to('x@client.example.com'), KNOWN).why, 'client domain');
+  assert.equal(g.coldThread(to('x@notclient.example.com'), KNOWN).cold, true, 'a domain, not a suffix of the name');
+  assert.equal(g.coldThread(to('x@example.org', { 'In-Reply-To': ' ' }), KNOWN).cold, true, 'a blank In-Reply-To');
+  for (const s of ['Re: x', 'RE : x', 'Fw: x', 'FWD: x', ' re: x']) assert.equal(g.coldThread(to('x@example.org', { Subject: s }), KNOWN).why, 'reply subject', s);
+  for (const s of ['Regarding your assets', 'Fwding tips', 'Re-thinking asset data']) assert.equal(g.coldThread(to('x@example.org', { Subject: s }), KNOWN).cold, true, s);
+  assert.equal(g.coldThread({ id: 'x', messages: [] }, KNOWN).why, 'not ours');
+  assert.equal(g.coldThread(null, KNOWN).why, 'not ours');
+  // The known lists are lower-cased whatever their case.
+  assert.equal(g.coldThread(to('kim@EXAMPLE.net'), { emails: ['KIM@example.NET'] }).why, 'known');
+});
+await check('gmail helpers: threadRows builds the thread row (our first subject only) and one row per sent, reply, auto-reply and bounce', () => {
+  assert.deepEqual(g.threadRows(THREADS.tA, KNOWN), { thread: ROW_A, messages: MSGS_A });
+  assert.deepEqual(g.threadRows(THREADS.tB, KNOWN), { thread: ROW_B, messages: MSGS_B });
+  assert.deepEqual(g.threadRows(THREADS.tC, KNOWN), { thread: ROW_C, messages: MSGS_C });
+  assert.deepEqual(g.threadRows(THREADS.tDraftFirst, KNOWN), { thread: ROW_D, messages: MSGS_D });
+  for (const id of ['tA', 'tB', 'tC']) assert.deepEqual(Object.keys(g.threadRows(THREADS[id], KNOWN).thread), THREAD_KEYS);
+  // Messages out of order are read oldest first; a second reply is a message but not the thread's reply.
+  const shuffled = gThread('tS',
+    gm('r2', '2026-10-16T00:00:00Z', { From: 'alex@example.org', Subject: 'second' }), sentMsg('s1', '2026-10-14T00:00:00Z', { To: 'alex@example.org', Subject: 'First' }),
+    gm('r1', '2026-10-15T00:00:00Z', { From: 'alex@example.org', Subject: 'first reply' }));
+  const s = g.threadRows(shuffled, KNOWN);
+  assert.deepEqual([s.thread.subject, s.thread.reply_message_id, s.thread.reply_at], ['First', 'r1', '2026-10-15T00:00:00.000Z']);
+  assert.deepEqual(s.messages.map((x) => [x.message_id, x.kind]), [['s1', 'sent'], ['r1', 'reply'], ['r2', 'reply']]);
+  // Long names and subjects are cut (by characters).
+  const long = g.threadRows(gThread('tL', sentMsg('l1', '2026-10-14T00:00:00Z', { To: `"${'Ž'.repeat(150)}" <z@example.org>`, Subject: '😀'.repeat(250) })), KNOWN).thread;
+  assert.deepEqual([long.prospect_name, long.subject], ['Ž'.repeat(100), '😀'.repeat(200)]);
+  assert.equal(g.threadRows(THREADS.tInbound, KNOWN), null, 'not ours: no rows');
+  assert.equal(g.threadRows({ messages: THREADS.tA.messages }, KNOWN), null, 'no thread id');
+});
+
+// ── Mailbox connect ──
+
+const MAILBOX_ROW = { id: MB1, active: true, addresses: ['x@assetstackai.com.au', 'y@mail.assetstackai.com', 'Mailbox-One@AssetStackAI.com', 'other@assetstackai.com'] };
+const mbConnect = (body = {}, routes = {}, opts = {}) => run('connect', {
+  body: { origin: ORIGIN, purpose: 'mailbox', mailbox: MB1, ...body }, routes: { [`${REST}/outreach_mailboxes`]: () => reply(200, [MAILBOX_ROW]), ...routes }, ...opts,
+});
+
+await check('gmail connect: admins only — staff, outsiders and no JWT are refused before the mailbox is read', async () => {
+  const staff = await mbConnect({}, asStaff);
+  assert.deepEqual([staff.status, staff.data], [403, { error: NOT_ADMIN }]);
+  const outsider = await mbConnect({}, { [`${RPC}/google_me`]: () => reply(403, { code: '42501', message: 'Not allowed' }) });
+  assert.equal(outsider.status, 403);
+  const anon = await mbConnect({}, {}, { auth: '' });
+  assert.deepEqual([anon.status, anon.calls.length], [401, 0]);
+  for (const r of [staff, outsider]) assert.equal(r.to(`${REST}/outreach_mailboxes`).length + r.to(TOKEN_URL).length, 0);
+});
+
+await check('gmail connect: the consent URL — gmail.readonly only, include_granted_scopes=false, consent select_account, hd and the mailbox’s address', async () => {
+  const r = await mbConnect({ mailbox: MB1.toUpperCase() });
+  assert.equal(r.status, 200);
+  assert.deepEqual(Object.keys(r.data), ['url']);
+  const url = new URL(r.data.url);
+  assert.equal(`${url.origin}${url.pathname}`, 'https://accounts.google.com/o/oauth2/v2/auth');
+  const { state, ...rest } = Object.fromEntries(url.searchParams);
+  assert.deepEqual(rest, {
+    client_id: ENV.GOOGLE_CLIENT_ID, redirect_uri: `${SUPABASE}/functions/v1/google/callback`, response_type: 'code',
+    scope: 'openid email https://www.googleapis.com/auth/gmail.readonly', access_type: 'offline', prompt: 'consent select_account',
+    include_granted_scopes: 'false', hd: 'assetstackai.com', login_hint: BOX1,
+  });
+  const payload = await g.verifyState(state, SECRET);
+  assert.ok(payload.exp >= now() + 595 && payload.exp <= now() + 605 && payload.nonce.length >= 16);
+  assert.deepEqual({ ...payload, exp: 0, nonce: '' }, {
+    uid: 'u-ana', email: 'ana@example.com', origin: ORIGIN, exp: 0, nonce: '', purpose: 'mailbox', mailbox: MB1, client: 'default',
+  });
+  const [read, ...more] = r.to(`${REST}/outreach_mailboxes`);
+  assert.ok(read && !more.length, 'the mailbox read once');
+  assert.equal(read.method, 'GET');
+  assert.equal(read.headers.get('apikey'), 'sb_secret_test', 'with the secret key');
+  assert.deepEqual(Object.fromEntries(params(read)), { id: `eq.${MB1}`, select: 'id,active,addresses' });
+  assert.equal(r.to(TOKEN_URL).length + r.to(`${RPC}/google_token`).length, 0, 'no token read');
+});
+
+await check('gmail connect: a missing or inactive mailbox, one without an @assetstackai.com address, a bad id or origin → 400', async () => {
+  const cases = [
+    ['That mailbox isn’t in Cortex any more.', {}, () => reply(200, [])],
+    ['That mailbox isn’t active.', {}, () => reply(200, [{ ...MAILBOX_ROW, active: false }])],
+    ['Connect Gmail needs an @assetstackai.com address on this mailbox for now.', {}, () => reply(200, [{ ...MAILBOX_ROW, addresses: ['x@assetstackai.com.au', 'y@mail.assetstackai.com', 'z@example.com', 'assetstackai.com'] }])],
+    ['Connect Gmail needs an @assetstackai.com address on this mailbox for now.', {}, () => reply(200, [{ ...MAILBOX_ROW, addresses: [] }])],
+  ];
+  for (const [error, body, answer] of cases) {
+    const r = await mbConnect(body, { [`${REST}/outreach_mailboxes`]: answer });
+    assert.deepEqual([r.status, r.data], [400, { error }]);
+  }
+  for (const mailbox of ['', 'not-a-uuid', 42, null, `${MB1},x`, `${MB1}&select=*`]) {
+    const r = await mbConnect({ mailbox });
+    assert.deepEqual([r.status, r.data], [400, { error: 'Choose a mailbox to connect.' }], String(mailbox));
+    assert.equal(r.to(`${REST}/outreach_mailboxes`).length, 0, 'never read');
+  }
+  const evil = await mbConnect({ origin: 'https://evil.example.com' });
+  assert.deepEqual([evil.status, evil.to(`${REST}/outreach_mailboxes`).length], [400, 0]);
+  const logs = [];
+  const original = console.error;
+  console.error = (...args) => logs.push(args.map(String).join(' '));
+  try {
+    const down = await mbConnect({}, { [`${REST}/outreach_mailboxes`]: () => reply(500, { message: 'boom' }) });
+    assert.deepEqual([down.status, down.data], [502, { error: 'Could not read the mailbox.' }]);
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(logs, ['google/connect: GET outreach_mailboxes → 500  boom']);
+});
+
+// ── Mailbox callback ──
+
+const mbState = (over = {}) => stateFor({ purpose: 'mailbox', mailbox: MB1, client: 'default', ...over });
+const mbToken = (over = {}) => ({
+  access_token: 'first-access-token', refresh_token: 'new-refresh-token', scope: MB_SCOPES, token_type: 'Bearer', id_token: idToken({ email: BOX1 }), ...over,
+});
+const mbRoutes = (token = mbToken(), answer = () => reply(200, 'ok')) => ({ [TOKEN_URL]: () => reply(200, token), [`${RPC}/outreach_gmail_connect`]: answer });
+const connects = (r) => r.to(`${RPC}/outreach_gmail_connect`);
+const neverPersonal = (r, label) => assert.equal(r.to(`${RPC}/google_save`).length + r.to(`${RPC}/calendar_share`).length, 0, `${label}: never google_save or calendar_share`);
+
+await check('gmail callback: connected — the code exchanged, rpc outreach_gmail_connect with the secret key → #/settings?tab=outreach&gmail=connected&mailbox=…', async () => {
+  const r = await callback(await mbState(), { routes: mbRoutes(mbToken({ id_token: idToken({ email: 'Mailbox-One@AssetStackAI.com', email_verified: 'true' }) })) });
+  assert.equal(r.status, 302);
+  assert.equal(r.headers.get('location'), outreachPage('connected'));
+  assert.equal(r.headers.get('cache-control'), 'no-store');
+  const [ex] = r.to(TOKEN_URL);
+  assert.deepEqual(Object.fromEntries(ex.form), {
+    code: 'auth-code', client_id: ENV.GOOGLE_CLIENT_ID, client_secret: SECRET, redirect_uri: `${SUPABASE}/functions/v1/google/callback`, grant_type: 'authorization_code',
+  });
+  const [save, ...more] = connects(r);
+  assert.ok(save && !more.length);
+  assert.equal(save.method, 'POST');
+  assert.deepEqual([save.headers.get('apikey'), save.headers.get('authorization'), save.headers.get('content-type')], ['sb_secret_test', null, 'application/json']);
+  assert.deepEqual(save.json(), {
+    p_mailbox: MB1, p_email: BOX1, p_token: 'new-refresh-token', p_scopes: MB_SCOPES, p_by: 'u-ana', p_client: 'default',
+  }, 'the mailbox’s account (not the admin’s), the state’s admin and client');
+  assert.equal(r.calls.at(-1), save, 'nothing after it');
+  neverPersonal(r, 'connected');
+  assert.ok(!SECRET_BITS.some((x) => r.headers.get('location').includes(x)) && r.text === '', 'no token in the redirect');
+  // A legacy JWT-style secret key: apikey and Bearer.
+  const legacy = await callback(await mbState(), { env: LEGACY_ENV, routes: mbRoutes() });
+  assert.equal(legacy.headers.get('location'), outreachPage('connected'));
+  assert.deepEqual([connects(legacy)[0].headers.get('apikey'), connects(legacy)[0].headers.get('authorization')], ['eyJ.service.placeholder', 'Bearer eyJ.service.placeholder']);
+  // Google's scope string as given (gmail.readonly with others it may add).
+  const wider = await callback(await mbState({ mailbox: MB2 }), { routes: mbRoutes(mbToken({ scope: `${GMAIL_READ} openid https://www.googleapis.com/auth/userinfo.email` })) });
+  assert.equal(wider.headers.get('location'), outreachPage('connected', MB2));
+  assert.deepEqual(pick(connects(wider)[0].json(), ['p_mailbox', 'p_scopes']), { p_mailbox: MB2, p_scopes: `${GMAIL_READ} openid https://www.googleapis.com/auth/userinfo.email` });
+});
+
+await check('gmail callback: denied, wrong_account, gmail_scope (nothing saved), no_refresh_token and error&reason=<step>, each with the mailbox id', async () => {
+  const state = await mbState();
+  const denied = await callback(state, { query: `?error=access_denied&state=${encodeURIComponent(state)}` });
+  assert.deepEqual([denied.status, denied.headers.get('location'), denied.calls.length], [302, outreachPage('denied'), 0]);
+  const exchange = (body, status = 200) => ({ [TOKEN_URL]: () => reply(status, body) });
+  const cases = [
+    ['error&reason=exchange', exchange({ error: 'invalid_grant', error_description: 'Bad Request' }, 400)],
+    ['error&reason=exchange', { [TOKEN_URL]: () => { throw new TypeError('fetch failed'); } }],
+    ['error&reason=client', exchange({ error: 'invalid_client', error_description: 'Unauthorized' }, 401)],
+    ['error&reason=client', exchange({ error: 'unauthorized_client' }, 400)],
+    ['wrong_account', exchange(mbToken({ id_token: idToken({ email: BOX1, email_verified: false }) }))],
+    ['wrong_account', exchange(mbToken({ id_token: undefined }))],
+    ['wrong_account', exchange(mbToken({ id_token: idToken({ email: '' }) }))],
+    ...['openid email', g.SCOPES, `openid email ${GMAIL_READ}.x`, 'openid email https://www.googleapis.com/auth/gmail.metadata', '', undefined]
+      .map((scope) => ['gmail_scope', exchange(mbToken({ scope }))]),
+    ['no_refresh_token', exchange(mbToken({ refresh_token: undefined }))],
+    ['wrong_account', mbRoutes(mbToken(), () => reply(200, 'wrong_account'))],
+    ...[['no_mailbox', () => reply(200, 'no_mailbox')], ['not_admin', () => reply(200, 'not_admin')], ['null', () => reply(200, null)], ['OK', () => reply(200, 'OK')],
+      ['500', () => reply(500, { code: 'XX000', message: 'boom' })], ['403', () => reply(403, { code: '42501', message: 'permission denied for function outreach_gmail_connect' })],
+      ['network', () => { throw new TypeError('fetch failed'); }]].map(([label, answer]) => ['error&reason=save', mbRoutes(mbToken(), answer), label]),
+  ];
+  for (const [result, routes, label = result] of cases) {
+    const r = await loggedCallback(state, { routes });
+    assert.equal(r.status, 302, label);
+    assert.equal(r.headers.get('location'), outreachPage(result), label);
+    if (result.startsWith('error&reason=')) failureLogged(r, result.slice('error&reason='.length));
+    else assert.equal(r.logs.length, 0, `${label}: nothing logged (it names itself)`);
+    const saving = result === 'error&reason=save' || (result === 'wrong_account' && routes[`${RPC}/outreach_gmail_connect`]);
+    assert.equal(connects(r).length, saving ? 1 : 0, `${label}: outreach_gmail_connect ${saving ? 'asked once' : 'never asked'}`);
+    neverPersonal(r, label);
+    assert.ok(!SECRET_BITS.some((x) => r.headers.get('location').includes(x)) && r.text === '', `${label}: no token in the redirect`);
+  }
+  const answered = await loggedCallback(state, { routes: mbRoutes(mbToken(), () => reply(200, 'not_admin')) });
+  assert.equal(answered.logs[0], 'google callback: save 200 answered "not_admin"');
+  const db = await loggedCallback(state, { routes: mbRoutes(mbToken(), () => reply(403, { code: '42501', message: 'permission denied for function outreach_gmail_connect' })) });
+  assert.equal(db.logs[0], 'google callback: save 403 42501 · permission denied for function outreach_gmail_connect');
+  const noCode = await loggedCallback(state, { query: `?state=${encodeURIComponent(state)}` });
+  assert.equal(noCode.headers.get('location'), outreachPage('error&reason=exchange'));
+  failureLogged(noCode, 'exchange');
+  // A client key this function doesn't know: reason client, without asking Google.
+  const other = await loggedCallback(await mbState({ client: 'org' }));
+  assert.deepEqual([other.headers.get('location'), other.calls.length], [outreachPage('error&reason=client'), 0]);
+  failureLogged(other, 'client');
+});
+
+await check('gmail callback: a bad mailbox in the state → the expired page; plain and calendar connects are unchanged', async () => {
+  for (const mailbox of ['', 'nope', undefined, 42]) {
+    const r = await callback(await mbState({ mailbox }));
+    assert.deepEqual([r.status, r.text, r.calls.length], [400, EXPIRED, 0], String(mailbox));
+  }
+  // The purpose and mailbox are signed: a plain state can't be turned into a mailbox one.
+  const good = await stateFor();
+  const [head, sig] = good.split('.');
+  const body = JSON.parse(Buffer.from(head, 'base64url').toString());
+  const forged = await callback(`${b64url(JSON.stringify({ ...body, purpose: 'mailbox', mailbox: MB1 }))}.${sig}`);
+  assert.deepEqual([forged.status, forged.text, forged.calls.length], [400, EXPIRED, 0]);
+  // A plain connect: your own account, google_save, back to Settings → Business; never outreach_gmail_connect.
+  const plain = await callback(await stateFor(), { routes: mbRoutes(mbToken({ id_token: idToken({}), scope: `${g.SCOPES} ${GMAIL_READ}` })) });
+  assert.equal(plain.headers.get('location'), settings('connected'));
+  assert.deepEqual([plain.to(`${RPC}/google_save`).length, connects(plain).length], [1, 0]);
+  const notYours = await callback(await stateFor(), { routes: mbRoutes() });
+  assert.equal(notYours.headers.get('location'), settings('error&reason=wrong_account'), 'a plain connect still wants your own account');
+  // A calendar connect: calendar_share, back to the Calendar page; never outreach_gmail_connect.
+  const cal = await callback(await calState(), { routes: { [TOKEN_URL]: () => reply(200, calToken()) } });
+  assert.equal(cal.headers.get('location'), calendarPage('connected'));
+  assert.deepEqual([shares(cal).length, connects(cal).length], [1, 0]);
+});
+
+// ── outreach-gmail-sync ──
+
+await check('gmail sync: 401 without a JWT (nothing called), 403 without Outreach view; staff with view may sync; CORS; GET → 405', async () => {
+  const anon = await gSync({ auth: '' });
+  assert.deepEqual([anon.status, anon.calls.length], [401, 0]);
+  assert.equal(anon.headers.get('access-control-allow-origin'), ORIGIN);
+  for (const answer of [() => reply(200, { view: false, edit: false, admin: false }), () => reply(200, null), () => reply(403, { code: '42501', message: 'Not allowed' })]) {
+    const r = await gSync({ routes: { [`${RPC}/outreach_access`]: answer } });
+    assert.deepEqual([r.status, r.data], [403, { error: NO_OUTREACH }]);
+    assert.equal(r.calls.length, 1, 'only outreach_access: nothing claimed');
+  }
+  const expired = await gSync({ routes: { [`${RPC}/outreach_access`]: () => reply(401, { code: 'PGRST301', message: 'JWT expired' }) } });
+  assert.equal(expired.status, 401);
+  const staff = await gSync({ claim: [] });
+  assert.equal(staff.status, 200, 'view is enough (not only admins)');
+  const [acc] = staff.to(`${RPC}/outreach_access`);
+  assert.deepEqual([acc.headers.get('apikey'), acc.headers.get('authorization'), acc.body], ['sb_publishable_test', USER_JWT, '{}']);
+  assert.equal(staff.to(`${RPC}/google_me`).length, 0);
+  assert.deepEqual([staff.headers.get('access-control-allow-origin'), staff.headers.get('content-type')], [ORIGIN, 'application/json']);
+  const pre = await run('outreach-gmail-sync', { method: 'OPTIONS', auth: '' });
+  assert.deepEqual([pre.status, pre.headers.get('access-control-allow-origin'), pre.calls.length], [204, ORIGIN, 0]);
+  const get = await run('outreach-gmail-sync', { method: 'GET' });
+  assert.deepEqual([get.status, get.headers.get('allow')], [405, 'POST, OPTIONS']);
+  const bad = await gSync({ body: [] });
+  assert.equal(bad.status, 400, 'a body that isn’t an object');
+  assert.equal(bad.to(`${RPC}/outreach_gmail_claim`).length, 0);
+});
+
+await check('gmail sync: rpc outreach_gmail_claim with the secret key, p_gap 600 (60 forced), p_limit 3; nothing claimed → no Google calls', async () => {
+  for (const [body, gap] of [[{}, 600], [{ force: false }, 600], [{ force: 'yes' }, 600], [{ force: 1 }, 600], [{ force: true }, 60]]) {
+    const r = await gSync({ body, claim: [] });
+    assert.equal(r.status, 200, JSON.stringify(body));
+    assert.deepEqual(r.data, { ok: true, claimed: 0, synced: 0, failed: 0, more: false, pending: 0 });
+    const [claim, ...more] = r.to(`${RPC}/outreach_gmail_claim`);
+    assert.ok(claim && !more.length);
+    assert.equal(claim.method, 'POST');
+    assert.deepEqual([claim.headers.get('apikey'), claim.headers.get('authorization')], ['sb_secret_test', null]);
+    assert.deepEqual(claim.json(), { p_gap: gap, p_limit: 3 }, JSON.stringify(body));
+    assert.equal(r.to(`${RPC}/outreach_gmail_known`).length + r.to(`${RPC}/outreach_gmail_job`).length + r.to(TOKEN_URL).length + r.gmail.length + r.saves.length, 0);
+  }
+  assert.deepEqual((await gSync({ claim: null })).data, { ok: true, claimed: 0, synced: 0, failed: 0, more: false, pending: 0 });
+  const objects = await gSync({ claim: [{ outreach_gmail_claim: MB1 }, MB1, '', null], jobs: { [MB1]: gJob(MB1, { history_id: '8000' }) } });
+  assert.deepEqual([objects.data.claimed, objects.to(`${RPC}/outreach_gmail_job`).map((c) => c.json())], [1, [{ p_mailbox: MB1 }]], 'each mailbox once');
+  const down = await gSync({ routes: { [`${RPC}/outreach_gmail_claim`]: () => reply(500, { code: 'XX000', message: 'boom' }) } });
+  assert.deepEqual([down.status, down.data], [502, { error: 'Could not start the Gmail sync.' }]);
+  assert.ok(down.logs.some((l) => l.startsWith('google/outreach-gmail-sync: POST rpc/outreach_gmail_claim → 500')), down.logs.join('\n'));
+  assert.equal(down.gmail.length, 0);
+});
+
+await check('gmail sync: a first read — profile check, 90 days of sent mail (paged), threads newest first, the cold ones saved with the cursor', async () => {
+  const r = await gSync();
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0 });
+  const [known] = r.to(`${RPC}/outreach_gmail_known`);
+  assert.deepEqual([known.method, known.headers.get('apikey'), known.body], ['POST', 'sb_secret_test', '{}']);
+  const [job] = r.to(`${RPC}/outreach_gmail_job`);
+  assert.deepEqual([job.headers.get('apikey'), job.json()], ['sb_secret_test', { p_mailbox: MB1 }]);
+  const [tok] = r.to(TOKEN_URL);
+  assert.deepEqual(Object.fromEntries(tok.form), { client_id: ENV.GOOGLE_CLIENT_ID, client_secret: SECRET, refresh_token: `gmail-refresh-${MB1}`, grant_type: 'refresh_token' });
+  const [profile] = r.to(`${GMAIL_API}/profile`);
+  assert.deepEqual([profile.url, profile.method, profile.headers.get('authorization')], [`${GMAIL_API}/profile`, 'GET', `Bearer gmail-access-${MB1}`]);
+  assert.deepEqual(r.lists.map((c) => [...params(c)]), [
+    [['q', `in:sent after:${AFTER_90}`], ['maxResults', '500'], ['fields', 'messages(threadId),nextPageToken']],
+    [['q', `in:sent after:${AFTER_90}`], ['maxResults', '500'], ['fields', 'messages(threadId),nextPageToken'], ['pageToken', 'p1']],
+  ]);
+  assert.ok(r.calls.indexOf(profile) < r.calls.indexOf(r.lists[0]) && r.calls.indexOf(r.lists[1]) < r.calls.indexOf(r.threads[0]), 'profile, list, then threads');
+  assert.deepEqual([...fetched(r)].sort(), [...LISTED].sort(), 'every listed thread read once');
+  assert.deepEqual(fetched(r).slice(0, 6), LISTED.slice(0, 6), 'newest first');
+  // Only the stored check and the prior-inbound checks besides; prior only for cold candidates.
+  assert.deepEqual(r.to(`${REST}/outreach_threads`).map((c) => Object.fromEntries(params(c))), [
+    { select: 'thread_id', mailbox_id: `eq.${MB1}`, thread_id: `in.(${LISTED.join(',')})` },
+  ]);
+  assert.deepEqual(r.priors.map((c) => params(c).get('q')).sort(), [
+    `from:alex@example.org before:${Date.parse('2026-10-13T22:00:00Z') / 1000}`, `from:bo@example.net before:${Date.parse('2026-10-14T01:00:00Z') / 1000}`,
+    `from:dee@example.org before:${Date.parse('2026-10-14T02:00:00Z') / 1000}`, `from:fay@example.org before:${Date.parse('2026-10-14T06:00:00Z') / 1000}`,
+    `from:sam@example.org before:${Date.parse('2026-10-14T00:00:00Z') / 1000}`,
+  ].sort());
+  assert.deepEqual([...params(r.priors[0])].map(([k]) => k), ['q', 'maxResults', 'fields']);
+  assert.ok(r.priors.every((c) => params(c).get('maxResults') === '1' && params(c).get('fields') === 'messages(id)'));
+  // One save: the cold threads (tPrior had written before), their messages, and the cursor.
+  assert.equal(r.saves.length, 1);
+  const [save] = r.saves;
+  assert.deepEqual([save.method, save.headers.get('apikey'), save.headers.get('content-type')], ['POST', 'sb_secret_test', 'application/json']);
+  assert.deepEqual(r.saved[0], {
+    p_mailbox: MB1, p_started: iso(GNOW + 5000), p_threads: [ROW_A, ROW_B, ROW_C, ROW_D], p_messages: [...MSGS_A, ...MSGS_B, ...MSGS_C, ...MSGS_D],
+    p_cursor: { history_id: '9100', scan_from: iso(GNOW - 90 * DAY), pending: [] }, p_release: false, p_error: '', p_reconnect: false,
+  });
+  assert.equal(r.calls.at(-1), save, 'saved last');
+  noText(r);
+  gNoTokens(r);
+  // The claim's own run_started, when the job gives it, is the run's start.
+  const own = await gSync({ jobs: { [MB1]: gJob(MB1, { run_started: '2026-10-21T00:00:01.234567+00:00' }) } });
+  assert.equal(own.saved[0].p_started, '2026-10-21T00:00:01.234567+00:00');
+});
+
+await check('gmail sync: a first read signed in as another account → reconnect, nothing listed; the list is capped at listPages', async () => {
+  const r = await gSync({ profile: () => reply(200, { emailAddress: 'someone@assetstackai.com', historyId: '1' }) });
+  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 0, failed: 1, more: false, pending: 0 });
+  assert.deepEqual(r.saved, [{
+    p_mailbox: MB1, p_started: iso(GNOW + 5000), p_threads: [], p_messages: [], p_cursor: {}, p_release: false, p_error: 'Signed in as another account.', p_reconnect: true,
+  }]);
+  assert.equal(r.lists.length + r.threads.length, 0);
+  assert.ok(r.logs.some((l) => l === 'google/outreach-gmail-sync: mailbox failed at profile 409'), r.logs.join('\n'));
+  gNoTokens(r);
+  // Endless pages: listPages of them, then what was found is read.
+  let n = 0;
+  const capped = await gSync({ limits: { listPages: 3 }, list: () => reply(200, { messages: [{ id: `m${n}`, threadId: `tX${n}` }], nextPageToken: `p${++n}` }) });
+  assert.equal(capped.lists.length, 3);
+  assert.deepEqual(fetched(capped), ['tX0', 'tX1', 'tX2']);
+  assert.deepEqual([capped.saved[0].p_threads, capped.saved[0].p_cursor.pending, capped.data.more], [[], [], false], 'gone from Gmail (404): dropped');
+});
+
+const HISTORY_PAGES = {
+  '': {
+    history: [
+      { id: '8001', messages: [{ id: 'n1', threadId: 'tA' }], messagesAdded: [{ message: { id: 'n1', threadId: 'tA', labelIds: ['SENT'] } }] },
+      { id: '8002', messagesAdded: [{ message: { id: 'n2', threadId: 'tX', labelIds: ['INBOX', 'UNREAD'] } }] },
+      { id: '8003', messagesAdded: [{ message: { id: 'n3', threadId: 'tB', labelIds: ['INBOX', 'CATEGORY_PERSONAL'] } }] },
+    ],
+    nextPageToken: 'hp2', historyId: '8010',
+  },
+  hp2: {
+    history: [
+      { id: '8004', messagesAdded: [
+        { message: { id: 'd1', threadId: 'tDraftOnly', labelIds: ['DRAFT'] } }, { message: { id: 'c1', threadId: 'tChat', labelIds: ['CHAT'] } },
+        { message: { id: 'n5', threadId: 'tC', labelIds: ['SENT'] } }, { message: { id: 'n6', threadId: 'tY', labelIds: ['SENT', 'DRAFT'] } },
+      ] },
+    ],
+    historyId: '8010',
+  },
+};
+const historyPages = (pages = HISTORY_PAGES) => (c) => reply(200, pages[params(c).get('pageToken') || '']);
+
+await check('gmail sync: incremental — history since the last run; SENT queues its thread, inbound only a stored cold thread; drafts and chats skipped', async () => {
+  const r = await gSync({
+    jobs: { [MB1]: gJob(MB1, { history_id: '8000', pending: ['tOld', 'tC'], scan_from: iso(GNOW - 90 * DAY), synced_at: '2026-10-20T00:00:00Z', ready: true }) },
+    history: historyPages(), stored: ['tB'],
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.to(`${GMAIL_API}/history?`).map((c) => [...params(c)]), [
+    [['startHistoryId', '8000'], ['historyTypes', 'messageAdded'], ['maxResults', '500'], ['fields', HISTORY_FIELDS]],
+    [['startHistoryId', '8000'], ['historyTypes', 'messageAdded'], ['maxResults', '500'], ['fields', HISTORY_FIELDS], ['pageToken', 'hp2']],
+  ]);
+  assert.equal(r.to(`${GMAIL_API}/profile`).length + r.lists.length, 0, 'no profile or listing');
+  const lookups = r.to(`${REST}/outreach_threads`).map((c) => params(c).get('thread_id'));
+  assert.deepEqual(lookups, ['in.(tB,tX)', 'in.(tC,tB,tA,tOld)'], 'the inbound threads, then the batch');
+  assert.deepEqual(fetched(r), ['tC', 'tB', 'tA', 'tOld'], 'newest first, then the stored queue; tX (not stored) and drafts/chats never');
+  assert.deepEqual(r.priors.map((c) => params(c).get('q').split(' ')[0]).sort(), ['from:alex@example.org', 'from:dee@example.org'], 'the stored thread skips the cold rule');
+  assert.deepEqual(r.saved, [{
+    p_mailbox: MB1, p_started: iso(GNOW + 5000), p_threads: [ROW_C, ROW_B, ROW_A], p_messages: [...MSGS_C, ...MSGS_B, ...MSGS_A],
+    p_cursor: { history_id: '8010', pending: [] }, p_release: false, p_error: '', p_reconnect: false,
+  }]);
+  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0 });
+  // A stored cold thread whose rules would now say no (the prospect became a client) is still refreshed.
+  const client = await gSync({
+    jobs: { [MB1]: gJob(MB1, { history_id: '8000' }) }, stored: ['tA'], known: { ...KNOWN, emails: ['alex@example.org'] },
+    history: () => reply(200, { history: [{ id: '8001', messagesAdded: [{ message: { id: 'mA4', threadId: 'tA', labelIds: ['INBOX'] } }] }], historyId: '8002' }),
+  });
+  assert.deepEqual([client.saved[0].p_threads, client.priors.length], [[ROW_A], 0]);
+  // No changes: one save with the new history id.
+  const quiet = await gSync({ jobs: { [MB1]: gJob(MB1, { history_id: '8000' }) } });
+  assert.deepEqual(quiet.saved.map((b) => [b.p_threads, b.p_cursor]), [[[], { history_id: '8999', pending: [] }]]);
+  assert.equal(quiet.threads.length + quiet.to(`${REST}/outreach_threads`).length, 0);
+  noText(r);
+  gNoTokens(r);
+});
+
+await check('gmail sync: history gone (404) → restart from max(last sync − 2 days, 90 days ago); inbound only for stored cold threads', async () => {
+  const gone = () => reply(404, { error: { code: 404, message: 'Requested entity was not found.' } });
+  const listed = [];
+  const list = (c, q) => {
+    listed.push(q);
+    return q.startsWith('-in:sent') ? reply(200, { messages: [{ id: 'i1', threadId: 'tB' }, { id: 'i2', threadId: 'tZ' }, { id: 'i3', threadId: 'tC' }] })
+      : reply(200, { messages: [{ id: 's1', threadId: 'tC' }] });
+  };
+  const after = Math.floor(Date.parse('2026-10-18T00:00:00Z') / 1000);
+  const r = await gSync({
+    jobs: { [MB1]: gJob(MB1, { history_id: '7000', synced_at: '2026-10-20T00:00:00Z', scan_from: '2026-07-23T00:00:00.000Z', pending: ['tOld'] }) },
+    history: gone, list, stored: ['tB'],
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(listed, [`in:sent after:${after}`, `-in:sent after:${after}`]);
+  assert.equal(r.to(`${GMAIL_API}/profile`).length, 1, 'the account checked again');
+  assert.deepEqual(r.to(`${REST}/outreach_threads`).map((c) => params(c).get('thread_id')), ['in.(tB,tZ,tC)', 'in.(tC,tB,tOld)']);
+  assert.deepEqual(fetched(r), ['tC', 'tB', 'tOld']);
+  assert.deepEqual(r.saved[0].p_cursor, { history_id: '9100', pending: [] }, 'the stored scan_from stays');
+  assert.deepEqual(r.saved[0].p_threads, [ROW_C, ROW_B]);
+  // A last sync long ago (or never) → 90 days; no scan_from yet → set.
+  for (const syncedAt of ['2026-01-01T00:00:00Z', null, 'garbage']) {
+    listed.length = 0;
+    const old = await gSync({ jobs: { [MB1]: gJob(MB1, { history_id: '7000', synced_at: syncedAt }) }, history: gone, list });
+    assert.deepEqual(listed, [`in:sent after:${AFTER_90}`, `-in:sent after:${AFTER_90}`], String(syncedAt));
+    assert.deepEqual(old.saved[0].p_cursor, { history_id: '9100', scan_from: iso(GNOW - 90 * DAY), pending: [] });
+  }
+  // Signed in as another account on a restart too.
+  const other = await gSync({ jobs: { [MB1]: gJob(MB1, { history_id: '7000' }) }, history: gone, profile: () => reply(200, { emailAddress: 'x@example.org', historyId: '1' }) });
+  assert.deepEqual(other.saved.map((b) => [b.p_error, b.p_reconnect]), [['Signed in as another account.', true]]);
+});
+
+await check('gmail sync: threads.get asks for headers only — format=metadata, the agreed headers, a fields mask without snippet; never full or raw', async () => {
+  const r = await gSync();
+  assert.ok(r.threads.length > 10);
+  for (const c of r.threads) {
+    const u = new URL(c.url);
+    assert.equal(u.pathname.startsWith('/gmail/v1/users/me/threads/'), true);
+    assert.deepEqual([...u.searchParams], [['format', 'metadata'], ...METADATA.map((h) => ['metadataHeaders', h]), ['fields', THREAD_FIELDS]]);
+    assert.deepEqual([c.method, c.headers.get('authorization')], ['GET', `Bearer gmail-access-${MB1}`]);
+  }
+  for (const c of r.gmail) {
+    assert.ok(!/snippet|format=(full|raw|minimal)|\/messages\/[^?]/i.test(c.url), c.url);
+    assert.equal(c.method, 'GET', 'Gmail is only read');
+  }
+  assert.equal(r.calls.filter((c) => c.url.startsWith('https://gmail.googleapis.com/') && c.method !== 'GET').length, 0);
+});
+
+await check('gmail sync: caps — threadsPerRun and saveEvery split the work; only the last save releases the claim when more is left', async () => {
+  const r = await gSync({ limits: { threadsPerRun: 5, saveEvery: 2 } });
+  assert.deepEqual(fetched(r), LISTED.slice(0, 5));
+  assert.equal(r.saves.length, 3);
+  assert.deepEqual(r.saved.map((b) => [b.p_threads.map((t) => t.thread_id), b.p_cursor.pending.length, b.p_release]), [
+    [['tA', 'tB'], LISTED.length - 2, false], [['tC'], LISTED.length - 4, false], [[], LISTED.length - 5, true],
+  ]);
+  assert.deepEqual(r.saved[0].p_cursor, { history_id: '9100', scan_from: iso(GNOW - 90 * DAY), pending: LISTED.slice(2) }, 'the first save carries the new cursor');
+  assert.deepEqual([r.saved[1].p_cursor, r.saved[2].p_cursor], [{ pending: LISTED.slice(4) }, { pending: LISTED.slice(5) }], 'later saves only the queue');
+  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: true, pending: LISTED.length - 5 });
+  assert.ok(r.saved.every((b) => b.p_started === r.saved[0].p_started), 'one start for the run');
+  // History beyond historyPages: stop at the last record read, more (released) even with nothing queued.
+  const capped = await gSync({ jobs: { [MB1]: gJob(MB1, { history_id: '8000' }) }, limits: { historyPages: 1 }, history: historyPages(), stored: [] });
+  assert.equal(capped.to(`${GMAIL_API}/history?`).length, 1);
+  assert.deepEqual(capped.saved.map((b) => [b.p_cursor, b.p_release]), [[{ history_id: '8003', pending: [] }, true]], 'the last record read, released');
+  assert.deepEqual(fetched(capped), ['tA']);
+  assert.deepEqual(capped.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: true, pending: 0 });
+});
+
+await check('gmail sync: the deadline stops reading (more, claim released); claimed mailboxes share the run’s time', async () => {
+  let t = GNOW;
+  const clock = () => t;
+  const slow = (id) => { t += 10000; return THREADS[id]; };
+  const one = await gSync({ now: clock, threads: slow, limits: { deadline: 35000, parallel: 1 } });
+  assert.deepEqual(fetched(one), LISTED.slice(0, 4), 'started at 0, 10, 20 and 30 s; not at 40 s');
+  assert.deepEqual(one.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending, b.p_release]), [[['tA', 'tB', 'tC'], LISTED.slice(4), true]]);
+  assert.deepEqual(pick(one.data, ['synced', 'more', 'pending']), { synced: 1, more: true, pending: LISTED.length - 4 });
+  // Six at a time: each checks the clock before it starts.
+  t = GNOW;
+  const lanes = await gSync({ now: clock, threads: slow, limits: { deadline: 35000 } });
+  assert.equal(fetched(lanes).length, 4);
+  // Two mailboxes, 40 s: the first gets half; the second what is left.
+  t = GNOW;
+  const two = await gSync({
+    now: clock, threads: slow, limits: { deadline: 40000, parallel: 1 }, claim: [MB1, MB2], jobs: { [MB1]: gJob(MB1), [MB2]: gJob(MB2) },
+  });
+  assert.deepEqual(two.threads.map(boxOf), [MB1, MB1, MB2, MB2]);
+  assert.deepEqual(two.saved.map((b) => [b.p_mailbox, b.p_threads.length, b.p_release]), [[MB1, 2, true], [MB2, 2, true]]);
+  assert.deepEqual(pick(two.data, ['claimed', 'synced', 'more', 'pending']), { claimed: 2, synced: 2, more: true, pending: 2 * (LISTED.length - 2) });
+  // Past the deadline before a mailbox's threads: its cursor is still saved (released, more).
+  t = GNOW;
+  const late = await gSync({ now: () => (t += 1000), limits: { deadline: 1000 } });
+  assert.deepEqual(late.saved.map((b) => [b.p_threads.length, b.p_cursor.pending.length, b.p_release]), [[0, LISTED.length, true]]);
+});
+
+await check('gmail sync: Gmail rate limits — one short back-off, then stop with more (no error); during the listing → error, try later', async () => {
+  const limited = (status, body) => () => reply(status, body);
+  const rate403 = { error: { code: 403, message: 'User-rate limit exceeded', errors: [{ reason: 'userRateLimitExceeded' }] } };
+  for (const [label, answer] of [['429', limited(429, { error: { code: 429, message: 'Too many requests' } })], ['403', limited(403, rate403)]]) {
+    let n = 0;
+    const once = await gSync({ limits: { parallel: 1, backoff: 1234 }, threads: (id) => (id === 'tB' && n++ === 0 ? answer() : THREADS[id]) });
+    assert.deepEqual(once.sleeps, [1234], `${label}: waited once`);
+    assert.deepEqual(fetched(once).filter((x) => x === 'tB'), ['tB', 'tB'], `${label}: tried again`);
+    assert.deepEqual([once.saved[0].p_threads.map((x) => x.thread_id), once.data.more], [['tA', 'tB', 'tC', 'tDraftFirst'], false]);
+    const always = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? answer() : THREADS[id]) });
+    assert.deepEqual(always.sleeps, [2000], `${label}: the default back-off, once`);
+    assert.deepEqual(always.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending[0], b.p_release, b.p_error]), [[['tA', 'tB'], 'tC', true, '']]);
+    assert.deepEqual(pick(always.data, ['synced', 'failed', 'more', 'pending']), { synced: 1, failed: 0, more: true, pending: LISTED.length - 2 });
+  }
+  const listing = await gSync({ list: limited(429, {}) });
+  assert.deepEqual(listing.saved.map((b) => [b.p_error, b.p_reconnect, b.p_release, b.p_cursor]), [[GMAIL_BUSY, false, false, {}]]);
+  assert.deepEqual(pick(listing.data, ['synced', 'failed', 'more']), { synced: 0, failed: 1, more: false });
+  assert.equal(listing.sleeps.length, 1);
+});
+
+await check('gmail sync: save bodies carry only the agreed keys — no snippet, body or text anywhere, no token', async () => {
+  const runs = [
+    await gSync(), await gSync({ limits: { saveEvery: 1, threadsPerRun: 4 } }),
+    await gSync({ jobs: { [MB1]: gJob(MB1, { history_id: '8000' }) }, history: historyPages(), stored: ['tB'] }),
+    await gSync({ routes: { [TOKEN_URL]: () => reply(400, { error: 'invalid_grant' }) } }),
+  ];
+  for (const r of runs) {
+    assert.ok(r.saves.length >= 1);
+    for (const b of r.saved) {
+      assert.deepEqual(Object.keys(b), SAVE_KEYS);
+      for (const t of b.p_threads) assert.deepEqual(Object.keys(t), THREAD_KEYS);
+      for (const m of b.p_messages) {
+        assert.deepEqual(Object.keys(m), ['message_id', 'thread_id', 'kind', 'at']);
+        assert.ok(['sent', 'reply', 'auto', 'bounce'].includes(m.kind));
+        assert.ok(b.p_threads.some((t) => t.thread_id === m.thread_id), 'a message of a thread in the same save');
+      }
+      assert.ok(Object.keys(b.p_cursor).every((k) => ['history_id', 'scan_from', 'pending'].includes(k)), JSON.stringify(Object.keys(b.p_cursor)));
+      assert.ok(!Object.keys(b).some((k) => /day/.test(k)) && !b.p_threads.some((t) => Object.keys(t).some((k) => /day|kind/.test(k))), 'days are the database’s');
+    }
+    noText(r);
+    gNoTokens(r);
+  }
+});
+
+await check('gmail sync: one mailbox’s failure never stops the others; reconnect for invalid_grant or a missing scope', async () => {
+  const jobs = { [MB1]: gJob(MB1), [MB2]: gJob(MB2), [MB3]: gJob(MB3) };
+  const r = await gSync({
+    claim: [MB1, MB2, MB3], jobs,
+    routes: {
+      [TOKEN_URL]: (c) => (c.form.get('refresh_token').endsWith(MB1)
+        ? reply(400, { error: 'invalid_grant', error_description: 'Token has been expired or revoked.' })
+        : reply(200, { access_token: c.form.get('refresh_token').replace('gmail-refresh-', 'gmail-access-') })),
+    },
+    profile: (mb) => (mb === MB2 ? reply(500, { error: { code: 500, message: `Backend Error for ${BOXES[MB2]}` } }) : reply(200, { emailAddress: BOXES[mb], historyId: '1' })),
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data, { ok: true, claimed: 3, synced: 1, failed: 2, more: false, pending: 0 });
+  assert.deepEqual(r.saved.map((b) => [b.p_mailbox, b.p_error, b.p_reconnect, b.p_threads.length]), [
+    [MB1, GMAIL_RECONNECT, true, 0], [MB2, 'Gmail returned 500.', false, 0], [MB3, '', false, 4],
+  ]);
+  assert.ok(r.calls.indexOf(r.saves[0]) < r.calls.indexOf(r.to(TOKEN_URL)[1]), 'one mailbox at a time, in claim order');
+  assert.equal(r.to(`${RPC}/outreach_gmail_known`).length, 1, 'known read once per run');
+  assert.deepEqual(r.logs, ['google/outreach-gmail-sync: mailbox failed at token 409', 'google/outreach-gmail-sync: mailbox failed at profile 502']);
+  gNoTokens(r);
+
+  // Stored scopes without gmail.readonly, no token, an unknown client: reconnect without asking Google.
+  for (const over of [{ scopes: 'openid email' }, { refresh_token: '' }, { client: 'org' }, { email: 'not an address' }]) {
+    const s = await gSync({ jobs: { [MB1]: gJob(MB1, over) } });
+    assert.deepEqual(s.saved.map((b) => [b.p_error, b.p_reconnect]), [[GMAIL_RECONNECT, true]], JSON.stringify(over));
+    assert.equal(s.to(TOKEN_URL).length + s.gmail.length, 0);
+  }
+  // Google says the token lacks the scope.
+  const insufficient = await gSync({ profile: () => reply(403, { error: { code: 403, message: 'Request had insufficient authentication scopes.', details: [{ reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' }] } }) });
+  assert.deepEqual(insufficient.saved.map((b) => [b.p_error, b.p_reconnect]), [[GMAIL_RECONNECT, true]]);
+  // A thread that fails mid-run: the error saved (nothing of the unsaved chunk), the cursor kept for next time.
+  const broken = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? reply(500, { error: { code: 500 } }) : THREADS[id]) });
+  assert.deepEqual(broken.saved.map((b) => [b.p_threads, b.p_cursor, b.p_error, b.p_release]), [[[], {}, 'Gmail returned 500.', false]]);
+  const network = await gSync({ profile: () => { throw new TypeError('fetch failed'); } });
+  assert.deepEqual(network.saved.map((b) => b.p_error), ['Something went wrong with Gmail.']);
+});
+
+await check('gmail sync: no connection, a mailbox gone mid-run, a failed save or a failed known read — counted, never fatal', async () => {
+  // No connection (job null): skipped, nothing saved, the next one still syncs.
+  const none = await gSync({ claim: [MB1, MB2], jobs: { [MB2]: gJob(MB2) } });
+  assert.deepEqual(none.data, { ok: true, claimed: 2, synced: 1, failed: 0, more: false, pending: 0 });
+  assert.deepEqual(none.saved.map((b) => b.p_mailbox), [MB2]);
+  // outreach_gmail_save → false (disconnected or inactive meanwhile): stop that mailbox, neither synced nor failed.
+  const gone = await gSync({ limits: { saveEvery: 2 }, save: () => reply(200, false) });
+  assert.deepEqual([gone.saves.length, gone.data.synced, gone.data.failed], [1, 0, 0]);
+  assert.equal(fetched(gone).length, 2, 'nothing read after it');
+  // A save failing: counted, logged without a body; the error save is tried; the next mailbox still syncs.
+  const failing = await gSync({
+    claim: [MB1, MB2], jobs: { [MB1]: gJob(MB1), [MB2]: gJob(MB2) },
+    save: (c) => (c.json().p_mailbox === MB1 ? reply(500, { code: 'XX000', message: 'boom' }) : reply(200, true)),
+  });
+  assert.deepEqual(failing.data, { ok: true, claimed: 2, synced: 1, failed: 1, more: false, pending: 0 });
+  assert.deepEqual(failing.saved.map((b) => [b.p_mailbox, b.p_error]), [[MB1, ''], [MB1, 'Could not save the Gmail sync.'], [MB2, '']]);
+  assert.ok(failing.logs.some((l) => l.startsWith('google/outreach-gmail-sync: POST rpc/outreach_gmail_save → 500')));
+  gNoTokens(failing);
+  // rpc outreach_gmail_known failing: every claimed mailbox gets the error, without reading its connection or Gmail.
+  const blind = await gSync({ claim: [MB1, MB2], jobs: { [MB1]: gJob(MB1), [MB2]: gJob(MB2) }, known: () => reply(500, { message: 'boom' }) });
+  assert.deepEqual(blind.data, { ok: true, claimed: 2, synced: 0, failed: 2, more: false, pending: 0 });
+  assert.deepEqual(blind.saved.map((b) => [b.p_mailbox, b.p_error, b.p_reconnect, b.p_release]), [[MB1, 'Could not read Cortex’s contacts.', false, false], [MB2, 'Could not read Cortex’s contacts.', false, false]]);
+  assert.equal(blind.to(`${RPC}/outreach_gmail_job`).length + blind.gmail.length + blind.to(TOKEN_URL).length, 0);
+  // An errored mailbox's queue still counts as pending.
+  const queued = await gSync({ jobs: { [MB1]: gJob(MB1, { history_id: '8000', pending: ['t1', 't2', 'bad id!'] }) }, history: () => reply(500, {}) });
+  assert.deepEqual(pick(queued.data, ['failed', 'pending']), { failed: 1, pending: 2 });
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');

@@ -772,3 +772,89 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Not in this build**: a sync on a timer (it would need `pg_cron` and `pg_net` calling the function) and reading
   everyone's calendar without each person connecting (Workspace domain-wide delegation, with a service-account key
   kept in Supabase secrets).
+
+## 16. 0010: Outreach from Gmail — cold emails counted from each mailbox
+
+- **Owner's ask**: measure every cold sales email going out to prospects from our email accounts, straight from the
+  mailboxes. The agent's Google Sheet "is just a reference to save all the sent prospects".
+- **Owner's decisions**: Gmail is the source of the numbers for a mailbox once it is connected; the sheet stays the
+  agent's log (meetings, and the organisation, role and tier shown with a prospect). Mailboxes are @assetstackai.com
+  accounts now (the Google client is **Internal** to that Workspace); @assetstack.org and @assetstackai.com.au come
+  later, in a **separate** Workspace. Cortex may read full messages (`gmail.readonly`) but stores **no message text**
+  for now; sorting replies (interested / not) is decided later, so it detects only a reply, an auto-reply or
+  out-of-office, and a bounce. Cold = **new outside contacts**: a thread we start with someone outside AssetStack who
+  isn't a client or known contact and has never written to that mailbox, plus our follow-ups in it. Admins connect each
+  mailbox in **Settings → Outreach**.
+- **What a cold thread is** (decided once, the first time the function sees the thread; a stored thread stays cold):
+  its first message is ours (`SENT`), not a reply or forward (no `In-Reply-To`, no `Re:` / `Fw:` subject) and not a
+  calendar invite; it goes to 1–5 outside people in To/Cc (Bcc lists fall out); none of them is a colleague
+  (`assetstackai.com`, `assetstack.org`, `assetstackai.com.au`, the mailboxes' and profiles' domains), a known email
+  (profiles, client contacts, client access, invoice recipients), at a client's domain (free-mail domains aside) or a
+  no-reply address; and the prospect (the first outside To, else Cc) has never written to this mailbox before it
+  (`from:<prospect> before:<first email>`). Outreach contacts (the prospects in Pipeline) are deliberately not excluded.
+  In a cold thread each message of ours is `sent` (the first email and each follow-up) and each of theirs is `reply`,
+  `auto` (Auto-Submitted, X-Autoreply / X-Autorespond, Precedence auto_reply / bulk / junk, an out-of-office subject)
+  or `bounce` (mailer-daemon / postmaster, a delivery-status report, X-Failed-Recipients); colleagues, no-reply senders
+  and calendar notifications count as nothing.
+- **Database** (`0010_outreach_gmail.sql`):
+  - `private.outreach_gmail` (a mailbox's Google connection: `client` key, `email`, refresh token, scopes, who connected
+    it and when) and `private.outreach_gmail_sync` (claim, the run that holds it, last sync, `ready_at` once the first
+    read is done, the Gmail `history_id`, `scan_from`, the threads still to read, error, reconnect). Unreadable from
+    the app.
+  - `outreach_threads` (one per mailbox and Gmail thread: sender, prospect's address and name, recipients, the subject
+    of our first email, first email and day, last email, emails sent, the first reply / auto-reply / bounce and their
+    days, `reply_kind` '' for the later reply sorting) and `outreach_messages` (each message's kind, instant and day).
+    Read with `can_view('outreach')`, written only by `outreach_gmail_save()` (service role); not synced, not realtime.
+    Days are Sydney days, worked out in SQL. Never stored: bodies, snippets, reply subjects, any thread that isn't cold.
+  - For the function only: `outreach_gmail_connect()` (the Google account must be one of the mailbox's addresses and the
+    caller an active admin), `outreach_gmail_known()` (the exclusion lists), `outreach_gmail_claim()` (10 minutes
+    between reads, 1 with Sync now; three mailboxes a run), `outreach_gmail_job()` and `outreach_gmail_save()` (locks
+    the mailbox and its connection first, the newer run wins, an error writes nothing).
+  - For the app: `outreach_gmail_status()` (Outreach viewers: connected, address, synced, ready, threads left, error,
+    reconnect; never a token), `outreach_gmail_disconnect()` (admins), and `outreach_gmail_daily()` /
+    `outreach_gmail_breakdown()` / `outreach_gmail_threads()` (security invoker; the last adds the sheet's organisation,
+    role, tier and reply status from the row with the thread's id, else the prospect's newest row). They equal
+    `gmailDaily()` / `gmailBreakdown()` / `filterThreads()` in `src/lib/outreach.js` (demo mode), checked by
+    `scripts/test-db.mjs`.
+  - Forgetting: disconnecting, reconnecting as another account or without Gmail read, or taking the connected address
+    off the mailbox deletes its threads and sync state; deleting the mailbox cascades. Switching it off keeps its
+    numbers and stops reading.
+- **Google** (`supabase/functions/google`): connect with purpose `mailbox` (admins; the mailbox active with an
+  @assetstackai.com address) asks for `openid email …/gmail.readonly` only (`include_granted_scopes=false`, so the token
+  carries nothing else), `prompt=consent select_account`, `hd` and `login_hint` the mailbox's address. The callback
+  returns to `#/settings?tab=outreach&gmail=<result>&mailbox=<id>` (connected, denied, wrong_account, gmail_scope,
+  no_refresh_token, or error with reason client / exchange / save). `outreach-gmail-sync` (Outreach view) claims up to
+  three mailboxes and, within about a minute: on the first read lists 90 days of sent mail
+  (`in:sent after:…`), after that follows Gmail's history from the stored point (sent mail, and answers in stored cold
+  threads; when Google says the point is too old it scans again from the last sync); then reads the queued threads,
+  newest first, as metadata only (named headers, never `snippet`, `full` or `raw`), up to 500 a run, saving every 100,
+  and answers `{ claimed, synced, failed, more, pending }` so the page runs it again while `more`. One mailbox's
+  failure never stops the others; Google refusing the mailbox asks for **Reconnect**. Logs carry counts only.
+- **App**:
+  - **Outreach** (`Emails.jsx`): the numbers are `mergeDaily()`: a mailbox whose first read is done counts Sent (each
+    cold email, follow-ups too), **Prospects** (threads started), Replies, auto-replies and Bounces from Gmail and only
+    Meetings from the sheet; others, and Unassigned, stay on the sheet (each email a prospect). Reply rate = replies ÷
+    prospects. Mailbox cards counted from Gmail carry a mail mark. The Breakdown adds **Prospects** (replied, auto-reply,
+    no reply yet, bounced) and **Emails per prospect** (1, 2, 3, 4 or more). The list (`EmailList.jsx`), for Gmail
+    mailboxes: **Sent / Replies / Bounced**, a row per prospect thread (the sheet's organisation when it matches, the
+    contact, subject, emails sent, the outcome; the drawer adds Open in Gmail), and the sheet's own list as **Sheet**.
+  - `SyncStatus.jsx`: opening Outreach asks Gmail to sync (the function skips mailboxes read in the last 10 minutes);
+    **Sync now** syncs the sheet and Gmail together; a first read chains runs while there's more (at most 30). The line
+    adds Gmail's state (reading, *N left*, synced, or a mailbox's error).
+  - **Settings → Outreach**: each mailbox row has **Connect Gmail** (a confirm says what is read and kept), then
+    *Gmail: address · synced …* or *Reading Gmail · N left*, **Reconnect Gmail** after an error, **Disconnect Gmail**
+    (confirm). The result of the trip to Google shows on that row, and a connect starts the first read at once.
+  - Store: `outreach.gmailStatus()`, `gmailDaily()`, `gmailBreakdown()`, `threads()`, `syncGmail({ force })`; actions
+    `connectMailboxGmail()`, `disconnectMailboxGmail()` (admins), `syncOutreachGmail()`. Demo mode: David's and Josh's
+    mailboxes are connected with seeded threads (from their sheet rows, with follow-ups, plus three sent by hand), Sarah's
+    stays on the sheet; Connect says live mode only; Disconnect, removing the address or the mailbox forgets as live does.
+- **Tests**: `scripts/test-db.mjs` phase 10 (re-runs, RLS and grants, connect, claim, save, Sydney days, sticky cold,
+  every forget path, the known lists, daily / breakdown / threads against the JS); `scripts/test-google.mjs` (mailbox
+  connect and callback, the gate, first read, history, the 404 rescan, caps and chaining, classification and the cold
+  rule, privacy: metadata only, no tokens or addresses in logs); `scripts/test-sync.mjs` (the lib, the demo seed,
+  `migrate()`).
+- **Later, not built**: the separate Workspace (@assetstack.org, @assetstackai.com.au) needs a second **Internal**
+  Google client in a Cloud project under that Workspace; each connection already stores its `client` key, so connect
+  would pick the client by the mailbox's domain (a `GOOGLE_CLIENTS` secret). Making the one client External instead
+  would need Google's verification and a yearly security assessment for Gmail access. Reply sorting fills
+  `reply_kind`, which needs reading the reply's text at sync time.

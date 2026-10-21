@@ -20,7 +20,9 @@ import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, p
 import { mentionedUserIds } from '@/lib/mentions';
 import { cleanTool } from '@/lib/tools';
 import { cleanCalendarEvent } from '@/lib/calendar';
-import { emailFromRow, filterEmails, outreachBreakdown, outreachDaily, parseAddresses } from '@/lib/outreach';
+import {
+  emailFromRow, filterEmails, filterThreads, gmailBreakdown, gmailDaily, outreachBreakdown, outreachDaily, parseAddresses, threadFromRow,
+} from '@/lib/outreach';
 import { createContractDoc, googleConnectUrl, sendGoogleEmail, sendInvoiceEmail } from '@/integrations/google';
 
 const KEY = 'assetstack-ops:v1';
@@ -215,6 +217,13 @@ function takeNew(existing, records, build, result) {
 // Every action edits a draft through mutate(fn) and may return a value (a new id, an import count). Returning false
 // means refused: mutate then saves nothing. `mode` supplies what differs per mode: reset / setMe / signOut (public),
 // read (fn of the current state), rpc + pull (live), and the finance file store (upload, fileUrl, removeFile).
+// Demo mode's copy of 0010's forgetting: a mailbox's Gmail connection, threads and messages go together.
+function forgetGmail(d, mailboxId) {
+  if (d.outreachGmail) delete d.outreachGmail[mailboxId];
+  if (d.outreachThreads) d.outreachThreads = d.outreachThreads.filter((t) => t.mailbox !== mailboxId);
+  if (d.outreachMessages) d.outreachMessages = d.outreachMessages.filter((x) => x.mailbox !== mailboxId);
+}
+
 function createActions(mutate, mode) {
   // fn runs only when the signed-in user may do it; otherwise false and nothing changes.
   const editing = (module, fn) => mutate((d) => (canEdit(d, module) ? fn(d) : false));
@@ -643,7 +652,12 @@ function createActions(mutate, mode) {
       const m = (d.mailboxes || []).find((x) => x.id === id);
       if (!m) return false;
       if ('name' in patch) { const name = textOf(patch.name).trim(); if (mailboxNameTaken(d, name, id)) return false; m.name = name; }
-      if ('addresses' in patch) m.addresses = parseAddresses(patch.addresses);
+      if ('addresses' in patch) {
+        m.addresses = parseAddresses(patch.addresses);
+        // Demo: as 0010's trigger does, a Gmail connection whose address is no longer listed goes, and its numbers.
+        const g = d.outreachGmail?.[id];
+        if (g && !m.addresses.includes(g.email)) forgetGmail(d, id);
+      }
       if ('owner' in patch) m.owner = userExists(d, patch.owner) ? patch.owner : '';
       if ('active' in patch) m.active = patch.active !== false;
       return true;
@@ -655,6 +669,7 @@ function createActions(mutate, mode) {
       d.mailboxes = d.mailboxes.filter((x) => x.id !== id);
       d.outreachNotes = (d.outreachNotes || []).filter((x) => x.mailbox !== id);
       (d.outreachEmails || []).forEach((e) => { if (e.mailbox === id) e.mailbox = ''; });
+      forgetGmail(d, id); // demo: its Gmail connection and numbers (live: on delete cascade)
       return true;
     }),
     moveMailbox: (id, dir) => admin((d) => step(d.mailboxes || [], (d.mailboxes || []).findIndex((x) => x.id === id), dir)),
@@ -1064,6 +1079,29 @@ function createActions(mutate, mode) {
       await mode.flush(); // a sheet link just saved goes first
       return mode.invoke('google/outreach-sync', {});
     },
+    // Outreach from Gmail (0010): an admin connects a mailbox's Gmail (read only), signing in as that mailbox; it comes back
+    // to Settings → Outreach. → Promise<{ ok: true, url } | { ok: false, error }>
+    connectMailboxGmail: async (mailboxId) => {
+      const allowed = mode.read((st) => isAdmin(st) && (st.mailboxes || []).some((m) => m.id === mailboxId));
+      if (!allowed) return { ok: false, error: 'Only an admin can connect a mailbox.' };
+      return googleConnectUrl(mode.invoke, window.location.origin, 'mailbox', { mailbox: mailboxId });
+    },
+    // Admins: the mailbox's Gmail connection goes, and its Gmail numbers with it. → Promise<boolean>
+    disconnectMailboxGmail: async (mailboxId) => {
+      if (mode.live) return mode.gmailDisconnect(mailboxId);
+      return admin((d) => {
+        if (!d.outreachGmail?.[mailboxId]) return false;
+        forgetGmail(d, mailboxId);
+        return true;
+      }) !== false;
+    },
+    // Read every connected mailbox's Gmail into Outreach now (anyone who can see Outreach). `force`: don't wait for the
+    // 10-minute gap. → { ok, claimed, synced, failed, more, pending }
+    syncOutreachGmail: async ({ force = false } = {}) => {
+      const allowed = mode.read((st) => canView(st, 'outreach'));
+      if (!allowed) return { ok: false, error: 'You don’t have access to Outreach.' };
+      return mode.invoke('google/outreach-gmail-sync', { force: Boolean(force) });
+    },
     // Outreach: read the sheet with my Google account from now on (admins; live mode). → { ok } | { ok: false, error }
     takeOutreachSheet: async () => {
       const allowed = mode.read((st) => isAdmin(st) && Boolean(st.outreachSheet));
@@ -1297,6 +1335,7 @@ function DemoProvider({ children }) {
     takeOutreachSheet: async () => ({ ok: false, error: 'Syncing the sheet works in live mode only.' }),
     googleDisconnect: async () => false,
     calendarStop: async () => false,
+    gmailDisconnect: async () => false,
     refreshGoogle: async () => {},
   }), [mutate, commit]);
 
@@ -1374,8 +1413,26 @@ function liveCalendar(syncCalendar) {
 //   sync() → { stats } (live only: the google function)
 function demoOutreach(state) {
   const rows = state?.outreachEmails || [];
+  const threads = state?.outreachThreads || [];
+  const messages = state?.outreachMessages || [];
+  const gmail = state?.outreachGmail || {};
   return {
     live: false,
+    // Gmail (0010): the demo's connected mailboxes, their threads and messages, by the same rules as the database.
+    gmailStatus: async () => ({
+      ok: true,
+      mailboxes: (state?.mailboxes || []).map((m) => {
+        const g = gmail[m.id];
+        return {
+          mailbox: m.id, connected: Boolean(g), email: g?.email || '', connectedAt: g?.connectedAt || '', syncedAt: g?.syncedAt || '',
+          ready: Boolean(g?.readyAt), pending: 0, error: '', reconnect: false,
+        };
+      }),
+    }),
+    gmailDaily: async (from, to) => ({ ok: true, rows: gmailDaily(threads, messages, from, to) }),
+    gmailBreakdown: async (from, to) => ({ ok: true, rows: gmailBreakdown(threads, from, to) }),
+    threads: async (opts = {}) => (opts.mailbox === '' ? { ok: true, rows: [], more: false } : { ok: true, ...filterThreads(threads, rows, opts) }),
+    syncGmail: async () => ({ ok: false, error: 'Google works in live mode only.' }),
     daily: async (from, to) => ({ ok: true, rows: outreachDaily(rows, from, to) }),
     breakdown: async (from, to) => ({ ok: true, rows: outreachBreakdown(rows, from, to) }),
     emails: async (opts = {}) => ({ ok: true, ...filterEmails(rows, opts) }),
@@ -1385,10 +1442,53 @@ function demoOutreach(state) {
 }
 
 const OUTREACH_DAY = { sent: 'sent_on', replies: 'reply_on', logged: 'date_logged' };
-function liveOutreach(syncOutreach, flush) {
+function liveOutreach(syncOutreach, flush, syncGmail) {
   const failed = (error) => ({ ok: false, error: error?.message || String(error || 'Request failed') });
+  const day = (v) => String(v ?? '').slice(0, 10);
   return {
     live: true,
+    // Gmail (0010): read on demand through 0010's functions (RLS: Outreach view).
+    gmailStatus: async () => {
+      try {
+        const { data, error } = await supabase.rpc('outreach_gmail_status');
+        if (error) return failed(error);
+        return {
+          ok: true,
+          mailboxes: (data?.mailboxes || []).map((m) => ({
+            mailbox: m.mailbox_id, connected: Boolean(m.connected), email: m.email || '', connectedAt: m.connected_at || '',
+            syncedAt: m.synced_at || '', ready: Boolean(m.ready), pending: Number(m.pending) || 0, error: m.error || '', reconnect: Boolean(m.reconnect),
+          })),
+        };
+      } catch (e) { return failed(e); }
+    },
+    gmailDaily: async (from, to) => {
+      try {
+        const { data, error } = await supabase.rpc('outreach_gmail_daily', { p_from: from, p_to: to });
+        if (error) return failed(error);
+        return { ok: true, rows: (data || []).map((r) => ({
+          day: day(r.day), mailbox: r.mailbox_id || '', sent: r.sent, started: r.started, replies: r.replies, autos: r.autos, bounces: r.bounces,
+        })) };
+      } catch (e) { return failed(e); }
+    },
+    gmailBreakdown: async (from, to) => {
+      try {
+        const { data, error } = await supabase.rpc('outreach_gmail_breakdown', { p_from: from, p_to: to });
+        if (error) return failed(error);
+        return { ok: true, rows: (data || []).map((r) => ({ mailbox: r.mailbox_id || '', kind: r.kind, value: r.value || '', n: r.n })) };
+      } catch (e) { return failed(e); }
+    },
+    threads: async ({ mailbox = null, from, to, search = '', only = 'sent', limit = 50, offset = 0 } = {}) => {
+      if (mailbox === '') return { ok: true, rows: [], more: false }; // Unassigned: Gmail threads always have a mailbox
+      try {
+        const { data, error } = await supabase.rpc('outreach_gmail_threads', {
+          p_mailbox: mailbox, p_from: from, p_to: to, p_only: only, p_search: String(search ?? '').trim(), p_limit: limit + 1, p_offset: offset,
+        });
+        if (error) return failed(error);
+        const list = (data || []).map(threadFromRow);
+        return { ok: true, rows: list.slice(0, limit), more: list.length > limit };
+      } catch (e) { return failed(e); }
+    },
+    syncGmail: (opts) => syncGmail(opts),
     daily: async (from, to) => {
       try {
         const { data, error } = await supabase.rpc('outreach_daily', { p_from: from, p_to: to });
@@ -1855,6 +1955,15 @@ function LiveProvider({ userId, children }) {
           return false;
         }
       },
+      // 0010: an admin removes a mailbox's Gmail connection; the database forgets its Gmail numbers.
+      gmailDisconnect: async (mailboxId) => {
+        try {
+          const { data, error } = await supabase.rpc('outreach_gmail_disconnect', { p_mailbox: mailboxId });
+          return !error && Boolean(data);
+        } catch {
+          return false;
+        }
+      },
       // 0009: the calendar flag off (or a calendar-only connection removed); the database forgets the meetings.
       calendarStop: async () => {
         try {
@@ -1885,7 +1994,7 @@ function LiveProvider({ userId, children }) {
     });
   }, [mutate, refreshGoogle, flushSoon]);
 
-  const outreach = useMemo(() => liveOutreach(actions.syncOutreach, flushSoon), [actions, flushSoon]);
+  const outreach = useMemo(() => liveOutreach(actions.syncOutreach, flushSoon, actions.syncOutreachGmail), [actions, flushSoon]);
   const calendar = useMemo(() => liveCalendar(actions.syncCalendar), [actions]);
   const value = useMemo(() => ({ state, actions, sync, google, outreach, calendar }), [state, actions, sync, google, outreach, calendar]);
 

@@ -8,10 +8,11 @@ import { isEmail, taxInvoiceModel } from '../lib/taxInvoice.js';
 const str = (v) => String(v ?? '').trim();
 const MAX_RECIPIENTS = 10;
 
-/** Start connecting: the Google consent page to send the browser to. It comes back to Settings, or with
- *  purpose 'calendar' (anyone: read-only Google Calendar for the team Calendar) to the Calendar. */
-export async function googleConnectUrl(invoke, origin, purpose) {
-  const res = await invoke('google/connect', purpose ? { origin, purpose } : { origin });
+/** Start connecting: the Google consent page to send the browser to. It comes back to Settings → Business; with purpose
+ *  'calendar' (anyone: read-only Google Calendar for the team Calendar) to the Calendar; with purpose 'mailbox' and
+ *  `{ mailbox }` (admins: an outreach mailbox's Gmail, read only) to Settings → Outreach. */
+export async function googleConnectUrl(invoke, origin, purpose, extra = {}) {
+  const res = await invoke('google/connect', purpose ? { origin, purpose, ...extra } : { origin });
   return res.ok && res.url ? { ok: true, url: res.url } : { ok: false, error: res.error || 'Could not start connecting Google.' };
 }
 

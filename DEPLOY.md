@@ -76,9 +76,10 @@ then `0006_boards.sql` (the boards under Projects and Marketing, and each person
 Outreach and Clients, `docs/PHASE2.md` §13), then `0008_pipeline_stages.sql` (Pipeline's stages: Opportunities →
 Contacted → First meetings → Demos, and Work in Progress under the deals; `docs/PHASE2.md` §14), then
 `0009_calendar.sql` (the team Calendar and the boards' 3-month calendar; Google meetings need section 13;
-`docs/PHASE2.md` §15).
+`docs/PHASE2.md` §15), then `0010_outreach_gmail.sql` (Outreach counted from each mailbox's Gmail; section 14;
+`docs/PHASE2.md` §16).
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0010_…`). Run each new file
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0011_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one.
 
 **0003 on a database that already has 0002**: **SQL Editor** → **+** → **Create a new snippet**, paste
@@ -154,6 +155,12 @@ merged, take it from its branch on GitHub). It adds the team's Calendar events, 
 schedule** (**Table Editor** → `boards`: `calendar` is true for it). Run it **before** the new app goes live: the new
 app reads and writes these and fails to load without them (the app that's live now works with it). Nobody needs to close
 Cortex, and it is safe to run again.
+
+**0010 on an existing database**: run it after `0009`, the same way (`supabase/migrations/0010_outreach_gmail.sql`;
+until merged, take it from its branch on GitHub). It adds each outreach mailbox's Gmail connection (unreadable from the
+app), the cold threads and messages read from Gmail (only the `google` function writes them) and the functions Outreach
+reads them through. Run it **before** the new app goes live (the app that's live now works with it). Nobody needs to
+close Cortex, and it is safe to run again.
 
 ### Upgrading an existing project
 
@@ -530,12 +537,72 @@ client, the Supabase secrets and the `google` function). Contract: `docs/PHASE2.
   and its default visibility don't change what Cortex reads with your own account, so to keep a meeting's title off the
   team Calendar, set that event to Private (or don't connect).
 
+## 14. Outreach from Gmail (each mailbox's cold emails)
+
+Once an admin connects a mailbox's **Gmail**, Outreach counts that mailbox straight from Gmail: every cold email it
+sends (the first email to a new outside contact and each follow-up in that thread, whether the agent sent it or someone
+typed it), the prospects emailed, and what came back: a reply, an auto-reply or out-of-office, or a bounce. A **new
+outside contact** is someone outside AssetStack who isn't a colleague, a client contact, an invoice recipient or at a
+client's domain, and has never written to that mailbox before. The agent's sheet stays its log: meetings, and each
+prospect's organisation, role and tier, still come from it, and a mailbox without Gmail connected is still counted from
+the sheet. Cortex reads each mailbox **read only** and keeps, per cold thread, who it went to, when, the subject of our
+first email and when the answer came: **never the text of any email**. Emails to clients and colleagues, newsletters
+sent as Bcc, calendar invites and everything else in the mailbox aren't kept. This needs section 11 steps 1–3 and
+section 12 done. Contract: `docs/PHASE2.md` §16.
+
+1. **Database**: run `0010_outreach_gmail.sql` (section 2, *0010 on an existing database*).
+2. **Google Cloud** (<https://console.cloud.google.com>, the Cortex project):
+   - **APIs & Services** → **Library** → **Gmail API**: it shows **Manage** if it's already on (it is, for invoice
+     email); otherwise **Enable**.
+   - **Google Auth Platform** → **Data Access** → **Add or remove scopes**: tick `.../auth/gmail.readonly` (add it under
+     **Manually add scopes** if it isn't listed) → **Update** → **Save**. The consent screen is **Internal**, so Google
+     doesn't review it.
+3. **Google Workspace** (<https://admin.google.com>, only if connecting is blocked in step 6): **Security** → **Access
+   and data control** → **API controls** → **Manage Third-Party App Access** → find **Cortex** (or **Configure new
+   app** and search for the client ID from section 11) → **Trusted**. Workspaces that limit Gmail access to trusted
+   apps need this.
+4. **Redeploy the `google` function**: Supabase → **Edge Functions** → `google` → **Code**. Replace all of it with the
+   new `supabase/functions/google/index.ts` (GitHub → **Raw**, copy all; before the merge in step 5, from the change's
+   branch or pull request, since `main` still has the old one) → **Deploy** (it may read **Deploy updates**). The new
+   file is safe to deploy first: the invoice, contract, sheet and calendar routes are unchanged. **Enforce JWT
+   verification** stays **off**; the secrets don't change.
+5. **Deploy the new app** (it goes live with the merge to `main`) once 0010 has run, and reload Cortex.
+6. **Connect each mailbox**: **Settings** → **Outreach** → **Mailboxes**. Each mailbox must list its
+   `@assetstackai.com` address. On its row: **Connect Gmail** → **Connect** → Google opens with that address: sign in
+   **as the mailbox** (not as yourself, unless it is your own mailbox) → **Allow**. Whoever connects must be a Cortex
+   admin and able to sign in to that mailbox (its owner, or an admin with its password). Back in Settings the row reads
+   *Reading Gmail · N left* while Cortex reads the last 90 days, then *Gmail: address · synced …*. Leave Settings or
+   Outreach open until then: the first read runs in steps of a few hundred threads, and only while a page is open.
+7. **Tell the team** what Cortex reads and keeps (above), and that the Outreach numbers for a connected mailbox now
+   come from Gmail.
+
+**How it counts**
+- **Sent**: our cold emails (first emails and follow-ups) on the Sydney day they went. **Prospects**: threads started.
+  **Replies**: prospects who answered (once per thread, on the day of their first reply). **Reply rate**: replies ÷
+  prospects. **Bounces**: threads that bounced. **Meetings**: from the sheet. Opens stay *Not tracked*.
+- A thread is judged once, when Cortex first sees it: our first message, to one to five outside people, none of them
+  known (above). Replies, auto-replies and bounces in it are counted as they arrive; a reply to someone else's thread
+  is never counted.
+- Opening Outreach reads new mail when a mailbox was last read over 10 minutes ago; **Sync now** reads at once (with
+  the sheet). Nothing reads on a timer.
+- **Disconnect Gmail** (same row) removes that mailbox's Gmail numbers at once, and Outreach counts it from the sheet
+  again. Taking the connected address off the mailbox, or reconnecting as a different account, does the same; switching
+  the mailbox off keeps its numbers and stops reading. If the row says *reconnect* (the mailbox's password changed, or
+  its access was removed at Google), click **Reconnect Gmail**.
+- Only `@assetstackai.com` mailboxes for now. `@assetstack.org` and `@assetstackai.com.au` are a separate Workspace:
+  they need their own Google client there before they can connect (`docs/PHASE2.md` §16, *Later*).
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | Connecting Google says "Google didn't accept Cortex's Google key" | The function's `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` (Supabase → Edge Functions → **Secrets**) aren't a matching, enabled pair on the Google client. Google shows a secret only once: add a new one (section 11 step 1) and put it in both the function secret and **Authentication** → **Google**. The function's **Logs** show each failed connect as a `google callback:` line with Google's or the database's reason. |
 | **Connect Google Calendar** says "Only admins can use Google from Cortex.", or the Calendar's sync says "Not found." | The `google` function still runs the old code: redeploy it (section 13 step 3). |
+| **Connect Gmail** comes back with "Sign in as one of this mailbox's addresses" | Google was signed in as someone else, or the account isn't listed on the mailbox. Connect again and pick (or add) the mailbox's own account. |
+| Google: "Access blocked: … admin_policy_enforced", or "Cortex needs permission to access resources in your organization" when connecting Gmail | The Workspace limits Gmail to trusted apps: section 14 step 3. |
+| **Connect Gmail** comes back with "Allow Cortex to read Gmail to connect it" | The Gmail box was unticked on Google's screen, or the scope is missing from **Data Access** (section 14 step 2). Connect again and leave it ticked. |
+| Outreach says "Reading Gmail" for a long time | The first read runs only while Outreach or Settings is open (a few hundred threads a step). Keep one open; **Sync now** picks it up again. |
+| A mailbox's numbers changed when its Gmail was read | Expected: Gmail counts every cold email it sent (follow-ups too, and ones the agent didn't log) to new outside contacts only, where the sheet counted the emails the agent logged. |
 | "Only @assetstackai.com Google accounts can sign in." | A personal Google account was chosen. Sign in with the work account. |
 | Google: "Access blocked … can only be used within its organization" | The account isn't in the Workspace. Expected for outsiders. |
 | Google: `redirect_uri_mismatch` | The redirect URI in the Google client must be exactly `https://<project-ref>.supabase.co/auth/v1/callback`. |
