@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpDown, Calendar, Columns3, ListFilter, MoreHorizontal, Pencil, Plus, Table2, Trash2, User } from 'lucide-react';
+import {
+  ArrowDown, ArrowUp, ArrowUpDown, Calendar, CalendarDays, CalendarOff, Columns3, ListFilter, MoreHorizontal, Pencil, Plus, Table2, Trash2, User,
+} from 'lucide-react';
 import { useStore } from '@/data/store';
 import { useAccess } from '@/lib/access';
 import { BOARD_SCHEMAS, STATUS, hasDates, itemWord } from '@/data/boards';
@@ -11,6 +13,7 @@ import { hashParam } from '@/lib/router';
 import TableView from './TableView';
 import KanbanView from './KanbanView';
 import CalendarView from './CalendarView';
+import BoardCalendar from './BoardCalendar';
 import ItemDrawer from './ItemDrawer';
 
 const VIEWS = [
@@ -178,6 +181,13 @@ export default function Board({ board, embedded = false }) {
         <Popover anchor={optionsAnchor} open={popover === 'options'} onClose={() => setPopover(null)} width={190} align="right">
           <div className="flex flex-col">
             <button type="button" className={MENU_ITEM} onClick={fromMenu(() => setRenaming(true))}><Pencil className="h-4 w-4 dim" />Rename</button>
+            {/* The 3-month calendar above its tasks (0009; on for Posting schedule to start). */}
+            {dated && (
+              <button type="button" className={MENU_ITEM} onClick={fromMenu(() => actions.setBoardCalendar(board.id, !board.calendar))}>
+                {board.calendar ? <CalendarOff className="h-4 w-4 dim" /> : <CalendarDays className="h-4 w-4 dim" />}
+                {board.calendar ? 'Hide calendar' : 'Show calendar'}
+              </button>
+            )}
             {!embedded && (
               <>
                 <button type="button" className={MENU_ITEM} disabled={at <= 0} onClick={fromMenu(() => actions.moveBoard(board.id, -1))}><ArrowUp className="h-4 w-4 dim" />Move up</button>
@@ -193,6 +203,7 @@ export default function Board({ board, embedded = false }) {
         {goes.length ? `Its ${goes.join(' and ')} ${groupCount + taskCount === 1 ? 'is' : 'are'} deleted too.` : null}
       </ConfirmModal>
 
+      {board.calendar && !board.owner && dated && view !== 'calendar' && <BoardCalendar groups={groups} onOpen={setOpenId} />}
       {view === 'table' && <TableView boardId={board.id} schema={schema} groups={groups} onOpen={setOpenId} onAdd={add} readOnly={!editable} />}
       {view === 'kanban' && <KanbanView boardId={board.id} groups={groups} sortDue={sortDue} onOpen={setOpenId} readOnly={!editable} />}
       {view === 'calendar' && <CalendarView groups={groups} onOpen={setOpenId} />}

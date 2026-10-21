@@ -2,9 +2,10 @@
 // The function is plain JavaScript in a .ts file (so it can be pasted into the Supabase dashboard); a load hook hands it
 // to Node as an ES module. PostgREST and Google are a fake fetch that answers per URL and records every call.
 // Covers CORS, the caller check, connect / callback (signed state, your own account only), send (validation and the
-// MIME message Gmail gets), contract (Drive copy, .docx conversion, placeholders) and outreach-sync (the agent's sheet
-// into outreach_emails, the Summary, Notes and mailbox tabs back, never over the agent's tab, sync_error). Exits
-// non-zero when any check fails.
+// MIME message Gmail gets), contract (Drive copy, .docx conversion, placeholders), outreach-sync (the agent's sheet
+// into outreach_emails, the Summary, Notes and mailbox tabs back, never over the agent's tab, sync_error) and the
+// calendar (a staff member's calendar connect and callback, calendar-sync: claim, events.list, the rows calendar_save
+// gets, reconnects and per-person failures). Exits non-zero when any check fails.
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
 
@@ -1717,6 +1718,448 @@ await check('outreach errors: saved as sync_error and returned; never a token; t
   assert.equal(settingsDown.status, 502);
   assert.deepEqual(settingsDown.data, { error: 'Could not read the outreach settings.' });
   assert.equal(settingsDown.patches.length, 0);
+});
+
+// ── Calendar ────────────────────────────────────────────────────────────────────────────────────────────────────
+// Fictional people and events only (example.com).
+
+const CAL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+const CAL_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
+const CAL_SCOPES = `openid email ${CAL_SCOPE}`;
+const CAL_FIELDS = 'nextPageToken,items(id,status,summary,visibility,start,end,eventType,attendees(self,responseStatus))';
+const NOT_ADMIN = 'Only admins can use Google from Cortex.';
+const CAL_RECONNECT = 'Google Calendar needs reconnecting.';
+const STAFF = { ...ME, uid: 'u-sam', name: 'Sam Example', email: 'sam@example.com', admin: false };
+const asStaff = { [`${RPC}/google_me`]: () => reply(200, STAFF) };
+const U1 = 'c0000000-0000-4000-8000-0000000000a1';
+const U2 = 'c0000000-0000-4000-8000-0000000000a2';
+const U3 = 'c0000000-0000-4000-8000-0000000000a3';
+const calendarPage = (result) => `${ORIGIN}/#/calendar?google=${result}`;
+const calState = (over = {}) => stateFor({ purpose: 'calendar', ...over });
+const calToken = (over = {}) => ({
+  access_token: 'first-access-token', refresh_token: 'new-refresh-token', scope: CAL_SCOPES, token_type: 'Bearer', id_token: idToken({}), ...over,
+});
+const SECRETS = ['Dial-in PIN 4321', '1 Example St', 'meet.google.com', 'pat@example.com', 'Dentist', 'Salary review', 'Declined workshop', 'Cancelled call', 'Pat’s birthday'];
+
+const EVENTS = [
+  {
+    id: 'ev-timed', status: 'confirmed', summary: '  Weekly sync with Example Council  ', description: 'Dial-in PIN 4321', location: '1 Example St, Sydney',
+    hangoutLink: 'https://meet.google.com/xyz-abcd-efg', visibility: 'default', eventType: 'default',
+    start: { dateTime: '2026-10-21T09:30:00+11:00', timeZone: 'Australia/Sydney' }, end: { dateTime: '2026-10-21T10:00:00+11:00', timeZone: 'Australia/Sydney' },
+    attendees: [{ self: true, responseStatus: 'accepted', email: 'ana@example.com' }],
+  },
+  { id: 'ev-overnight', status: 'confirmed', summary: 'Flight to Perth', start: { dateTime: '2026-10-21T23:00:00Z' }, end: { dateTime: '2026-10-22T02:15:00Z' } },
+  { id: 'ev-allday', status: 'confirmed', summary: 'Example Expo', start: { date: '2026-10-26' }, end: { date: '2026-10-29' } },
+  { id: 'ev-oneday', status: 'confirmed', summary: 'Public holiday', start: { date: '2026-10-30' }, end: { date: '2026-10-31' } },
+  { id: 'ev-private', status: 'confirmed', visibility: 'private', summary: 'Dentist', start: { dateTime: '2026-10-22T14:00:00+08:00' }, end: { dateTime: '2026-10-22T15:00:00+08:00' } },
+  { id: 'ev-confidential', status: 'confirmed', visibility: 'confidential', summary: 'Salary review', start: { date: '2026-11-02' }, end: { date: '2026-11-03' } },
+  { id: 'ev-ooo', status: 'confirmed', eventType: 'outOfOffice', summary: 'Out of office', start: { dateTime: '2026-11-05T00:00:00+04:00' }, end: { dateTime: '2026-11-06T00:00:00+04:00' } },
+  { id: 'ev-tentative', status: 'tentative', summary: 'Maybe lunch', start: { dateTime: '2026-10-27T03:00:00Z' }, end: { dateTime: '2026-10-27T04:00:00Z' }, attendees: [{ self: true, responseStatus: 'tentative' }] },
+  { id: 'ev-cancelled', status: 'cancelled', summary: 'Cancelled call', start: { dateTime: '2026-10-23T01:00:00Z' }, end: { dateTime: '2026-10-23T02:00:00Z' } },
+  { id: 'ev-declined', status: 'confirmed', summary: 'Declined workshop', start: { dateTime: '2026-10-24T01:00:00Z' }, end: { dateTime: '2026-10-24T02:00:00Z' }, attendees: [{ self: true, responseStatus: 'declined' }] },
+  { id: 'ev-other-declined', status: 'confirmed', summary: 'Not my decline', start: { dateTime: '2026-10-28T03:00:00Z' }, end: { dateTime: '2026-10-28T03:30:00Z' }, attendees: [{ email: 'pat@example.com', responseStatus: 'declined' }] },
+  { id: 'ev-working', status: 'confirmed', eventType: 'workingLocation', summary: 'Home', start: { date: '2026-10-21' }, end: { date: '2026-10-22' } },
+  { id: 'ev-birthday', status: 'confirmed', eventType: 'birthday', summary: 'Pat’s birthday', start: { date: '2026-10-24' }, end: { date: '2026-10-25' } },
+];
+const timed = (google_id, title, start_at, end_at, busy = false) => ({
+  google_id, title, busy, all_day: false, start_date: start_at.slice(0, 10), end_date: end_at.slice(0, 10), start_at, end_at,
+});
+const allDay = (google_id, title, start_date, end_date, busy = false) => ({
+  google_id, title, busy, all_day: true, start_date, end_date, start_at: null, end_at: null,
+});
+const ROWS = [
+  timed('ev-timed', 'Weekly sync with Example Council', '2026-10-20T22:30:00.000Z', '2026-10-20T23:00:00.000Z'),
+  timed('ev-overnight', 'Flight to Perth', '2026-10-21T23:00:00.000Z', '2026-10-22T02:15:00.000Z'),
+  allDay('ev-allday', 'Example Expo', '2026-10-26', '2026-10-28'),
+  allDay('ev-oneday', 'Public holiday', '2026-10-30', '2026-10-30'),
+  timed('ev-private', '', '2026-10-22T06:00:00.000Z', '2026-10-22T07:00:00.000Z', true),
+  allDay('ev-confidential', '', '2026-11-02', '2026-11-02', true),
+  timed('ev-ooo', 'Out of office', '2026-11-04T20:00:00.000Z', '2026-11-05T20:00:00.000Z'),
+  timed('ev-tentative', 'Maybe lunch', '2026-10-27T03:00:00.000Z', '2026-10-27T04:00:00.000Z'),
+  timed('ev-other-declined', 'Not my decline', '2026-10-28T03:00:00.000Z', '2026-10-28T03:30:00.000Z'),
+];
+
+// PostgREST and Google for calendar-sync: each claimed person has their own stored refresh token
+// (stored-refresh-token-<id>), which the token endpoint swaps for their own access token (fresh-access-token-<id>).
+function calendarRoutes({
+  claim = [U1], scopes = `${g.SCOPES} ${CAL_SCOPE}`, events = EVENTS, save = () => reply(200, true),
+} = {}) {
+  return {
+    [`${RPC}/calendar_claim`]: () => reply(200, claim),
+    [`${RPC}/calendar_save`]: save,
+    [`${RPC}/google_token`]: (c) => {
+      const user = c.json().p_user;
+      return reply(200, { email: 'person@example.com', refresh_token: `stored-refresh-token-${user}`, scopes: typeof scopes === 'function' ? scopes(user) : scopes });
+    },
+    [TOKEN_URL]: (c) => reply(200, {
+      access_token: c.form.get('refresh_token').replace('stored-refresh-token', 'fresh-access-token'), expires_in: 3599, token_type: 'Bearer',
+    }),
+    [CAL]: typeof events === 'function' ? events : () => reply(200, { kind: 'calendar#events', items: events }),
+  };
+}
+
+/** One calendar-sync request. → run()'s result plus logs, the window(s) it may have used, the saves and the events calls. */
+async function calSync({ body = {}, routes = {}, ...opts } = {}, runOpts = {}) {
+  const logs = [];
+  const original = console.error;
+  console.error = (...args) => logs.push(args.map(String).join(' '));
+  try {
+    const before = new Date();
+    const r = await run('calendar-sync', { body, routes: { ...calendarRoutes(opts), ...routes }, ...runOpts });
+    const after = new Date();
+    const saves = r.to(`${RPC}/calendar_save`);
+    // Sydney's day when the run started: the one before the request or the one after it (a run across midnight).
+    const windows = [before, after].map((t) => g.calendarWindow(g.teamToday(t)));
+    return { ...r, logs, before, after, windows, saves, saved: saves.map((c) => c.json()), events: r.to(CAL) };
+  } finally {
+    console.error = original;
+  }
+}
+const personOf = (call) => call.headers.get('authorization').replace('Bearer fresh-access-token-', '');
+const noTokens = (r) => {
+  const everything = [r.text, ...r.saves.map((c) => c.body), ...r.to(`${RPC}/calendar_claim`).map((c) => c.body), ...r.logs].join('\n');
+  assert.ok(!/access-token|refresh-token/.test(everything), 'no Google token in a calendar_save body, the claim, the response or the logs');
+};
+
+await check('calendar helpers: hasCalendar wants a calendar scope as a whole entry of the list', () => {
+  for (const yes of [CAL_SCOPES, 'https://www.googleapis.com/auth/calendar', `${g.SCOPES} ${CAL_SCOPE}`, `openid\t${CAL_SCOPE}\nemail`, ` ${CAL_SCOPE} `]) {
+    assert.equal(g.hasCalendar(yes), true, yes);
+  }
+  for (const no of [
+    '', null, undefined, 'openid email', g.SCOPES, `${CAL_SCOPE}.extra`, 'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/calendar.readonlyx', `x${CAL_SCOPE}`, 'https://www.googleapis.com/auth/calendar/', 'calendar.readonly',
+  ]) assert.equal(g.hasCalendar(no), false, String(no));
+  assert.equal(g.CALENDAR_SCOPES, CAL_SCOPES);
+});
+
+await check('calendar helpers: calendarWindow is last month’s first day to month +11’s last, padded a day each side in UTC', () => {
+  assert.deepEqual(g.calendarWindow('2026-10-21'), {
+    from: '2026-09-01', to: '2027-09-30', timeMin: '2026-08-31T00:00:00Z', timeMax: '2027-10-02T00:00:00Z',
+  });
+  assert.deepEqual(g.calendarWindow('2026-01-05'), { from: '2025-12-01', to: '2026-12-31', timeMin: '2025-11-30T00:00:00Z', timeMax: '2027-01-02T00:00:00Z' });
+  assert.deepEqual(g.calendarWindow('2026-12-31'), { from: '2026-11-01', to: '2027-11-30', timeMin: '2026-10-31T00:00:00Z', timeMax: '2027-12-02T00:00:00Z' });
+  assert.deepEqual(g.calendarWindow('2027-03-01'), { from: '2027-02-01', to: '2028-02-29', timeMin: '2027-01-31T00:00:00Z', timeMax: '2028-03-02T00:00:00Z' }, 'a leap February');
+  assert.deepEqual(g.calendarWindow('2026-03-31'), { from: '2026-02-01', to: '2027-02-28', timeMin: '2026-01-31T00:00:00Z', timeMax: '2027-03-02T00:00:00Z' });
+  for (const bad of ['', null, '2026-13-01', '2026-02-30', '21/10/2026', '2026-10-21T00:00:00Z']) assert.throws(() => g.calendarWindow(bad), String(bad));
+  // Sydney's day (AEDT, UTC+11, in October 2026).
+  assert.equal(g.teamToday(new Date('2026-10-21T12:59:00Z')), '2026-10-21');
+  assert.equal(g.teamToday(new Date('2026-10-21T13:00:00Z')), '2026-10-22');
+});
+
+await check('calendar helpers: meetingRow keeps only the title and times; drops cancelled, declined, working location and birthdays', () => {
+  assert.deepEqual(EVENTS.map(g.meetingRow).filter(Boolean), ROWS);
+  const dropped = EVENTS.filter((ev) => g.meetingRow(ev) === null).map((ev) => ev.id);
+  assert.deepEqual(dropped, ['ev-cancelled', 'ev-declined', 'ev-working', 'ev-birthday']);
+  for (const row of EVENTS.map(g.meetingRow).filter(Boolean)) {
+    assert.deepEqual(Object.keys(row), ['google_id', 'title', 'busy', 'all_day', 'start_date', 'end_date', 'start_at', 'end_at']);
+  }
+  const at = (over) => g.meetingRow({ id: 'x', summary: 'T', start: { dateTime: '2026-10-21T01:00:00Z' }, end: { dateTime: '2026-10-21T02:00:00Z' }, ...over });
+  assert.equal(at({ summary: 'é'.repeat(250) }).title, 'é'.repeat(200), 'at most 200 characters');
+  assert.equal(at({ summary: '😀'.repeat(250) }).title, '😀'.repeat(200), 'characters, not UTF-16 units');
+  assert.equal(at({ summary: undefined }).title, '');
+  assert.deepEqual([at({ visibility: 'private' }).busy, at({ visibility: 'private' }).title], [true, '']);
+  assert.deepEqual([at({ visibility: 'public' }).busy, at({ visibility: 'public' }).title], [false, 'T']);
+  assert.deepEqual(at({ end: { dateTime: '2026-10-20T23:00:00Z' } }), timed('x', 'T', '2026-10-21T01:00:00.000Z', '2026-10-21T01:00:00.000Z'), 'an end before the start → the start');
+  assert.deepEqual(at({ end: undefined }), timed('x', 'T', '2026-10-21T01:00:00.000Z', '2026-10-21T01:00:00.000Z'));
+  assert.deepEqual(at({ start: { date: '2026-10-30' }, end: { date: '2026-10-30' } }), allDay('x', 'T', '2026-10-30', '2026-10-30'), 'never ends before it starts');
+  assert.deepEqual(at({ start: { date: '2026-10-30' }, end: {} }), allDay('x', 'T', '2026-10-30', '2026-10-30'));
+  assert.deepEqual(at({ start: { date: '2026-12-31' }, end: { date: '2027-01-03' } }), allDay('x', 'T', '2026-12-31', '2027-01-02'));
+  assert.deepEqual(at({ start: { date: '2028-02-28' }, end: { date: '2028-03-01' } }), allDay('x', 'T', '2028-02-28', '2028-02-29'));
+  assert.equal(at({ attendees: [{ self: true, responseStatus: 'accepted' }, { responseStatus: 'declined' }] }).google_id, 'x');
+  for (const bad of [
+    null, 'event', {}, { summary: 'no id' }, { id: '', summary: 'T' }, { id: 'x' }, { id: 'x', start: {} }, { id: 'x', start: { date: '2026-02-30' } },
+    { id: 'x', start: { dateTime: 'soon' } },
+  ]) assert.equal(g.meetingRow(bad), null, JSON.stringify(bad));
+});
+
+await check('calendar connect: any staff member; calendar.readonly only, offline, consent, include_granted_scopes, purpose in the state', async () => {
+  const r = await run('connect', { body: { origin: ORIGIN, purpose: 'calendar' }, routes: asStaff });
+  assert.equal(r.status, 200);
+  assert.deepEqual(Object.keys(r.data), ['url']);
+  const url = new URL(r.data.url);
+  assert.equal(`${url.origin}${url.pathname}`, 'https://accounts.google.com/o/oauth2/v2/auth');
+  const { state, ...rest } = Object.fromEntries(url.searchParams);
+  assert.deepEqual(rest, {
+    client_id: ENV.GOOGLE_CLIENT_ID, redirect_uri: `${SUPABASE}/functions/v1/google/callback`, response_type: 'code',
+    scope: 'openid email https://www.googleapis.com/auth/calendar.readonly', access_type: 'offline', prompt: 'consent',
+    include_granted_scopes: 'true', hd: 'assetstackai.com', login_hint: 'sam@example.com',
+  });
+  const payload = await g.verifyState(state, SECRET);
+  assert.deepEqual([payload.uid, payload.email, payload.origin, payload.purpose], ['u-sam', 'sam@example.com', ORIGIN, 'calendar']);
+  assert.equal(r.to(`${RPC}/google_token`).length + r.to(TOKEN_URL).length, 0);
+
+  const admin = await run('connect', { body: { origin: ORIGIN, purpose: 'calendar' } });
+  assert.equal(new URL(admin.data.url).searchParams.get('scope'), CAL_SCOPES, 'admins connect their calendar the same way');
+  const bad = await run('connect', { body: { origin: 'https://evil.example.com', purpose: 'calendar' }, routes: asStaff });
+  assert.equal(bad.status, 400, 'the origin is still checked');
+  const outsider = await run('connect', { body: { origin: ORIGIN, purpose: 'calendar' }, routes: { [`${RPC}/google_me`]: () => reply(403, { code: '42501', message: 'Not allowed' }) } });
+  assert.equal(outsider.status, 403, 'not staff: refused by google_me');
+  const anon = await run('connect', { auth: '', body: { origin: ORIGIN, purpose: 'calendar' } });
+  assert.deepEqual([anon.status, anon.calls.length], [401, 0]);
+});
+
+await check('calendar connect: staff are still refused a plain connect, send and contract; an admin’s plain connect is unchanged', async () => {
+  for (const [path, body] of [
+    ['connect', { origin: ORIGIN }], ['connect', { origin: ORIGIN, purpose: 'Calendar' }], ['connect', { origin: ORIGIN, purpose: 'business' }],
+    ['connect', { origin: ORIGIN, purpose: ['calendar'] }], ['send', email()], ['contract', contract()],
+  ]) {
+    const r = await run(path, { body, routes: asStaff });
+    assert.equal(r.status, 403, `${path} ${JSON.stringify(body.purpose)}`);
+    assert.deepEqual(r.data, { error: NOT_ADMIN });
+    assert.equal(r.to(`${RPC}/google_token`).length + r.to(TOKEN_URL).length + r.to(GMAIL).length + r.to(DRIVE).length, 0);
+  }
+  const plain = await run('connect', { body: { origin: ORIGIN } });
+  assert.equal(plain.status, 200);
+  const q = new URL(plain.data.url).searchParams;
+  assert.equal(q.get('scope'), g.SCOPES);
+  const payload = await g.verifyState(q.get('state'), SECRET);
+  assert.ok(!('purpose' in payload), 'no purpose in a plain connect’s state');
+});
+
+await check('calendar callback: back to #/calendar?google=connected, saved with the secret key and Google’s scopes', async () => {
+  for (const scope of [CAL_SCOPES, `${g.SCOPES} ${CAL_SCOPE}`, 'openid email https://www.googleapis.com/auth/calendar']) {
+    const r = await callback(await calState(), { routes: { [TOKEN_URL]: () => reply(200, calToken({ scope })) } });
+    assert.equal(r.status, 302, scope);
+    assert.equal(r.headers.get('location'), calendarPage('connected'));
+    const [save] = r.to(`${RPC}/google_save`);
+    assert.equal(save.headers.get('apikey'), 'sb_secret_test');
+    assert.deepEqual(save.json(), { p_user: 'u-ana', p_email: 'ana@example.com', p_token: 'new-refresh-token', p_scopes: scope });
+  }
+  // A plain connect whose token has the calendar too (granted before) still goes back to Settings.
+  const plain = await callback(await stateFor(), { routes: { [TOKEN_URL]: () => reply(200, calToken({ scope: `${g.SCOPES} ${CAL_SCOPE}` })) } });
+  assert.equal(plain.headers.get('location'), settings('connected'));
+  // The purpose is signed: a plain state can't be turned into a calendar one.
+  const good = await stateFor();
+  const [, sig] = good.split('.');
+  const body = JSON.parse(Buffer.from(good.split('.')[0], 'base64url').toString());
+  const forged = await callback(`${b64url(JSON.stringify({ ...body, purpose: 'calendar' }))}.${sig}`);
+  assert.deepEqual([forged.status, forged.text, forged.calls.length], [400, EXPIRED, 0]);
+});
+
+await check('calendar callback: no calendar scope in the token → google=calendar_scope and nothing saved; other failures by name', async () => {
+  for (const scope of ['openid email', g.SCOPES, `openid email ${CAL_SCOPE}.extra`, 'openid email https://www.googleapis.com/auth/calendar.events', undefined, '']) {
+    const r = await callback(await calState(), { routes: { [TOKEN_URL]: () => reply(200, calToken({ scope })) } });
+    assert.equal(r.headers.get('location'), calendarPage('calendar_scope'), String(scope));
+    assert.equal(r.to(`${RPC}/google_save`).length, 0, `${scope}: nothing saved`);
+  }
+  // A plain connect never checks the calendar scope (unchanged).
+  const plain = await callback(await stateFor(), { routes: { [TOKEN_URL]: () => reply(200, calToken({ scope: g.SCOPES })) } });
+  assert.equal(plain.headers.get('location'), settings('connected'));
+
+  const state = await calState();
+  const denied = await callback(state, { query: `?error=access_denied&state=${encodeURIComponent(state)}` });
+  assert.deepEqual([denied.status, denied.headers.get('location'), denied.calls.length], [302, calendarPage('denied'), 0]);
+  const exchange = (body, status = 200) => ({ [TOKEN_URL]: () => reply(status, body) });
+  for (const [result, routes] of [
+    ['error', exchange({ error: 'invalid_grant' }, 400)],
+    ['error', { [TOKEN_URL]: () => { throw new TypeError('fetch failed'); } }],
+    ['wrong_account', exchange(calToken({ id_token: idToken({ email: 'someone@example.com' }) }))],
+    ['wrong_account', exchange(calToken({ id_token: idToken({ email_verified: false }), scope: 'openid email' }))],
+    ['no_refresh_token', exchange(calToken({ refresh_token: undefined }))],
+    ['error', { [TOKEN_URL]: () => reply(200, calToken()), [`${RPC}/google_save`]: () => reply(500, { message: 'boom' }) }],
+  ]) {
+    const r = await callback(state, { routes });
+    assert.equal(r.status, 302, result);
+    assert.equal(r.headers.get('location'), calendarPage(result));
+  }
+  const noCode = await callback(state, { query: `?state=${encodeURIComponent(state)}` });
+  assert.equal(noCode.headers.get('location'), calendarPage('error'));
+});
+
+await check('calendar-sync: 401 without a JWT (nothing called), 403 for non-staff, any staff member may sync; CORS; GET → 405', async () => {
+  const anon = await calSync({}, { auth: '' });
+  assert.deepEqual([anon.status, anon.calls.length], [401, 0]);
+  assert.equal(anon.headers.get('access-control-allow-origin'), ORIGIN);
+  const expired = await calSync({ routes: { [`${RPC}/google_me`]: () => reply(401, { code: 'PGRST301', message: 'JWT expired' }) } });
+  assert.equal(expired.status, 401);
+  for (const answer of [() => reply(403, { code: '42501', message: 'Not allowed' }), () => reply(200, null), () => reply(200, { ...STAFF, uid: '' })]) {
+    const r = await calSync({ routes: { [`${RPC}/google_me`]: answer } });
+    assert.equal(r.status, 403);
+    assert.equal(r.calls.length, 1, 'only google_me: nothing claimed');
+  }
+  const staff = await calSync({ routes: asStaff });
+  assert.equal(staff.status, 200, 'staff, not only admins');
+  const [me] = staff.to(`${RPC}/google_me`);
+  assert.deepEqual([me.headers.get('apikey'), me.headers.get('authorization'), me.body], ['sb_publishable_test', USER_JWT, '{}']);
+  assert.equal(staff.headers.get('access-control-allow-origin'), ORIGIN);
+  assert.equal(staff.headers.get('content-type'), 'application/json');
+  const pre = await run('calendar-sync', { method: 'OPTIONS', auth: '' });
+  assert.deepEqual([pre.status, pre.headers.get('access-control-allow-origin'), pre.calls.length], [204, ORIGIN, 0]);
+  const get = await run('calendar-sync', { method: 'GET' });
+  assert.deepEqual([get.status, get.headers.get('allow')], [405, 'POST, OPTIONS']);
+  const bad = await run('calendar-sync', { body: [], routes: calendarRoutes() });
+  assert.equal(bad.status, 400, 'a body that isn’t an object');
+  assert.equal(bad.to(`${RPC}/calendar_claim`).length, 0);
+});
+
+await check('calendar-sync: rpc calendar_claim with the secret key, p_gap 600 (60 when forced); nobody claimed → no Google at all', async () => {
+  for (const [body, gap] of [[{}, 600], [{ force: false }, 600], [{ force: 'yes' }, 600], [{ force: 1 }, 600], [{ force: true }, 60]]) {
+    const r = await calSync({ body, claim: [] });
+    assert.equal(r.status, 200, JSON.stringify(body));
+    assert.deepEqual(r.data, { ok: true, claimed: 0, synced: 0, failed: 0 });
+    const [claim] = r.to(`${RPC}/calendar_claim`);
+    assert.equal(claim.method, 'POST');
+    assert.equal(claim.headers.get('apikey'), 'sb_secret_test');
+    assert.equal(claim.headers.get('authorization'), null, 'an sb_secret_ key: apikey only');
+    assert.deepEqual(claim.json(), { p_gap: gap }, JSON.stringify(body));
+    assert.equal(r.to(`${RPC}/google_token`).length + r.to(TOKEN_URL).length + r.events.length + r.saves.length, 0, 'no Google calls, nothing saved');
+  }
+  const nothing = await calSync({ claim: null });
+  assert.deepEqual(nothing.data, { ok: true, claimed: 0, synced: 0, failed: 0 });
+  const legacy = await calSync({ claim: [] }, { env: LEGACY_ENV });
+  assert.equal(legacy.to(`${RPC}/calendar_claim`)[0].headers.get('authorization'), 'Bearer eyJ.service.placeholder');
+
+  const down = await calSync({ routes: { [`${RPC}/calendar_claim`]: () => reply(500, { code: 'XX000', message: 'boom' }) } });
+  assert.equal(down.status, 502);
+  assert.deepEqual(down.data, { error: 'Could not start the calendar sync.' });
+  assert.ok(down.logs.some((l) => l.startsWith('google/calendar-sync: POST rpc/calendar_claim → 500')), down.logs.join('\n'));
+  assert.equal(down.to(`${RPC}/google_token`).length, 0);
+});
+
+await check('calendar-sync: events.list on the primary calendar with exactly the agreed query, the person’s own token', async () => {
+  const r = await calSync();
+  assert.equal(r.status, 200);
+  assert.equal(r.events.length, 1);
+  const [ev] = r.events;
+  assert.equal(ev.method, 'GET');
+  assert.equal(ev.headers.get('authorization'), `Bearer fresh-access-token-${U1}`);
+  const u = new URL(ev.url);
+  assert.equal(`${u.origin}${u.pathname}`, CAL);
+  const win = r.windows.find((w) => w.timeMin === u.searchParams.get('timeMin'));
+  assert.ok(win, `the window of Sydney’s day: ${u.searchParams.get('timeMin')}`);
+  assert.deepEqual([...u.searchParams], [
+    ['timeMin', win.timeMin], ['timeMax', win.timeMax], ['singleEvents', 'true'], ['orderBy', 'startTime'], ['maxResults', '2500'],
+    ['maxAttendees', '1'], ['showDeleted', 'false'], ['eventTypes', 'default'], ['eventTypes', 'outOfOffice'], ['eventTypes', 'focusTime'],
+    ['eventTypes', 'fromGmail'], ['fields', CAL_FIELDS],
+  ]);
+  const [tok] = r.to(`${RPC}/google_token`);
+  assert.deepEqual(tok.json(), { p_user: U1 });
+  assert.equal(tok.headers.get('apikey'), 'sb_secret_test');
+  assert.equal(r.to(TOKEN_URL)[0].form.get('refresh_token'), `stored-refresh-token-${U1}`);
+});
+
+await check('calendar-sync: rpc calendar_save gets the person, the run’s start, the window and only the kept rows; returns the counts', async () => {
+  const r = await calSync();
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 1, failed: 0 });
+  assert.equal(r.saves.length, 1);
+  const [save] = r.saves;
+  assert.equal(save.method, 'POST');
+  assert.equal(save.headers.get('apikey'), 'sb_secret_test');
+  assert.equal(save.headers.get('content-type'), 'application/json');
+  const body = r.saved[0];
+  assert.deepEqual(Object.keys(body), ['p_user', 'p_started', 'p_from', 'p_to', 'p_rows', 'p_error', 'p_reconnect']);
+  const win = r.windows.find((w) => w.from === body.p_from);
+  assert.ok(win && body.p_to === win.to, 'the window of Sydney’s day');
+  assert.equal(new URL(r.events[0].url).searchParams.get('timeMin'), win.timeMin, 'the same window as events.list');
+  assert.match(body.p_started, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.ok(Date.parse(body.p_started) >= r.before.getTime() && Date.parse(body.p_started) <= r.after.getTime(), 'the run’s start');
+  assert.deepEqual({ ...body, p_started: '', p_from: '', p_to: '' }, {
+    p_user: U1, p_started: '', p_from: '', p_to: '', p_rows: ROWS, p_error: '', p_reconnect: false,
+  });
+  for (const secret of SECRETS) assert.ok(!save.body.includes(secret), `never sent: ${secret}`);
+  assert.ok(r.calls.indexOf(save) > r.calls.indexOf(r.events[0]), 'saved after reading');
+  noTokens(r);
+
+  // calendar_save → false (no longer connected staff: their meetings are gone): neither synced nor failed.
+  const gone = await calSync({ save: () => reply(200, false) });
+  assert.deepEqual(gone.data, { ok: true, claimed: 1, synced: 0, failed: 0 });
+  // The claim's ids as objects too, each person once.
+  const objects = await calSync({ claim: [{ calendar_claim: U1 }, { calendar_claim: U2 }, U1, '', null] });
+  assert.deepEqual(objects.saved.map((b) => b.p_user), [U1, U2]);
+  assert.deepEqual(objects.data, { ok: true, claimed: 2, synced: 2, failed: 0 });
+  const empty = await calSync({ events: [] });
+  assert.deepEqual([empty.saved[0].p_rows, empty.saved[0].p_error, empty.data.synced], [[], '', 1], 'no events is a sync too');
+});
+
+await check('calendar-sync: follows nextPageToken with the same query; one row per event id', async () => {
+  const pages = {
+    '': { items: EVENTS.slice(0, 5), nextPageToken: 'page-2' },
+    'page-2': { items: EVENTS.slice(5, 10), nextPageToken: 'page-3' },
+    'page-3': { items: [...EVENTS.slice(10), { ...EVENTS[0], summary: 'Weekly sync (moved)' }] },
+  };
+  const r = await calSync({ events: (c) => reply(200, pages[new URL(c.url).searchParams.get('pageToken') ?? '']) });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.events.map((c) => new URL(c.url).searchParams.get('pageToken')), [null, 'page-2', 'page-3']);
+  const query = (c) => { const q = new URL(c.url).searchParams; q.delete('pageToken'); return q.toString(); };
+  assert.ok(r.events.every((c) => query(c) === query(r.events[0])), 'the same query on every page');
+  assert.deepEqual(r.saved[0].p_rows, [{ ...ROWS[0], title: 'Weekly sync (moved)' }, ...ROWS.slice(1)], 'the later copy of an id wins');
+  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 1, failed: 0 });
+});
+
+await check('calendar-sync: more than 10 pages → p_error “Too many events”, no rows; 10 exactly is fine', async () => {
+  let n = 0;
+  const r = await calSync({ events: () => reply(200, { items: EVENTS.slice(0, 2), nextPageToken: `page-${++n}` }) });
+  assert.equal(r.status, 200);
+  assert.equal(r.events.length, 10, 'stops at 10 pages');
+  assert.deepEqual({ ...r.saved[0], p_started: '', p_from: '', p_to: '' }, {
+    p_user: U1, p_started: '', p_from: '', p_to: '', p_rows: [], p_error: 'Too many events', p_reconnect: false,
+  });
+  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 0, failed: 1 });
+  let m = 0;
+  const ten = await calSync({ events: () => reply(200, { items: EVENTS.slice(0, 1), ...(++m < 10 ? { nextPageToken: `page-${m}` } : {}) }) });
+  assert.equal(ten.events.length, 10);
+  assert.deepEqual([ten.saved[0].p_error, ten.saved[0].p_rows.length, ten.data.synced], ['', 1, 1]);
+});
+
+await check('calendar-sync: invalid_grant for one person → their p_reconnect true; the next person still syncs; no token anywhere', async () => {
+  const r = await calSync({
+    claim: [U1, U2],
+    routes: {
+      [TOKEN_URL]: (c) => (c.form.get('refresh_token').endsWith(U1)
+        ? reply(400, { error: 'invalid_grant', error_description: 'Token has been expired or revoked.' })
+        : reply(200, { access_token: `fresh-access-token-${U2}`, expires_in: 3599 })),
+    },
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.data, { ok: true, claimed: 2, synced: 1, failed: 1 });
+  assert.deepEqual(r.saved.map((b) => [b.p_user, b.p_error, b.p_reconnect, b.p_rows.length]), [
+    [U1, CAL_RECONNECT, true, 0], [U2, '', false, ROWS.length],
+  ]);
+  assert.deepEqual(r.events.map(personOf), [U2], 'only U2’s calendar is read');
+  assert.equal(r.saved[0].p_started, r.saved[1].p_started, 'one start for the whole run');
+  assert.deepEqual([r.saved[0].p_from, r.saved[0].p_to], [r.saved[1].p_from, r.saved[1].p_to]);
+  const tokens = r.to(`${RPC}/google_token`);
+  assert.ok(r.calls.indexOf(r.saves[0]) < r.calls.indexOf(tokens[1]), 'one person at a time, in claim order');
+  noTokens(r);
+});
+
+await check('calendar-sync: a missing calendar scope (stored or at Google) → reconnect; Google errors, a failed save → that person only', async () => {
+  // Stored scopes without the calendar: reconnect, without asking Google.
+  const stored = await calSync({ claim: [U1, U2], scopes: (u) => (u === U1 ? g.SCOPES : CAL_SCOPES) });
+  assert.deepEqual(stored.saved.map((b) => [b.p_user, b.p_error, b.p_reconnect]), [[U1, CAL_RECONNECT, true], [U2, '', false]]);
+  assert.deepEqual(stored.to(TOKEN_URL).map((c) => c.form.get('refresh_token')), [`stored-refresh-token-${U2}`]);
+  // Not connected any more (no refresh token): reconnect too.
+  const none = await calSync({ claim: [U1], routes: { [`${RPC}/google_token`]: () => reply(200, null) } });
+  assert.deepEqual([none.saved[0].p_error, none.saved[0].p_reconnect, none.data.failed], ['Google Calendar isn’t connected.', true, 1]);
+  // Google says the token lacks the scope.
+  const insufficient = () => reply(403, {
+    error: { code: 403, message: 'Request had insufficient authentication scopes.', details: [{ reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' }] },
+  });
+  const scope = await calSync({ claim: [U1, U2], events: (c) => (personOf(c) === U1 ? insufficient() : reply(200, { items: EVENTS })) });
+  assert.deepEqual(scope.saved.map((b) => [b.p_user, b.p_error, b.p_reconnect, b.p_rows.length]), [[U1, CAL_RECONNECT, true, 0], [U2, '', false, ROWS.length]]);
+
+  // Google's own error: its message (the access token cut out, at most 200 characters), not a reconnect.
+  const errors = {
+    [U1]: () => reply(500, { error: { code: 500, message: `Backend Error for fresh-access-token-${U1}\nretry` } }),
+    [U2]: () => { throw new TypeError('fetch failed'); },
+    [U3]: () => reply(400, { error: { code: 400, message: 'x'.repeat(300) } }),
+  };
+  const failing = await calSync({ claim: [U1, U2, U3], events: (c) => errors[personOf(c)]() });
+  assert.equal(failing.status, 200);
+  assert.deepEqual(failing.data, { ok: true, claimed: 3, synced: 0, failed: 3 });
+  assert.deepEqual(failing.saved.map((b) => [b.p_error, b.p_reconnect, b.p_rows]), [
+    ['Backend Error for … retry', false, []], ['Something went wrong with Google.', false, []], ['x'.repeat(200), false, []],
+  ]);
+  noTokens(failing);
+
+  // calendar_save failing for one person: counted, logged without a body, and the next person still syncs.
+  const save = await calSync({ claim: [U1, U2], save: (c) => (c.json().p_user === U1 ? reply(500, { code: 'XX000', message: 'boom' }) : reply(200, true)) });
+  assert.equal(save.status, 200);
+  assert.deepEqual(save.data, { ok: true, claimed: 2, synced: 1, failed: 1 });
+  assert.deepEqual(save.saved.map((b) => b.p_user), [U1, U2]);
+  assert.ok(save.logs.some((l) => l.startsWith('google/calendar-sync: POST rpc/calendar_save → 500')));
+  noTokens(save);
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');

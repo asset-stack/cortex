@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Building2, ChevronDown, FolderKanban, GitBranch, Loader2, LogOut, Mail, Megaphone, PanelLeftClose, PanelLeftOpen, Plus, RotateCcw, Settings, Sparkle } from 'lucide-react';
+import { Building2, CalendarDays, ChevronDown, FolderKanban, GitBranch, Loader2, LogOut, Mail, Megaphone, PanelLeftClose, PanelLeftOpen, Plus, RotateCcw, Settings, Sparkle } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { Avatar, Modal, Popover } from '@/components/ui';
 import NewBoardModal from '@/components/board/NewBoard';
@@ -12,6 +12,8 @@ import { cn } from '@/lib/cn';
 // (src/lib/access.js); the former Admin board is part of Projects.
 export const NAV = [
   { id: 'work', label: 'My Work', icon: Sparkle },
+  // The team Calendar (0009): no module of its own; each thing on it keeps its own access rule (src/lib/calendar.js).
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'projects', label: 'Projects', icon: FolderKanban, module: 'projects' },
   { id: 'marketing', label: 'Marketing', icon: Megaphone, module: 'marketing' },
   { id: 'outreach', label: 'Outreach', icon: Mail, badge: 'AI', module: 'outreach' },

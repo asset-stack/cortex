@@ -4,8 +4,8 @@
 // Every action checks access first (src/lib/access.js) and returns false, changing nothing, when the signed-in user
 // can't do it; RLS is the real enforcement.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { createSeed, migrate } from './seed';
-import { DEAL_STAGES, cleanDealPatch, withPeople } from './boards';
+import { createSeed, demoMeetings, migrate } from './seed';
+import { BOARD_SCHEMAS, DEAL_STAGES, cleanDealPatch, hasDates, withPeople } from './boards';
 import { LIVE, supabase } from '@/data/backend/client';
 import { TABLES, assemble, diff, flatten, normalizeRow, stable } from '@/data/backend/schema';
 import { createSync } from '@/data/backend/sync';
@@ -19,6 +19,7 @@ import {
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
 import { mentionedUserIds } from '@/lib/mentions';
 import { cleanTool } from '@/lib/tools';
+import { cleanCalendarEvent } from '@/lib/calendar';
 import { emailFromRow, filterEmails, outreachBreakdown, outreachDaily, parseAddresses } from '@/lib/outreach';
 import { createContractDoc, googleConnectUrl, sendGoogleEmail, sendInvoiceEmail } from '@/integrations/google';
 
@@ -231,6 +232,9 @@ function createActions(mutate, mode) {
   });
   // Your own to-dos, or anyone's for admins.
   const mayTodo = (d, t) => Boolean(t) && (t.assignee === d.me || isAdmin(d));
+  // Calendar events (0009): any active teammate adds one; the one who added it, or an admin, edits and deletes it.
+  const meActive = (d) => d.users.some((u) => u.id === d.me && u.active !== false);
+  const mayEvent = (d, x) => Boolean(x) && meActive(d) && (x.createdBy === d.me || isAdmin(d));
   // The database keeps one to-do per routine, person and day, and one automation to-do per ref, person and day.
   const clashes = (d, t, day, assignee) => d.todos.some((x) => x.id !== t.id && x.assignee === assignee && x.day === day
     && ((t.routineId && x.routineId === t.routineId) || (t.source === 'automation' && x.source === 'automation' && x.ref === t.ref)));
@@ -331,7 +335,7 @@ function createActions(mutate, mode) {
     addBoard: (module, name) => admin((d) => {
       const title = textOf(name).trim();
       if (!BOARD_MODULES.includes(module) || !title) return false;
-      const b = { id: uid(), module, name: title, owner: '', groups: [firstGroup(module)] };
+      const b = { id: uid(), module, name: title, owner: '', calendar: false, groups: [firstGroup(module)] };
       const last = d.boards.reduce((at, x, i) => (x.module === module ? i : at), -1);
       d.boards.splice(last + 1, 0, b);
       return b.id;
@@ -340,6 +344,12 @@ function createActions(mutate, mode) {
       const title = textOf(name).trim();
       if (!title) return false;
       b.name = title;
+      return true;
+    }),
+    // Show or hide a team board's 3-month calendar above its tasks (0009; boards with a date column).
+    setBoardCalendar: (boardId, on) => onTeamBoard(boardId, (d, b) => {
+      if (!hasDates(BOARD_SCHEMAS[b.module]) || Boolean(b.calendar) === Boolean(on)) return false;
+      b.calendar = Boolean(on);
       return true;
     }),
     // Among its module's team boards.
@@ -558,6 +568,30 @@ function createActions(mutate, mode) {
       if (added > 0) await mode.pull('todos', { assignee_id: mode.read((s) => s.me), day });
       return added;
     },
+
+    // ── Calendar (0009): the team's events, on everyone's Calendar ──
+
+    // A meeting, event or reminder (cleanCalendarEvent). → id
+    addCalendarEvent: (fields = {}) => mutate((d) => {
+      const x = meActive(d) && cleanCalendarEvent(fields, d.users.map((u) => u.id));
+      if (!x) return false;
+      const ev = { ...x, id: uid(), createdBy: d.me };
+      (d.calendarEvents ||= []).push(ev);
+      return ev.id;
+    }),
+    updateCalendarEvent: (id, patch = {}) => mutate((d) => {
+      const x = (d.calendarEvents || []).find((e) => e.id === id);
+      const clean = mayEvent(d, x) && cleanCalendarEvent({ ...x, ...patch }, d.users.map((u) => u.id));
+      if (!clean) return false;
+      Object.assign(x, clean);
+      return true;
+    }),
+    removeCalendarEvent: (id) => mutate((d) => {
+      const x = (d.calendarEvents || []).find((e) => e.id === id);
+      if (!mayEvent(d, x)) return false;
+      d.calendarEvents = d.calendarEvents.filter((e) => e !== x);
+      return true;
+    }),
 
     // ── Tools (each person's logins and links in My Work): your own, or anyone's for admins ──
 
@@ -1012,6 +1046,10 @@ function createActions(mutate, mode) {
 
     // → Promise<{ ok: true, url } | { ok: false, error }>: the browser goes to `url` (Google) and comes back to Settings.
     connectGoogle: () => googleConnectUrl(mode.invoke, window.location.origin),
+    // Anyone: share my Google Calendar's meetings with the team (read only). Comes back to the Calendar.
+    connectCalendar: () => googleConnectUrl(mode.invoke, window.location.origin, 'calendar'),
+    // Read everyone's connected Google Calendar into the team Calendar now (anyone). → { ok, claimed, synced, failed }
+    syncCalendar: ({ force = false } = {}) => mode.invoke('google/calendar-sync', { force: Boolean(force) }),
     // Outreach: read the agent's sheet into the database now (anyone who can see Outreach). → { ok, stats } | { ok: false, error }
     syncOutreach: async () => {
       const allowed = mode.read((st) => canView(st, 'outreach'));
@@ -1255,12 +1293,68 @@ function DemoProvider({ children }) {
   }), [mutate, commit]);
 
   const outreach = useMemo(() => demoOutreach(state), [state]);
-  const value = useMemo(() => ({ state, actions, sync: SAVED, google: DEMO_GOOGLE, outreach }), [state, actions, outreach]);
+  const calendar = useMemo(() => demoCalendar(), []);
+  const value = useMemo(() => ({ state, actions, sync: SAVED, google: DEMO_GOOGLE, outreach, calendar }), [state, actions, outreach, calendar]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
 
 // The signed-in admin's own Google account (Settings → Business): not synced state, read from google_me().
-const DEMO_GOOGLE = { ready: true, demo: true, connected: false, email: '' };
+const DEMO_GOOGLE = { ready: true, demo: true, account: false, connected: false, email: '', calendar: false };
+
+// Google Calendar meetings on the team Calendar (docs/PHASE2.md §15) are read on demand, not kept in state: the google
+// function writes them (calendar-sync) and nobody else does. Both modes answer the same calls; every call resolves
+// (never throws) to { ok, … } or { ok: false, error }.
+//   meetings(from, to) → { rows }: calendar_meetings rows touching from…to, a day wider each side for time zones
+//   status() → { people: [{ userId, connected, syncedAt, error, reconnect }], earliest, syncedAt }
+//   sync({ force }) → { claimed, synced, failed } (live only)
+const touching = (rows, from, to) => rows.filter((m) => m.start_date <= addDays(to, 1) && m.end_date >= addDays(from, -1));
+function demoCalendar() {
+  return {
+    live: false,
+    meetings: async (from, to) => ({ ok: true, rows: touching(demoMeetings(localYmd()), from, to) }),
+    status: async () => {
+      const rows = demoMeetings(localYmd());
+      return { ok: true, people: [], earliest: rows.reduce((m, x) => (!m || x.start_date < m ? x.start_date : m), ''), syncedAt: '' };
+    },
+    sync: async () => ({ ok: false, error: 'Google works in live mode only.' }),
+  };
+}
+
+const MEETING_COLUMNS = 'id, user_id, title, busy, all_day, start_date, end_date, start_at, end_at';
+function liveCalendar(syncCalendar) {
+  const failed = (error) => ({ ok: false, error: error?.message || String(error || 'Request failed') });
+  return {
+    live: true,
+    meetings: async (from, to) => {
+      try {
+        const rows = [];
+        for (let at = 0; ; at += PAGE) {
+          const { data, error } = await supabase.from('calendar_meetings').select(MEETING_COLUMNS)
+            .lte('start_date', addDays(to, 1)).gte('end_date', addDays(from, -1)).order('start_date').order('id').range(at, at + PAGE - 1);
+          if (error) return failed(error);
+          rows.push(...(data || []).map((m) => ({ ...m, start_date: String(m.start_date).slice(0, 10), end_date: String(m.end_date).slice(0, 10) })));
+          if ((data || []).length < PAGE) break;
+        }
+        return { ok: true, rows };
+      } catch (e) { return failed(e); }
+    },
+    status: async () => {
+      try {
+        const { data, error } = await supabase.rpc('calendar_status');
+        if (error) return failed(error);
+        return {
+          ok: true,
+          people: (data?.people || []).map((p) => ({
+            userId: p.user_id, connected: Boolean(p.connected), syncedAt: p.synced_at || '', error: p.error || '', reconnect: Boolean(p.reconnect),
+          })),
+          earliest: data?.earliest ? String(data.earliest).slice(0, 10) : '',
+          syncedAt: data?.synced_at || '',
+        };
+      } catch (e) { return failed(e); }
+    },
+    sync: (opts) => syncCalendar(opts),
+  };
+}
 
 // Outreach's emails (docs/PHASE2.md §12) are read on demand, not kept in state: they grow by the hundred a day. Both
 // modes answer the same calls; every call resolves (never throws) to { ok, … } or { ok: false, error }.
@@ -1333,8 +1427,12 @@ function liveOutreach(syncOutreach, flush) {
     sync: async () => syncOutreach(),
   };
 }
+// connected: Gmail and Drive are allowed (invoices, contracts, the Outreach sheet), so not for someone who shared only
+// their calendar (0009's google_me() says which; before 0009 every connection was Gmail and Drive). account: any Google
+// connection; calendar: my Google Calendar is shared with the team.
 const googleFrom = (me) => ({
-  ready: true, demo: false, connected: Boolean(me?.google_email), email: me?.google_email || '', connectedAt: me?.connected_at || '',
+  ready: true, demo: false, account: Boolean(me?.google_email), connected: Boolean(me?.google_email) && me?.business !== false,
+  email: me?.google_email || '', connectedAt: me?.connected_at || '', calendar: Boolean(me?.google_email) && Boolean(me?.calendar),
 });
 
 // ── Live mode: Supabase rows ⇄ state ───────────────────────────────────────────
@@ -1771,7 +1869,8 @@ function LiveProvider({ userId, children }) {
   }, [mutate, refreshGoogle, flushSoon]);
 
   const outreach = useMemo(() => liveOutreach(actions.syncOutreach, flushSoon), [actions, flushSoon]);
-  const value = useMemo(() => ({ state, actions, sync, google, outreach }), [state, actions, sync, google, outreach]);
+  const calendar = useMemo(() => liveCalendar(actions.syncCalendar), [actions]);
+  const value = useMemo(() => ({ state, actions, sync, google, outreach, calendar }), [state, actions, sync, google, outreach, calendar]);
 
   if (phase.status === 'error') {
     return (

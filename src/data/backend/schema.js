@@ -52,7 +52,8 @@ const COLUMNS = {
     id: 'int', business_name: t, abn: t, address: t, email: t, phone: t, bank_account_name: t, bsb: t,
     account_number: t, invoice_prefix: t, payment_terms_days: 'int', contract_template: t, contract_folder: t,
   },
-  boards: { id: 'id', module: t, name: t, owner_id: 'fk', position: 'int' },
+  // calendar (0009): the board shows its 3-month calendar above its tasks (team boards; Posting schedule to start).
+  boards: { id: 'id', module: t, name: t, owner_id: 'fk', position: 'int', calendar: 'bool' },
   board_groups: { id: 'id', board_key: t, board_id: 'id', name: t, color: t, position: 'int' },
   items: { id: 'id', board_key: t, board_id: 'id', group_id: 'id', position: 'int', name: t, values: 'json', done: 'bool' },
   item_updates: { id: 'id', item_id: 'id', user_id: 'fk', text: t, created_at: 'ts' },
@@ -115,6 +116,11 @@ const COLUMNS = {
     id: 'id', user_id: 'id', day: 'date', start_time: 'time', minutes: 'int', category: t, note: t, source: t, position: 'int',
   },
   work_tools: { id: 'id', user_id: 'id', position: 'int', name: t, url: t, username: t, how: t, notes: t, created_by: 'fk' },
+  // Calendar (0009): events the team adds on the Calendar. starts_at / ends_at are null for an all-day event. Google
+  // meetings (calendar_meetings) are not here: the app reads them on demand (store.calendar) and never writes them.
+  calendar_events: {
+    id: 'id', kind: t, title: t, day: 'date', end_day: 'date', starts_at: 'ts', ends_at: 'ts', people: 'uuids', created_by: 'fk',
+  },
   // Outreach (0007). outreach_emails is not here: the app reads it on demand (store.outreach) and never writes it.
   outreach_mailboxes: { id: 'id', name: t, addresses: 'texts', owner_id: 'fk', active: 'bool', position: 'int' },
   outreach_notes: { id: 'id', mailbox_id: 'fk', pinned: 'bool', body: t, author_id: 'fk', created_at: 'ts' },
@@ -174,6 +180,7 @@ export const TABLES = [
   { name: 'todos', key: byId, setNull: { routine_id: 'routines' } }, // after routines (todos.routine_id)
   { name: 'time_entries', key: byId },
   { name: 'work_tools', key: byId, setNull: { created_by: 'profiles' } },
+  { name: 'calendar_events', key: byId, setNull: { created_by: 'profiles' } },
   { name: 'outreach_settings', key: byId, update: true },
   { name: 'outreach_mailboxes', key: byId, setNull: { owner_id: 'profiles' } },
   // After mailboxes; a mailbox's notes go with it (on delete cascade), all-mailbox notes have none.
@@ -226,7 +233,9 @@ export function flatten(state) {
       position = teamAt.get(b.module) || 0;
       teamAt.set(b.module, position + 1);
     }
-    put('boards', { id: b.id, module: b.module, name: b.owner ? '' : b.name, owner_id: b.owner || null, position });
+    put('boards', {
+      id: b.id, module: b.module, name: b.owner ? '' : b.name, owner_id: b.owner || null, position, calendar: !b.owner && Boolean(b.calendar),
+    });
     (b.groups || []).forEach((g, gi) => {
       put('board_groups', { id: g.id, board_key: b.module, board_id: b.id, name: g.name, color: g.color, position: gi });
       (g.items || []).forEach((it, ii) => {
@@ -364,6 +373,10 @@ export function flatten(state) {
     id: x.id, mailbox_id: x.mailbox || null, pinned: x.pinned, body: x.body, author_id: x.author || null, created_at: x.createdAt,
   }));
   if (typeof state.outreachSheet === 'string') put('outreach_settings', { id: 1, sheet_url: state.outreachSheet });
+  (state.calendarEvents || []).forEach((x) => put('calendar_events', {
+    id: x.id, kind: x.kind, title: x.title, day: x.day, end_day: x.endDay, starts_at: x.startsAt, ends_at: x.endsAt, people: x.people,
+    created_by: x.createdBy,
+  }));
 
   return rows;
 }
@@ -398,7 +411,7 @@ export function assemble(rowsByTable, { me } = {}) {
     || (a.owner_id ? cmp(names.get(a.owner_id) || '', names.get(b.owner_id) || '') : a.position - b.position)
     || cmp(a.id, b.id);
   const boards = all('boards').filter((b) => BOARD_KEYS.includes(b.module)).sort(boardOrder).map((b) => ({
-    id: b.id, module: b.module, name: b.name, owner: b.owner_id ?? '',
+    id: b.id, module: b.module, name: b.name, owner: b.owner_id ?? '', calendar: b.calendar,
     groups: kids(groups, b.id, byPos).map((g) => ({
       id: g.id, name: g.name, color: g.color,
       items: kids(items, g.id, byPos).map((it) => ({
@@ -521,6 +534,12 @@ export function assemble(rowsByTable, { me } = {}) {
     // Newest first (the page puts pinned ones on top).
     outreachNotes: all('outreach_notes').sort(newest('created_at')).map((x) => ({
       id: x.id, mailbox: x.mailbox_id ?? '', pinned: x.pinned, body: x.body, author: x.author_id ?? '', createdAt: x.created_at ?? '',
+    })),
+    // By day, then start time (all-day first).
+    calendarEvents: all('calendar_events').sort((a, b) => cmp(a.day || '', b.day || '') || cmp(a.starts_at || '', b.starts_at || '')
+      || cmp(a.id, b.id)).map((x) => ({
+      id: x.id, kind: x.kind, title: x.title, day: x.day ?? '', endDay: x.end_day ?? '', startsAt: x.starts_at ?? '', endsAt: x.ends_at ?? '',
+      people: [...x.people], createdBy: x.created_by ?? '',
     })),
     // undefined when this user can't read Outreach (flatten then sends no settings row).
     ...(all('outreach_settings')[0] ? { outreachSheet: all('outreach_settings')[0].sheet_url } : {}),

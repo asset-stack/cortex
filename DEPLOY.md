@@ -74,9 +74,11 @@ and each admin's Google connection; see section 11), then `0005_work_tools.sql` 
 then `0006_boards.sql` (the boards under Projects and Marketing, and each person's own Projects page), then
 `0007_outreach.sql` (Outreach, read from the outreach agent's Google Sheet, see section 12; and the boards under
 Outreach and Clients, `docs/PHASE2.md` §13), then `0008_pipeline_stages.sql` (Pipeline's stages: Opportunities →
-Contacted → First meetings → Demos, and Work in Progress under the deals; `docs/PHASE2.md` §14).
+Contacted → First meetings → Demos, and Work in Progress under the deals; `docs/PHASE2.md` §14), then
+`0009_calendar.sql` (the team Calendar and the boards' 3-month calendar; Google meetings need section 13;
+`docs/PHASE2.md` §15).
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0009_…`). Run each new file
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0010_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one.
 
 **0003 on a database that already has 0002**: **SQL Editor** → **+** → **Create a new snippet**, paste
@@ -145,6 +147,13 @@ team board with an *Active* group; **Table Editor** → `boards` lists it with m
 new app goes live (the app that's live now works with it): until it has run, the new app shows no Work in Progress and
 a meeting booked leaves a Contacted deal where it is, though it shows any deal still at Won in Demos. Nobody needs to
 close Cortex, and it is safe to run again.
+
+**0009 on an existing database**: run it after `0008`, the same way (`supabase/migrations/0009_calendar.sql`; until
+merged, take it from its branch on GitHub). It adds the team's Calendar events, the table the Google meetings sync into
+(only the `google` function writes it), and a **calendar** switch on boards, turned on once for Marketing's **Posting
+schedule** (**Table Editor** → `boards`: `calendar` is true for it). Run it **before** the new app goes live: the new
+app reads and writes these and fails to load without them (the app that's live now works with it). Nobody needs to close
+Cortex, and it is safe to run again.
 
 ### Upgrading an existing project
 
@@ -412,7 +421,8 @@ them. Use a Google Workspace admin account for steps 1 and 2.
 - **Credits**: each month, export usage from the client's platform as CSV → client → **Usage** → **Import usage**.
   Importing the same file again replaces those months; nothing doubles.
 
-**Disconnecting**: **Settings** → **Business** → **Disconnect** removes your stored Google access from Cortex. To
+**Disconnecting**: **Settings** → **Business** → **Disconnect** removes your stored Google access from Cortex (and, if
+you connected your Google Calendar too, takes your meetings off the team Calendar). To
 revoke it at Google too: <https://myaccount.google.com/connections>. When someone leaves, deactivating them in
 **Settings** → **Team** also stops their connection from being used.
 
@@ -481,6 +491,39 @@ Outreach and Clients).
   the admin who linked it: once they're inactive or staff, syncs stop ("<name> is no longer active…" / "… an
   admin…") until another admin clicks **Use my Google**.
 - Two people opening Outreach at the same moment may both sync; that's harmless (the newer sync's rows win).
+
+## 13. The team Calendar (Google Calendar)
+
+The **Calendar** shows everything dated in Cortex and, once each person connects theirs, the team's **Google Calendar**
+meetings: titles and times, with events marked **Private** (or Confidential) in Google shown only as **Busy**. Cortex
+reads each person's primary calendar **read only**, through the `google` Edge Function, and keeps only each meeting's
+title, start and end: never its description, place, guests or link. This needs section 11 steps 1–3 done (the Google
+client, the Supabase secrets and the `google` function). Contract: `docs/PHASE2.md` §15.
+
+1. **Database**: run `0009_calendar.sql` (section 2, *0009 on an existing database*).
+2. **Google Cloud** (<https://console.cloud.google.com>, the Cortex project):
+   - **APIs & Services** → **Library** → **Google Calendar API** → **Enable**.
+   - **Google Auth Platform** → **Data Access** → **Add or remove scopes**: tick `.../auth/calendar.readonly` (add it
+     under **Manually add scopes** if it isn't listed) → **Update** → **Save**. The consent screen is **Internal**, so
+     Google doesn't review it.
+3. **Redeploy the `google` function** with the new `supabase/functions/google/index.ts` (section 11 step 3: replace
+   all of its code, **Deploy**; **Enforce JWT verification** stays **off**).
+4. **Deploy the new app** (it goes live with the merge to `main`).
+5. **Everyone**: **Calendar** → **Connect Google Calendar** → **Connect** → pick **your own** @assetstackai.com account
+   → **Allow**. Back in Cortex the button shows when the team's meetings last synced. Admins who already connected Gmail
+   and Drive keep them; staff connect only their calendar.
+
+**How it syncs**
+- Opening the Calendar syncs everyone who has connected when the last sync is more than 10 minutes old; **Sync now**
+  (in the same menu) syncs at once. It reads from the start of last month to 11 months ahead. Nothing syncs on a timer,
+  so meetings added in Google show the next time someone opens the Calendar.
+- The menu lists who has connected. *Reconnect* means Google refused that person's access (they removed it at Google,
+  or their password changed): they click **Connect Google Calendar** again.
+- **Disconnect** (same menu) takes your meetings off the Calendar at once. For an admin it also disconnects Gmail and
+  Drive (invoices, contracts, the Outreach sheet), so they connect those again in **Settings** → **Business**.
+  Deactivating someone takes their meetings off too.
+- A calendar whose events are all set to Private in Google (**Settings** → the calendar → **Event privacy**) shows
+  only Busy blocks.
 
 ## Troubleshooting
 

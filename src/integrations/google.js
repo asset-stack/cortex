@@ -8,9 +8,10 @@ import { isEmail, taxInvoiceModel } from '../lib/taxInvoice.js';
 const str = (v) => String(v ?? '').trim();
 const MAX_RECIPIENTS = 10;
 
-/** Start connecting: the Google consent page to send the browser to (it comes back to Settings). */
-export async function googleConnectUrl(invoke, origin) {
-  const res = await invoke('google/connect', { origin });
+/** Start connecting: the Google consent page to send the browser to. It comes back to Settings, or with
+ *  purpose 'calendar' (anyone: read-only Google Calendar for the team Calendar) to the Calendar. */
+export async function googleConnectUrl(invoke, origin, purpose) {
+  const res = await invoke('google/connect', purpose ? { origin, purpose } : { origin });
   return res.ok && res.url ? { ok: true, url: res.url } : { ok: false, error: res.error || 'Could not start connecting Google.' };
 }
 

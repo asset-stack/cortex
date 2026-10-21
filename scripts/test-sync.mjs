@@ -59,13 +59,13 @@ const fixture = () => ({
   },
   // In assembled order (0006): Projects then Marketing; personal pages first (by owner name), then team boards.
   boards: [
-    { id: 'b-ana', module: 'projects', name: '', owner: U1, groups: [
+    { id: 'b-ana', module: 'projects', name: '', owner: U1, calendar: false, groups: [
       { id: 'g-ana', name: 'Active', color: '#c9ffe6', items: [
         { id: 'it-ana', name: 'Own task', values: { people: [U1], status: 'Not started' }, done: false, updates: [], subtasks: [] },
       ] },
     ] },
-    { id: 'b-ben', module: 'projects', name: '', owner: U2, groups: [{ id: 'g-ben', name: 'Active', color: '#c9ffe6', items: [] }] },
-    { id: 'b-web', module: 'projects', name: 'Landing Page', owner: '', groups: [
+    { id: 'b-ben', module: 'projects', name: '', owner: U2, calendar: false, groups: [{ id: 'g-ben', name: 'Active', color: '#c9ffe6', items: [] }] },
+    { id: 'b-web', module: 'projects', name: 'Landing Page', owner: '', calendar: false, groups: [
       { id: 'g-1', name: 'Active', color: '#c9ffe6', items: [
         {
           id: 'it-1', name: 'First', values: { people: [U1, U2], status: 'In progress', due: '2026-10-30' }, done: false,
@@ -82,13 +82,13 @@ const fixture = () => ({
         { id: 'it-3', name: 'Admin task', values: { people: [U2], status: 'Stuck' }, done: false, updates: [], subtasks: [] },
       ] },
     ] },
-    { id: 'b-gen', module: 'projects', name: 'General', owner: '', groups: [{ id: 'g-gen', name: 'Active', color: '#c9ffe6', items: [] }] },
-    { id: 'b-post', module: 'marketing', name: 'Posting schedule', owner: '', groups: [
+    { id: 'b-gen', module: 'projects', name: 'General', owner: '', calendar: false, groups: [{ id: 'g-gen', name: 'Active', color: '#c9ffe6', items: [] }] },
+    { id: 'b-post', module: 'marketing', name: 'Posting schedule', owner: '', calendar: true, groups: [
       { id: 'g-oct', name: 'October', color: '#bfe9ff', items: [
         { id: 'it-m1', name: 'Golf Day post', values: { people: [U2], status: 'In progress', channel: 'LinkedIn' }, done: false, updates: [], subtasks: [] },
       ] },
     ] },
-    { id: 'b-events', module: 'marketing', name: 'Events', owner: '', groups: [] },
+    { id: 'b-events', module: 'marketing', name: 'Events', owner: '', calendar: false, groups: [] },
   ],
   deals: [
     { id: 'd-1', name: 'Deal one', sector: 'Government', value: 70000, priority: 'P2', stage: 'Opportunities', contact: U1, next: 'Call', contactId: 'p-1' },
@@ -195,6 +195,13 @@ const fixture = () => ({
     { id: 'wt-3', user: U1, name: 'Claude', url: 'https://claude.ai', username: '', how: '', notes: 'Team plan', createdBy: '' },
     { id: 'wt-2', user: U2, name: 'Apollo', url: 'app.apollo.io', username: 'ben@example.com', how: 'Invite from Ana', notes: '', createdBy: U1 },
   ],
+  // Calendar (0009): by day, then start (all-day first).
+  calendarEvents: [
+    { id: 'ce-1', kind: 'meeting', title: 'Planning', day: '2026-10-19', endDay: '', startsAt: '2026-10-18T23:00:00.000Z',
+      endsAt: '2026-10-19T00:00:00.000Z', people: [U1, U2], createdBy: U1 },
+    { id: 'ce-2', kind: 'event', title: 'Expo', day: '2026-10-29', endDay: '2026-11-02', startsAt: '', endsAt: '', people: [], createdBy: '' },
+    { id: 'ce-3', kind: 'reminder', title: 'Renew the domain', day: '2026-11-05', endDay: '', startsAt: '', endsAt: '', people: [U2], createdBy: U2 },
+  ],
   // Outreach (0007): mailboxes in order, notes newest first, the sheet's link (only for someone who can read Outreach).
   mailboxes: [
     { id: 'mb-1', name: 'Ana', addresses: ['ana@example.com', 'ana@old.example.com'], owner: U1, active: true },
@@ -285,13 +292,14 @@ await check('assemble: order and state fields', () => {
   const back = assemble(flatten(s), { me: U1 });
   assert.deepEqual(Object.keys(back).sort(), ['approvals', 'boards', 'channels', 'clients', 'contacts', 'deals', 'emails', 'lastRead',
     'messages', 'org', 'sequences', 'users', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements',
-    'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet'].sort());
+    'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'calendarEvents'].sort());
   assert.deepEqual(back.boards.map((b) => b.id), ['b-ana', 'b-ben', 'b-web', 'b-gen', 'b-post', 'b-events']);
   const web = back.boards.find((b) => b.id === 'b-web');
   assert.deepEqual(web.groups.map((g) => g.id), ['g-1', 'g-2', 'g-3']);
   assert.deepEqual(web.groups[0].items.map((i) => i.id), ['it-1', 'it-2']);
   assert.deepEqual(web.groups[0].items[0].updates.map((u) => u.id), ['up-2', 'up-1']); // newest first
-  assert.deepEqual(back.boards.at(-1), { id: 'b-events', module: 'marketing', name: 'Events', owner: '', groups: [] });
+  assert.deepEqual(back.boards.at(-1), { id: 'b-events', module: 'marketing', name: 'Events', owner: '', calendar: false, groups: [] });
+  assert.deepEqual(back.calendarEvents, s.calendarEvents);
   assert.deepEqual(back.clients[0].invoices.map((i) => i.id), ['i-2', 'i-1']);
   assert.deepEqual(back.clients[0].invoices[1].lines[0], { id: 'l-1', desc: 'Capture', qty: '2', rate: '1,000' });
   assert.deepEqual(back.clients[0].notes.map((n) => n.id), ['n-2', 'n-1']);
@@ -343,8 +351,11 @@ await check('assemble: empty rows give a usable state', () => {
 await check('flatten: boards, and the board on every group and task (0006)', () => {
   const s = fixture();
   const rows = flatten(s);
-  assert.deepEqual(rows.boards.get('b-ana'), { id: 'b-ana', module: 'projects', name: '', owner_id: U1, position: 0 });
-  assert.deepEqual(rows.boards.get('b-gen'), { id: 'b-gen', module: 'projects', name: 'General', owner_id: null, position: 1 });
+  assert.deepEqual(rows.boards.get('b-ana'), { id: 'b-ana', module: 'projects', name: '', owner_id: U1, position: 0, calendar: false });
+  assert.deepEqual(rows.boards.get('b-gen'), { id: 'b-gen', module: 'projects', name: 'General', owner_id: null, position: 1, calendar: false });
+  // The 3-month calendar flag (0009) is a team board's: a personal page never sends one.
+  assert.equal(rows.boards.get('b-post').calendar, true);
+  assert.equal(flatten({ ...s, boards: [{ ...s.boards[0], calendar: true }] }).boards.get('b-ana').calendar, false);
   // Team boards are numbered within their module, in array order; a personal board is always 0.
   assert.deepEqual(s.boards.map((b) => [b.id, rows.boards.get(b.id).position]),
     [['b-ana', 0], ['b-ben', 0], ['b-web', 0], ['b-gen', 1], ['b-post', 0], ['b-events', 1]]);
@@ -717,7 +728,9 @@ await check('diff: groups still on the old admin board (before 0002 moves them) 
 await check('diff: renaming, reordering or adding a team board writes only those boards; a personal page is never renamed (0006)', () => {
   const renamed = opsAfter((s) => { boardOf(s, 'b-gen').name = 'General ops'; });
   assert.deepEqual(labels(renamed), ['upsert boards b-gen']);
-  assert.deepEqual(renamed[0].row, { id: 'b-gen', module: 'projects', name: 'General ops', owner_id: null, position: 1 });
+  assert.deepEqual(renamed[0].row, { id: 'b-gen', module: 'projects', name: 'General ops', owner_id: null, position: 1, calendar: false });
+  const shown = opsAfter((s) => { boardOf(s, 'b-gen').calendar = true; });
+  assert.deepEqual(shown.map((o) => [o.op, o.key, o.row.calendar]), [['upsert', 'b-gen', true]], 'Show calendar writes only that board');
   assert.deepEqual(opsAfter((s) => { boardOf(s, 'b-ana').name = 'Mine'; }), [], "a personal page's name is never sent");
   const swapped = opsAfter((s) => {
     const i = s.boards.findIndex((b) => b.id === 'b-gen');
@@ -729,7 +742,7 @@ await check('diff: renaming, reordering or adding a team board writes only those
     s.boards.push({ id: 'b-new', module: 'marketing', name: 'Webinars', owner: '', groups: [{ id: 'g-new', name: 'To do', color: '#c9ffe6', items: [] }] });
   });
   assert.deepEqual(labels(added), ['upsert board_groups g-new', 'upsert boards b-new'], 'at the end: nothing else moves');
-  assert.deepEqual(added.find((o) => o.key === 'b-new').row, { id: 'b-new', module: 'marketing', name: 'Webinars', owner_id: null, position: 2 });
+  assert.deepEqual(added.find((o) => o.key === 'b-new').row, { id: 'b-new', module: 'marketing', name: 'Webinars', owner_id: null, position: 2, calendar: false });
   assert.deepEqual(added.find((o) => o.key === 'g-new').row.board_id, 'b-new');
 });
 
@@ -1353,7 +1366,7 @@ await check('sync: loadAll pages every table and normalises rows', async () => {
   });
   const rows = await sync.loadAll();
   assert.deepEqual(Object.keys(rows), TABLES.map((x) => x.name));
-  assert.deepEqual(rows.boards.get('b1'), { id: 'b1', module: 'projects', name: 'Landing Page', owner_id: null, position: 0 });
+  assert.deepEqual(rows.boards.get('b1'), { id: 'b1', module: 'projects', name: 'Landing Page', owner_id: null, position: 0, calendar: false });
   assert.deepEqual(rows.items.get('it1'), {
     id: 'it1', board_key: 'projects', board_id: 'b1', group_id: 'g1', position: 0, name: 'X', values: { b: 1, a: 2 }, done: false,
   });
@@ -2853,6 +2866,203 @@ await check('import: a bare Contact column is the owner next to any key contact 
   assert.equal(autoMap(['Name', 'Contact'], 'deals').contact, 1);
   assert.equal(autoMap(['Contact', 'Company'], 'contacts').name, 0);
 });
+
+// ── Calendar (0009): src/lib/calendar.js, the demo seed and its migration ─────────
+
+const cal = await import('../src/lib/calendar.js');
+
+await check('calendar: ISO weeks, a month as Monday-first weeks, the 12 months and the Archive', () => {
+  assert.deepEqual(['2026-10-19', '2026-12-29', '2027-01-03', '2027-01-04', '2026-01-01'].map(cal.isoWeek), [43, 53, 53, 1, 1]);
+  // November 2026 starts on a Sunday: six rows, from Monday 26 October to Sunday 6 December.
+  const nov = cal.monthWeeks('2026-11');
+  assert.deepEqual(nov.map((w) => w.monday), ['2026-10-26', '2026-11-02', '2026-11-09', '2026-11-16', '2026-11-23', '2026-11-30']);
+  assert.deepEqual([nov[0].days[0], nov[0].days[6], nov[5].days[6]], ['2026-10-26', '2026-11-01', '2026-12-06']);
+  assert.deepEqual(nov.map((w) => w.week), [44, 45, 46, 47, 48, 49]);
+  // February 2027 starts on a Monday and ends on a Sunday: exactly four.
+  assert.deepEqual(cal.monthWeeks('2027-02').map((w) => w.monday), ['2027-02-01', '2027-02-08', '2027-02-15', '2027-02-22']);
+  assert.deepEqual(cal.nextMonths('2026-10-21'), ['2026-10', '2026-11', '2026-12', '2027-01', '2027-02', '2027-03', '2027-04', '2027-05',
+    '2027-06', '2027-07', '2027-08', '2027-09']);
+  assert.deepEqual(cal.nextMonths('2026-12-31', 3), ['2026-12', '2027-01', '2027-02']);
+  // Finished months, newest first; nothing older than the earliest entry, nothing for this month.
+  assert.deepEqual(cal.archiveMonths('2026-10-21', '2026-07-15'), ['2026-09', '2026-08', '2026-07']);
+  assert.deepEqual(cal.archiveMonths('2026-10-21', '2026-10-02'), []);
+  assert.deepEqual(cal.archiveMonths('2026-10-21', ''), []);
+  assert.deepEqual(cal.archiveMonths('2027-01-05', '2026-11-30'), ['2026-12', '2026-11']);
+  assert.equal(cal.archiveMonths('2026-10-21', '2020-01-01').length, 60);
+});
+
+await check('calendar: an instant sits on the viewer\'s own date and time (Sydney vs Tbilisi)', () => {
+  assert.deepEqual(cal.placeAt('2026-10-20T19:30:00Z', 'Australia/Sydney'), { date: '2026-10-21', time: '06:30' });
+  assert.deepEqual(cal.placeAt('2026-10-20T19:30:00Z', 'Asia/Tbilisi'), { date: '2026-10-20', time: '23:30' });
+  assert.deepEqual(cal.placeAt('', 'Asia/Tbilisi'), { date: '', time: '' });
+  assert.deepEqual(cal.placeAt('nonsense', 'Asia/Tbilisi'), { date: '', time: '' });
+});
+
+const calState = () => ({
+  me: 'u-admin',
+  users: [
+    { id: 'u-admin', name: 'Dee', role: 'superadmin', active: true },
+    { id: 'u-staff', name: 'Sam', role: 'staff', active: true },
+  ],
+  moduleAccess: [],
+  boards: [
+    { id: 'b-own', module: 'projects', name: '', owner: 'u-admin', calendar: false, groups: [{ id: 'g0', items: [
+      { id: 'i-own', name: 'Private plan', values: { people: ['u-admin'], due: '2026-10-22' }, done: false },
+    ] }] },
+    { id: 'b-gen', module: 'projects', name: 'General', owner: '', calendar: false, groups: [{ id: 'g1', items: [
+      { id: 'i-1', name: 'Report', values: { people: ['u-staff'], status: 'Done', due: '2026-10-20' }, done: true },
+      { id: 'i-2', name: 'No date', values: { people: [], due: '' }, done: false },
+    ] }] },
+    { id: 'b-post', module: 'marketing', name: 'Posting schedule', owner: '', calendar: true, groups: [{ id: 'g2', items: [
+      { id: 'i-3', name: ' Golf Day post ', values: { people: ['u-staff'], status: 'In progress', due: '2026-10-24' }, done: false },
+    ] }] },
+    { id: 'b-sales', module: 'outreach', name: 'Sales Tasks', owner: '', calendar: false, groups: [{ id: 'g3', items: [
+      { id: 'i-4', name: 'Call list', values: { people: [], due: '2026-10-21' }, done: false },
+    ] }] },
+    { id: 'b-wip', module: 'pipeline', name: 'Work in Progress', owner: '', calendar: false, groups: [{ id: 'g4', items: [
+      { id: 'i-5', name: 'Westbay', values: { details: 'x', due: '2026-10-21' }, done: false },
+    ] }] },
+  ],
+  calendarEvents: [
+    { id: 'e-1', kind: 'event', title: 'Expo', day: '2026-10-30', endDay: '2026-11-02', startsAt: '', endsAt: '', people: ['u-admin'], createdBy: 'u-admin' },
+    { id: 'e-2', kind: 'meeting', title: 'Planning', day: '2026-10-21', endDay: '', startsAt: '2026-10-20T22:30:00.000Z',
+      endsAt: '2026-10-20T23:30:00.000Z', people: ['u-staff'], createdBy: 'u-staff' },
+    { id: 'e-3', kind: 'party', title: 'Unknown kind', day: '2026-10-21', endDay: '', startsAt: '', endsAt: '', people: [], createdBy: '' },
+  ],
+  clients: [{ id: 'c-1', name: 'Westbay', invoices: [
+    { id: 'inv-1', number: 'INV-1', due: '2026-11-01', status: 'Sent' },
+    { id: 'inv-2', number: 'INV-2', due: '2026-11-02', status: 'Void' },
+    { id: 'inv-3', number: 'INV-3', due: '', status: 'Draft' },
+  ], contracts: [
+    { id: 'k-1', title: 'Agreement', status: 'Signed', startDate: '2026-11-01', endDate: '2027-10-31' },
+    { id: 'k-2', title: 'Old', status: 'Cancelled', startDate: '2026-10-25', endDate: '' },
+  ] }],
+});
+const meetings = [
+  { id: 'm-1', user_id: 'u-staff', title: '', busy: true, all_day: false, start_date: '2026-10-21', end_date: '2026-10-21',
+    start_at: '2026-10-21T01:00:00Z', end_at: '2026-10-21T02:00:00Z' },
+  { id: 'm-2', user_id: 'u-admin', title: 'Leave', busy: false, all_day: true, start_date: '2026-10-29', end_date: '2026-10-30',
+    start_at: null, end_at: null },
+];
+
+await check('calendar: entries from every source, each with its own access rule (staff without Clients see no invoices)', () => {
+  const st = calState();
+  const keys = (list) => list.map((e) => e.key);
+  const all = cal.collectEntries(st, { meetings, tz: 'Australia/Sydney' });
+  assert.deepEqual(keys(all), ['item:i-1', 'item:i-own', 'event:e-2', 'meeting:m-1', 'item:i-4', 'item:i-3', 'meeting:m-2', 'event:e-1',
+    'contract:k-1:startDate', 'invoice:inv-1', 'contract:k-1:endDate'].sort((a, b) => keys(all).indexOf(a) - keys(all).indexOf(b)));
+  const by = Object.fromEntries(all.map((e) => [e.key, e]));
+  assert.deepEqual([by['item:i-1'].kind, by['item:i-1'].done, by['item:i-3'].kind, by['item:i-3'].title], ['task', true, 'post', 'Golf Day post']);
+  assert.deepEqual([by['item:i-3'].boardId, by['item:i-3'].itemId], ['b-post', 'i-3']);
+  assert.deepEqual([by['event:e-2'].date, by['event:e-2'].time, by['event:e-2'].endTime], ['2026-10-21', '09:30', '10:30']);
+  assert.deepEqual([by['event:e-1'].date, by['event:e-1'].endDate, by['event:e-1'].time], ['2026-10-30', '2026-11-02', '']);
+  assert.deepEqual([by['meeting:m-1'].title, by['meeting:m-1'].busy, by['meeting:m-1'].time, by['meeting:m-1'].people], ['Busy', true, '12:00', ['u-staff']]);
+  assert.deepEqual([by['meeting:m-2'].date, by['meeting:m-2'].endDate], ['2026-10-29', '2026-10-30']);
+  assert.equal(by['invoice:inv-1'].title, 'INV-1 due · Westbay');
+  assert.equal(by['invoice:inv-1'].href, '#/clients?tab=invoices');
+  assert.deepEqual([by['contract:k-1:startDate'].title, by['contract:k-1:endDate'].date], ['Westbay: Agreement starts', '2027-10-31']);
+  // Void invoices, undated ones, cancelled contracts, undated tasks, an unknown event kind and Work in Progress (no dates) stay off.
+  ['invoice:inv-2', 'invoice:inv-3', 'contract:k-2:startDate', 'item:i-2', 'event:e-3', 'item:i-5'].forEach((k) => assert.ok(!by[k], k));
+  // On a day: meetings and events first (by time), then tasks.
+  const day = all.filter((e) => e.date === '2026-10-21').map((e) => e.key);
+  assert.deepEqual(day, ['event:e-2', 'meeting:m-1', 'item:i-4']);
+
+  // Staff (Sam): no admin's own page, no Outreach board (none by default); Clients at view by default shows invoices.
+  const staff = cal.collectEntries(st, { meetings, tz: 'Australia/Sydney', userId: 'u-staff' });
+  assert.ok(!staff.some((e) => ['item:i-own', 'item:i-4'].includes(e.key)));
+  assert.ok(staff.some((e) => e.key === 'invoice:inv-1') && staff.some((e) => e.key === 'event:e-1') && staff.some((e) => e.key === 'meeting:m-2'));
+  // …and with Clients at none, no invoice or contract dates at all.
+  st.moduleAccess = [{ userId: 'u-staff', module: 'clients', level: 'none' }];
+  const noClients = cal.collectEntries(st, { meetings, tz: 'Australia/Sydney', userId: 'u-staff' });
+  assert.ok(!noClients.some((e) => cal.CLIENT_KINDS.includes(e.kind)));
+  // An inactive viewer sees no boards.
+  st.users[1].active = false;
+  assert.ok(!cal.collectEntries(st, { tz: 'Australia/Sydney', userId: 'u-staff' }).some((e) => e.boardId));
+});
+
+await check('calendar: a multi-day event is on each of its days in each month; filters by person and kind', () => {
+  const all = cal.collectEntries(calState(), { meetings, tz: 'Asia/Tbilisi' });
+  const oct = cal.entriesByDay(all, '2026-10');
+  const nov = cal.entriesByDay(all, '2026-11');
+  const has = (m, d, k) => (m.get(d) || []).some((e) => e.key === k);
+  assert.ok(has(oct, '2026-10-30', 'event:e-1') && has(oct, '2026-10-31', 'event:e-1') && !has(oct, '2026-10-29', 'event:e-1'));
+  assert.ok(has(nov, '2026-11-01', 'event:e-1') && has(nov, '2026-11-02', 'event:e-1') && !has(nov, '2026-11-03', 'event:e-1'));
+  assert.ok(has(oct, '2026-10-29', 'meeting:m-2') && has(oct, '2026-10-30', 'meeting:m-2'));
+  // In Tbilisi the 09:30 Sydney planning meeting is at 02:30.
+  const planning = all.find((e) => e.key === 'event:e-2');
+  assert.deepEqual([planning.date, planning.time, planning.endTime], ['2026-10-21', '02:30', '03:30']);
+  assert.equal(cal.inMonth(all, '2026-11').some((e) => e.key === 'event:e-1'), true);
+  assert.equal(cal.inMonth(all, '2026-12').length, 0);
+  assert.deepEqual(cal.filterEntries(all, { person: 'u-staff' }).map((e) => e.key).sort(),
+    ['event:e-2', 'item:i-1', 'item:i-3', 'meeting:m-1'].sort());
+  assert.deepEqual(cal.filterEntries(all, { kinds: new Set(['google']) }).map((e) => e.key).sort(), ['meeting:m-1', 'meeting:m-2']);
+  assert.equal(cal.filterEntries(all, { kinds: new Set() }).length, all.length);
+  assert.equal(cal.earliestDate(all), '2026-10-20');
+  assert.equal(cal.earliestDate([]), '');
+});
+
+await check('calendar: a team event is cleaned before it is saved (calendar_events\' checks)', () => {
+  const users = ['u1', 'u2'];
+  assert.deepEqual(cal.cleanCalendarEvent({ kind: 'meeting', title: '  Planning ', day: '2026-10-21', startsAt: '2026-10-20T22:30:00Z',
+    endsAt: '2026-10-20T23:30:00Z', endDay: '2026-10-25', people: ['u1', 'u1', 'ghost'] }, users), {
+    kind: 'meeting', title: 'Planning', day: '2026-10-21', endDay: '', startsAt: '2026-10-20T22:30:00.000Z', endsAt: '2026-10-20T23:30:00.000Z',
+    people: ['u1'],
+  });
+  assert.deepEqual(cal.cleanCalendarEvent({ kind: 'event', title: 'Expo', day: '2026-10-30', endDay: '2026-11-02' }, users), {
+    kind: 'event', title: 'Expo', day: '2026-10-30', endDay: '2026-11-02', startsAt: '', endsAt: '', people: [],
+  });
+  assert.equal(cal.cleanCalendarEvent({ kind: 'event', title: 'Expo', day: '2026-10-30', endDay: '2026-10-30' }, users).endDay, '');
+  assert.equal(cal.cleanCalendarEvent({ kind: 'event', title: 'x'.repeat(250), day: '2026-10-30' }, users).title.length, 200);
+  [
+    { kind: 'party', title: 'x', day: '2026-10-21' },
+    { kind: 'event', title: '  ', day: '2026-10-21' },
+    { kind: 'event', title: 'x', day: '21/10/2026' },
+    { kind: 'event', title: 'x', day: '2026-10-21', endDay: '2026-10-20' },
+    { kind: 'meeting', title: 'x', day: '2026-10-21', startsAt: '2026-10-21T10:00:00Z', endsAt: '2026-10-21T09:00:00Z' },
+    { kind: 'meeting', title: 'x', day: '2026-10-21', startsAt: '2026-10-21T10:00:00Z', endsAt: '' },
+    { kind: 'meeting', title: 'x', day: '2026-10-21', startsAt: '', endsAt: '2026-10-21T10:00:00Z' },
+  ].forEach((f) => assert.equal(cal.cleanCalendarEvent(f, users), null, JSON.stringify(f)));
+  assert.equal(cal.localInstant('2026-10-21', '9:30'), '');
+  assert.equal(cal.localInstant('', '09:30'), '');
+  assert.equal(new Date(cal.localInstant('2026-10-21', '09:30')).getMinutes(), 30);
+});
+
+if (createSeed) {
+  await check('calendar seed: Posting schedule shows its calendar, the team events and Google meetings are relative to today', async () => {
+    const { demoCalendarEvents, demoMeetings } = await import('../src/data/seed.js');
+    const s = createSeed();
+    const flagged = s.boards.filter((b) => b.calendar).map((b) => `${b.module}:${b.name}`);
+    assert.deepEqual(flagged, ['marketing:Posting schedule']);
+    assert.ok(s.boards.every((b) => typeof b.calendar === 'boolean'));
+    assert.equal(s.calendarSeeded, true);
+    assert.deepEqual(s.calendarEvents.map((e) => e.kind), ['meeting', 'event', 'reminder']);
+    const users = s.users.map((u) => u.id);
+    s.calendarEvents.forEach((e) => assert.ok(cal.cleanCalendarEvent(e, users), `${e.title} passes the checks`));
+    const today = '2026-10-21';
+    const ev = demoCalendarEvents(today);
+    assert.deepEqual([ev[1].day, ev[1].endDay, ev[2].day], ['2026-10-30', '2026-11-01', '2026-11-05']);
+    const m = demoMeetings(today);
+    assert.ok(m.some((x) => x.busy && x.title === '') && m.some((x) => x.all_day));
+    assert.ok(m.some((x) => x.start_date < '2026-10-01'), 'last month, for the Archive');
+    assert.ok(m.every((x) => ['david', 'josh', 'hello'].includes(x.user_id) && x.end_date >= x.start_date));
+  });
+
+  await check('calendar migrate: Posting schedule\'s calendar is switched on once; switched off it stays off', () => {
+    const old = createSeed();
+    delete old.calendarSeeded;
+    delete old.calendarEvents;
+    old.boards.forEach((b) => { delete b.calendar; });
+    const once = migrate(old);
+    assert.deepEqual(once.boards.filter((b) => b.calendar).map((b) => b.name), ['Posting schedule']);
+    assert.equal(once.calendarEvents.length, 3);
+    once.boards.find((b) => b.calendar).calendar = false;
+    once.calendarEvents = [];
+    const twice = migrate(once);
+    assert.equal(twice.boards.filter((b) => b.calendar).length, 0, 'a switched-off calendar stays off');
+    assert.equal(twice.calendarEvents.length, 0, 'deleted team events stay deleted');
+    assert.ok(twice.boards.every((b) => typeof b.calendar === 'boolean'));
+  });
+}
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);

@@ -707,3 +707,59 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   Work in Progress); `scripts/test-sync.mjs` (stages and `dealStage()`, `cleanDealPatch()`, the booking rule, import
   mapping, Work in Progress's columns and import, seed and `migrate()`).
 
+## 15. 0009: the team Calendar, Google Calendar meetings, and a board's 3-month calendar
+
+- **Owner's ask**: a team calendar under My Work: client meetings, events, content posting, reminders and due dates
+  (everything with a date on a task or an event), twelve months, each month a block that opens and closes like a
+  board's group, each line a week from Monday; finished months go to an archive at the bottom; everyone's Google
+  Calendar meetings pull through. And a running 3-month calendar on Posting schedule, above its tasks, of the posts by
+  due date (they also feed the team calendar).
+- **Owner's decisions**: on the Calendar go board tasks with a due date (whatever the viewer can see), Google meetings,
+  events added on the Calendar, and invoice due and contract dates for people with Clients access; not My Work to-dos.
+  Teammates see Google meetings' titles and times; Private or Confidential ones show as **Busy**; declined and
+  cancelled ones are left out. The 3-month calendar is a board switch (on for Posting schedule to start; admins switch it
+  on or off for any team board with dates), so a rename keeps it. Calendar sits between My Work and Projects.
+- **No module key**: the Calendar only gathers what each source already lets the viewer see, with that source's rule
+  (`collectEntries()` in `src/lib/calendar.js`, which demo mode needs as its state holds everyone's data; RLS does it in
+  live mode): board tasks on boards they can see (`canViewBoard`; tasks on a board with its calendar on are *posts*),
+  the team's events and Google meetings for everyone, invoices (not Void) and contracts (not Cancelled) only with
+  Clients access. Timed events and meetings sit on their start day in the viewer's own time zone.
+- **Database** (`0009_calendar.sql`):
+  - `calendar_events` (synced, realtime): `kind` meeting | event | reminder, `title` (≤ 200), `day`, `end_day` (an
+    all-day event over several days), `starts_at` / `ends_at` (null for all day), `people uuid[]`, `created_by` (set by
+    a trigger, kept on update). Any active teammate adds one; the one who added it or an admin edits and deletes it.
+  - `calendar_meetings`: the Google meetings, written only by the `google` function (service role) and read by staff on
+    demand, never in synced state. Title ('' when busy), busy, all day, start and end dates (inclusive) and instants;
+    unique per person and Google event. Nothing else of a meeting is stored.
+  - `private.calendar_sync` (when each person last synced, their error, whether they must reconnect) behind
+    `calendar_status()` for staff; `calendar_claim()` / `calendar_save()` for the function only. A person's meetings go
+    when they disconnect Google, their Google access loses the calendar, or they're deactivated (`calendar_forget()`).
+  - `google_me()` also says `calendar` (their Google Calendar is shared) and `business` (Gmail and Drive allowed).
+  - `boards.calendar`: added and turned on for the Marketing team board *Posting schedule* in one statement, the first
+    time only (a re-run never turns it back on). Admins change it (the boards update policy).
+- **Google** (`supabase/functions/google`): **Connect Google Calendar** is for anyone (connect with purpose
+  `calendar`: scopes `openid email …/calendar.readonly`, with the scopes already granted kept, so an admin keeps Gmail
+  and Drive) and comes back to the Calendar; send, contract and a plain connect stay admins only. `calendar-sync` (any
+  staff caller) claims everyone whose last sync is over 10 minutes old (1 minute with **Sync now**), so two people
+  opening the Calendar at once sync each person once; reads each one's primary calendar from the start of last month to
+  the end of month +11 (Sydney), recurring events as their instances, at most 10 pages of 2,500; and saves their
+  meetings, removing those gone from Google inside that window. One person's failure (Google refused: *Reconnect*)
+  never stops the others.
+- **App**: **Calendar** (`src/pages/Calendar.jsx`): New event (`EventModal`: kind, title, day, all day or start and end
+  time, people; others' events read only), filters by person and kind, the Google menu (connect with a short warning of
+  what teammates see, when it last synced, who has connected, Sync now, Disconnect), twelve `MonthBlock`s from this
+  month (this one and the next open; a row per week, Monday first, the week number; other months' days shaded and empty;
+  four entries a day, then *+N more*; on a phone a card per week) and the **Archive** (finished months back to the
+  earliest dated thing, newest first; their meetings load when it opens). A task opens in its drawer (read only unless
+  the viewer can edit its board), an event in its form, a meeting in a short summary, an invoice or contract on Clients.
+  Opening the page syncs Google when the last sync is over 10 minutes old. Boards with `calendar` on show
+  `BoardCalendar` above their tasks: this month and the next two (`MonthGrid`, which the board's Calendar view also
+  uses), following the board's search and filters. Board options: **Show calendar** / **Hide calendar** (admins).
+- **Tests**: `scripts/test-db.mjs` phase 9 (0009 re-runs, the board switch once, who adds, edits and deletes events,
+  meetings read only, the claim and save rules, forgetting, function privileges); `scripts/test-sync.mjs` (the
+  mapping, `src/lib/calendar.js`: weeks, months, the Archive, time zones, each source's access, multi-day events,
+  `cleanCalendarEvent()`, seed and `migrate()`); `scripts/test-google.mjs` (calendar connect and callback, the sync's
+  query, filtering and privacy, reconnect, the page cap).
+- **Not in this build**: a sync on a timer (it would need `pg_cron` and `pg_net` calling the function) and reading
+  everyone's calendar without each person connecting (Workspace domain-wide delegation, with a service-account key
+  kept in Supabase secrets).

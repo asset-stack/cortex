@@ -6,6 +6,7 @@ import ChatDock from '@/components/chat/ChatDock';
 import BoardPage from '@/components/board/BoardPage';
 import TimesheetPrompt from '@/components/timesheet/TimesheetPrompt';
 import MyWork from '@/pages/MyWork';
+import Calendar from '@/pages/Calendar';
 import Pipeline from '@/pages/Pipeline';
 import Clients from '@/pages/Clients';
 import Outreach from '@/pages/Outreach';
@@ -16,6 +17,7 @@ function Page({ route, sub }) {
     case 'projects':
     case 'marketing':
       return <BoardPage module={route} sub={sub} />;
+    case 'calendar': return <Calendar />;
     case 'pipeline': return <Pipeline />;
     case 'clients': return sub ? <BoardPage module="clients" sub={sub} /> : <Clients />;
     // #/outreach and #/clients are their own pages; #/outreach/<board id> and #/clients/<board id> their boards.

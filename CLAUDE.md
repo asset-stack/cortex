@@ -3,7 +3,7 @@
 Cortex is AssetStack's internal ops platform (Vite + React 18 + Tailwind 3 + lucide-react, Supabase in live mode).
 It is separate from the marketing site (`AssetLanding`) and from the signed-in product
 (bunburycouncil.assetstack.site). The backend contract is `docs/BACKEND.md` (phase 1) plus `docs/PHASE2.md`
-(team workflow: roles, module access, My Work, finance, timesheets, boards, Outreach); setup steps are in `DEPLOY.md`.
+(team workflow: roles, module access, My Work, finance, timesheets, boards, Outreach, Calendar); setup steps are in `DEPLOY.md`.
 
 ## Rules
 - All data access goes through `src/data/store.jsx` (`useStore()` → `{ state, actions }`), in both modes. Screens
@@ -14,8 +14,8 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
 - Keep demo mode working. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` the app runs on localStorage
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
-  migration that has been applied** (`0001`–`0007` are live in production; `0008` is written, not yet run): fix forward
-  in the next file (`0009_….sql`). A migration must never mention `module_level` unless it redefines it
+  migration that has been applied** (`0001`–`0007` are live in production; `0008` and `0009` are written, not yet run):
+  fix forward in the next file (`0010_….sql`). A migration must never mention `module_level` unless it redefines it
   (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table
   keeps row-level security on with policies that require `is_staff()` (directly or through `is_admin()` /
   `can_view()` / `can_edit()` / the board helpers), and is added to the `supabase_realtime` publication if it is synced. Extend
@@ -43,6 +43,13 @@ It is separate from the marketing site (`AssetLanding`) and from the signed-in p
   `outreach_breakdown()` ⇄ `src/lib/outreach.js` ⇄ the function's Summary tab. The sync never writes the agent's tab
   and never deletes tabs (it writes Summary, Notes and one tab per mailbox). Mailbox addresses and the sheet link are
   data (Settings → Outreach), never code. Cortex never sends outreach email (the agent does).
+- **Calendar (0009)** has no module key: `collectEntries()` (`src/lib/calendar.js`) gathers what each source already
+  lets the viewer see, with that source's rule (boards: `canViewBoard`; invoices and contracts: Clients view; team events
+  and Google meetings: everyone). `calendar_events` is synced (anyone adds; the creator or an admin edits and deletes).
+  `calendar_meetings` is written only by the `google` function's `calendar-sync` and read only through
+  `useStore().calendar`; it keeps a meeting's title and times, never its description, place, guests or link, and a
+  Private or Confidential one is Busy with no title. A board's 3-month calendar is `boards.calendar`, never a name match.
+  Staff may use Google only to connect their calendar (connect with purpose `calendar`); everything else stays admins only.
 - Automations run in the database in live mode (`contact_pipeline` trigger, `ensure_todos` and
   `generate_due_invoices` RPCs) and in `src/lib/automations.js` in demo mode. Change both together; live mode
   never creates those rows client-side.

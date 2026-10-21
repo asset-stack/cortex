@@ -1,22 +1,31 @@
 // @ts-nocheck
-// Cortex `google` Edge Function: Gmail, Drive and Docs as the calling admin's OWN Google account.
+// Cortex `google` Edge Function: Gmail, Drive and Docs as the calling admin's OWN Google account, and each staff
+// member's own Google Calendar (read only) for the Calendar page.
 // One self-contained file with no imports, so it can be pasted into the Supabase dashboard editor (Edge Functions →
 // google); plain JavaScript in a .ts file, so scripts/test-google.mjs imports it in Node. Web APIs only.
 //
 // Routes (on the last path segment, so /google/send and /functions/v1/google/send both work):
-//   POST connect  {origin}                               → {url}: Google's consent page (comes back to callback)
-//   GET  callback ?code&state                            → 302 to <origin>/#/settings?tab=business&google=…
+//   POST connect  {origin, purpose?}                     → {url}: Google's consent page (comes back to callback).
+//                                                          purpose 'calendar': any staff member, calendar.readonly only;
+//                                                          otherwise admins only, Gmail and Drive
+//   GET  callback ?code&state                            → 302 to <origin>/#/settings?tab=business&google=…, or for a
+//                                                          calendar connect <origin>/#/calendar?google=…
 //   POST send     {to, subject, text, attachment?}       → {id, from}: sent from the caller's own Gmail
 //   POST contract {template, folder, name, replacements} → {id, name, url}: the template copied into the folder, filled in
 //   POST outreach-sync {}                                → {ok, stats}: the outreach agent's sheet into outreach_emails,
 //                                                          then its Summary, Notes and mailbox tabs written back
 //                                                          (docs/PHASE2.md §12)
+//   POST calendar-sync {force?}                          → {ok, claimed, synced, failed}: the connected staff whose turn
+//                                                          it is (rpc calendar_claim), each one's primary calendar into
+//                                                          calendar_meetings (rpc calendar_save); titles only, never
+//                                                          descriptions, places, attendees or links
 //
 // JWT verification is OFF for this function (Google's callback carries no JWT), so it checks callers itself: the
-// caller's JWT goes to rpc google_me (admins only), or rpc outreach_access for outreach-sync (anyone who can see
-// Outreach; the sheet is read with the Google account of the admin who set its link), and PostgREST decides who that
-// is. Refresh tokens are read and saved with the secret key (rpc google_token / google_save), which exists only in the
-// function runtime; so are the outreach tables the sync writes.
+// caller's JWT goes to rpc google_me (active staff only; send, contract and a plain connect then need admin), or rpc
+// outreach_access for outreach-sync (anyone who can see Outreach; the sheet is read with the Google account of the
+// admin who set its link), and PostgREST decides who that is. Refresh tokens are read and saved with the secret key
+// (rpc google_token / google_save), which exists only in the function runtime; so are the outreach tables the sync
+// writes and the calendar RPCs (calendar_claim / calendar_save).
 //
 // Env (Supabase injects the first three): SUPABASE_URL; SUPABASE_PUBLISHABLE_KEYS (JSON, .default) or
 // SUPABASE_ANON_KEY; SUPABASE_SECRET_KEYS (JSON, .default) or SUPABASE_SERVICE_ROLE_KEY; function secrets
@@ -37,6 +46,11 @@ const DRIVE_FILES = 'https://www.googleapis.com/drive/v3/files';
 const DOCS = 'https://docs.googleapis.com/v1/documents';
 const SHEETS = 'https://sheets.googleapis.com/v4/spreadsheets'; // the drive scope covers the Sheets API
 export const SCOPES = 'openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/drive';
+export const CALENDAR_SCOPES = 'openid email https://www.googleapis.com/auth/calendar.readonly'; // a calendar connect
+// Either one lets the sync read events (has_calendar() in 0009): whole entries of the space-separated scope list.
+const CALENDAR_SCOPE_ENTRIES = ['https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/calendar'];
+const CALENDAR_API = 'https://www.googleapis.com/calendar/';
+const CALENDAR_EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
 const DOMAIN = 'assetstackai.com';
 const STATE_TTL = 600; // seconds to finish Google's consent screen
 const MIME_DOC = 'application/vnd.google-apps.document';
@@ -52,7 +66,7 @@ const MAX_REPLACEMENTS = 100;
 const SYNC_BATCH = 500; // outreach_emails rows per upsert
 const MAX_CELL = 50000; // Google Sheets' limit per cell
 
-const ROUTES = { connect: 'POST', callback: 'GET', send: 'POST', contract: 'POST', 'outreach-sync': 'POST' };
+const ROUTES = { connect: 'POST', callback: 'GET', send: 'POST', contract: 'POST', 'outreach-sync': 'POST', 'calendar-sync': 'POST' };
 const EXPIRED = 'This sign-in link has expired. Go back to Cortex and try again.';
 const NOT_CONNECTED = 'Connect your Google account in Settings first.';
 const RECONNECT = 'Reconnect your Google account in Settings.';
@@ -64,6 +78,8 @@ const NO_GID = 'Paste the link of the agent’s tab in Settings → Outreach (op
 const GID_GONE = 'The tab in the outreach sheet link isn’t in the sheet any more. Paste the agent’s tab link in Settings → Outreach.';
 const gidOurs = (title) => `The outreach sheet link opens Cortex’s ${title} tab. Paste the agent’s tab link in Settings → Outreach.`;
 const SYNC_FAILED = 'Something went wrong with Google. Try again.';
+const NOT_ADMIN = 'Only admins can use Google from Cortex.';
+const NO_GOOGLE = 'Your Cortex account can’t use Google.';
 
 const str = (v) => String(v ?? '').trim();
 const utf8 = (s) => new TextEncoder().encode(String(s));
@@ -407,6 +423,11 @@ async function readBody(req) {
 
 const googleMessage = (data) => str(data?.error?.message || data?.error_description || (typeof data?.error === 'string' ? data.error : ''));
 
+// A missing scope → what to reconnect and allow: the calendar (on the Calendar page) or Gmail and Drive (in Settings).
+const scopeMissing = (url) => (String(url).startsWith(CALENDAR_API)
+  ? 'Reconnect Google on the Calendar page and allow Google Calendar.'
+  : 'Reconnect your Google account in Settings and allow Gmail and Drive.');
+
 // A Google API call → its JSON, or an HttpError: missing scope → 409 (reconnect), 404 → `notFound` and any other 403
 // (not shared; but not an API that is turned off) → `forbidden` when given, anything else → 502 with Google's message.
 async function google(fetch, url, init, notFound = '', forbidden = '') {
@@ -417,7 +438,7 @@ async function google(fetch, url, init, notFound = '', forbidden = '') {
   const reasons = (data?.error?.details || []).map((d) => d?.reason).concat((data?.error?.errors || []).map((e) => e?.reason));
   if (res.status === 403 && (reasons.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT') || reasons.includes('insufficientPermissions')
       || /insufficient authentication scopes/i.test(msg))) {
-    throw new HttpError(409, 'Reconnect your Google account in Settings and allow Gmail and Drive.');
+    throw new HttpError(409, scopeMissing(url));
   }
   if (res.status === 404 && notFound) throw new HttpError(404, notFound);
   if (res.status === 403 && forbidden && !reasons.includes('SERVICE_DISABLED') && !reasons.includes('accessNotConfigured')) {
@@ -448,13 +469,21 @@ async function callerRpc(req, cfg, fetch, name, refused) {
   return data;
 }
 
-// Admins, through rpc google_me. → { uid, name, email, admin, google_email }
-async function caller(req, cfg, fetch) {
-  const data = await callerRpc(req, cfg, fetch, 'google_me', 'Your Cortex account can’t use Google.');
-  if (!data || !str(data.uid)) throw new HttpError(403, 'Your Cortex account can’t use Google.');
-  if (data.admin !== true) throw new HttpError(403, 'Only admins can use Google from Cortex.');
+// Active staff, through rpc google_me (which refuses anyone else with 42501: it checks is_staff() itself).
+// → { uid, name, email, admin, google_email, connected_at, calendar, business }
+async function staffCaller(req, cfg, fetch) {
+  const data = await callerRpc(req, cfg, fetch, 'google_me', NO_GOOGLE);
+  if (!data || !str(data.uid)) throw new HttpError(403, NO_GOOGLE);
   return data;
 }
+
+function adminOnly(me) {
+  if (me?.admin !== true) throw new HttpError(403, NOT_ADMIN);
+  return me;
+}
+
+// Admins, through rpc google_me (send, contract and a plain connect).
+const caller = async (req, cfg, fetch) => adminOnly(await staffCaller(req, cfg, fetch));
 
 // Anyone who can see Outreach, through rpc outreach_access (can_view('outreach'): active staff with view or edit).
 async function outreachCaller(req, cfg, fetch) {
@@ -463,9 +492,10 @@ async function outreachCaller(req, cfg, fetch) {
   return data;
 }
 
-// A user's stored refresh token (the caller's, or for outreach-sync the admin who set the sheet) → a fresh access
-// token. `text` rewords the failures for someone else's account. → { token, email }
-async function googleAccess(cfg, fetch, me, text = {}) {
+// A user's stored refresh token (the caller's, or for outreach-sync the admin who set the sheet, or for calendar-sync
+// each claimed person) → a fresh access token. `text` rewords the failures for someone else's account; `needs`, when
+// given, checks the stored scopes first (false → reconnect, without asking Google). → { token, email }
+async function googleAccess(cfg, fetch, me, text = {}, needs = null) {
   const say = { unread: 'Could not read your Google connection.', notConnected: NOT_CONNECTED, reconnect: RECONNECT, ...text };
   const stored = await fetch(`${cfg.url}/rest/v1/rpc/google_token`, {
     method: 'POST',
@@ -477,6 +507,7 @@ async function googleAccess(cfg, fetch, me, text = {}) {
   if (!str(account?.refresh_token)) throw new HttpError(409, say.notConnected);
   const email = str(account.email).toLowerCase();
   if (!EMAIL.test(email) || !ASCII.test(email)) throw new HttpError(409, say.reconnect);
+  if (needs && !needs(account.scopes)) throw new HttpError(409, say.reconnect);
 
   const res = await fetch(GOOGLE_TOKEN, {
     method: 'POST',
@@ -495,20 +526,24 @@ async function googleAccess(cfg, fetch, me, text = {}) {
 
 const callbackUrl = (cfg) => `${cfg.url}/functions/v1/google/callback`;
 
+// purpose 'calendar' (any staff member): calendar.readonly only, back to the Calendar page. Anything else (admins only,
+// checked by the caller): Gmail and Drive, back to Settings → Business. include_granted_scopes keeps what was granted
+// before either way, so one refresh token carries both.
 async function connect(body, me, cfg) {
+  const calendar = body.purpose === 'calendar';
   const origin = allowedOrigin(body.origin, cfg.origins);
   if (!origin) throw new HttpError(400, 'Open Cortex at its own address to connect Google.');
   const email = str(me.email).toLowerCase();
   if (!email) throw new HttpError(400, 'Your Cortex profile has no email.');
   const state = await signState({
     uid: me.uid, email, origin, exp: Math.floor(Date.now() / 1000) + STATE_TTL,
-    nonce: base64url(crypto.getRandomValues(new Uint8Array(16))),
+    nonce: base64url(crypto.getRandomValues(new Uint8Array(16))), ...(calendar ? { purpose: 'calendar' } : {}),
   }, cfg.clientSecret);
   const query = new URLSearchParams({
     client_id: cfg.clientId,
     redirect_uri: callbackUrl(cfg),
     response_type: 'code',
-    scope: SCOPES,
+    scope: calendar ? CALENDAR_SCOPES : SCOPES,
     access_type: 'offline',
     prompt: 'consent',
     include_granted_scopes: 'true',
@@ -519,13 +554,21 @@ async function connect(body, me, cfg) {
   return { url: `${GOOGLE_AUTH}?${query}` };
 }
 
+// A calendar connect's failures, as the Calendar page reads them (#/calendar?google=…): the reasons it names, else error.
+const CALENDAR_RESULTS = new Set(['denied', 'wrong_account', 'no_refresh_token', 'calendar_scope']);
+
 // Google sends the browser here. Only a valid state says where Cortex is; anything else gets a plain page.
 async function callback(url, cfg, fetch) {
   const state = await verifyState(url.searchParams.get('state'), cfg.clientSecret);
   const origin = state ? allowedOrigin(state.origin, cfg.origins) : '';
   if (!origin) return page(400, EXPIRED);
-  const back = (result) => redirect(`${origin}/#/settings?tab=business&google=${result}`);
-  const fail = (reason) => back(`error&reason=${reason}`);
+  const calendar = state.purpose === 'calendar';
+  const back = calendar
+    ? (result) => redirect(`${origin}/#/calendar?google=${result}`)
+    : (result) => redirect(`${origin}/#/settings?tab=business&google=${result}`);
+  const fail = calendar
+    ? (reason) => back(CALENDAR_RESULTS.has(reason) ? reason : 'error')
+    : (reason) => back(`error&reason=${reason}`);
 
   if (url.searchParams.get('error')) return fail('denied');
   const code = url.searchParams.get('code');
@@ -551,6 +594,8 @@ async function callback(url, cfg, fetch) {
   const email = str(id?.email).toLowerCase();
   const verified = id?.email_verified === true || id?.email_verified === 'true';
   if (!email || !verified || email !== str(state.email).toLowerCase()) return fail('wrong_account');
+  // A calendar connect where the calendar box was left unticked: nothing saved (the stored connection stays as it was).
+  if (calendar && !hasCalendar(token.scope)) return fail('calendar_scope');
   if (!str(token.refresh_token)) return fail('no_refresh_token');
 
   try {
@@ -879,8 +924,9 @@ function gridFits(p, need) {
 }
 const grownGrid = (g, need) => ({ rowCount: Math.max(g.rowCount, need.rows), columnCount: Math.max(g.columnCount, need.columns) });
 
-// PostgREST with the secret key (no RLS). → its JSON; a failure → 502 `fail` (PostgREST's own message is only logged).
-async function rest(cfg, fetch, path, { method = 'GET', body, prefer = '' } = {}, fail = 'Could not reach the database.') {
+// PostgREST with the secret key (no RLS). → its JSON; a failure → 502 `fail` (PostgREST's own message is only logged,
+// under google/<label>).
+async function rest(cfg, fetch, label, path, { method = 'GET', body, prefer = '' } = {}, fail = 'Could not reach the database.') {
   const res = await fetch(`${cfg.url}/rest/v1/${path}`, {
     method,
     headers: {
@@ -890,7 +936,7 @@ async function rest(cfg, fetch, path, { method = 'GET', body, prefer = '' } = {}
   });
   const data = await readJson(res);
   if (!res.ok) {
-    console.error(`google/outreach-sync: ${method} ${path.split('?')[0]} → ${res.status}`, str(data?.code), str(data?.message).slice(0, 200));
+    console.error(`google/${label}: ${method} ${path.split('?')[0]} → ${res.status}`, str(data?.code), str(data?.message).slice(0, 200));
     throw new HttpError(502, fail);
   }
   return data;
@@ -907,7 +953,7 @@ async function rest(cfg, fetch, path, { method = 'GET', body, prefer = '' } = {}
 // only when no newer sync has saved its own; and tabs the other one just added or grew are found again.
 async function outreachSync(cfg, fetch) {
   const start = new Date().toISOString();
-  const db = (path, init, fail) => rest(cfg, fetch, path, init, fail);
+  const db = (path, init, fail) => rest(cfg, fetch, 'outreach-sync', path, init, fail);
   const settings = await db('outreach_settings?id=eq.1&select=sheet_url,sheet_by', {}, 'Could not read the outreach settings.');
   const set = Array.isArray(settings) ? settings[0] : null;
   if (!str(set?.sheet_url)) throw new HttpError(400, NO_SHEET);
@@ -1069,6 +1115,192 @@ async function outreachSync(cfg, fetch) {
   }
 }
 
+// ── Calendar sync ───────────────────────────────────────────────────────────────────────────────────────────────
+
+const CALENDAR_PAGES = 10; // events.list pages of 2,500 per person; more → TOO_MANY_EVENTS, nothing saved
+const CALENDAR_EVENT_TYPES = ['default', 'outOfOffice', 'focusTime', 'fromGmail']; // not workingLocation or birthday
+const CALENDAR_FIELDS = 'nextPageToken,items(id,status,summary,visibility,start,end,eventType,attendees(self,responseStatus))';
+const MAX_TITLE = 200;
+const TOO_MANY_EVENTS = 'Too many events';
+// Saved per person (calendar_sync.error, which every staff member sees on the Calendar page): short, never a token.
+const CAL_UNREAD = 'Could not read the Google connection.';
+const CAL_NOT_CONNECTED = 'Google Calendar isn’t connected.';
+const CAL_RECONNECT = 'Google Calendar needs reconnecting.';
+const CAL_FAILED = 'Something went wrong with Google.';
+const CAL_ERROR_LENGTH = 200;
+
+/** Whether a space-separated scope list holds a calendar scope as a whole entry (as private.has_calendar() in 0009). */
+export function hasCalendar(scopes) {
+  return str(scopes).split(/\s+/).some((s) => CALENDAR_SCOPE_ENTRIES.includes(s));
+}
+
+const YMD = /^(\d{4})-(\d{2})-(\d{2})$/;
+const utcDay = (y, m, d) => new Date(Date.UTC(y, m, d)); // Date.UTC carries a month or day past its end over
+const ymdOf = (t) => t.toISOString().slice(0, 10);
+const midnightUtc = (t) => `${ymdOf(t)}T00:00:00Z`;
+
+// A real YYYY-MM-DD → the same; anything else → ''.
+function validYmd(value) {
+  const m = YMD.exec(str(value));
+  if (!m) return '';
+  const t = utcDay(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return ymdOf(t) === m[0] ? m[0] : '';
+}
+
+/** Today in Sydney as YYYY-MM-DD (business dates are Sydney's, as team_today()). */
+export function teamToday(now = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-AU', {
+    timeZone: TEAM_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+/**
+ * The sync window for a (Sydney) day: the first day of last month to the last day of the month 11 months on, as dates
+ * (from / to, inclusive; what calendar_save prunes inside), and the instants events.list is asked for (timeMin /
+ * timeMax: UTC midnights one day beyond the window on each side, so every time zone's view of those days is in it).
+ * 2026-10-21 → { from: 2026-09-01, to: 2027-09-30, timeMin: 2026-08-31T00:00:00Z, timeMax: 2027-10-02T00:00:00Z }
+ */
+export function calendarWindow(todayYmd) {
+  const m = YMD.exec(str(todayYmd));
+  if (!m || !validYmd(todayYmd)) throw new Error('calendarWindow: not a YYYY-MM-DD date');
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  return {
+    from: ymdOf(utcDay(y, mo - 1, 1)),
+    to: ymdOf(utcDay(y, mo + 12, 0)), // day 0 of the month after month +11 = its last day
+    timeMin: midnightUtc(utcDay(y, mo - 1, 0)),
+    timeMax: midnightUtc(utcDay(y, mo + 12, 2)),
+  };
+}
+
+// Code points, not UTF-16 units (Postgres counts characters), so an emoji is never cut in half.
+const clip = (s, n) => Array.from(s).slice(0, n).join('');
+
+/**
+ * A Google Calendar event (events.list item) → a calendar_meetings row, or null when it isn't one: no id, cancelled,
+ * a working location or birthday, declined by you (your own attendee entry), or with no readable start. Private and
+ * confidential events are busy: no title. All day: start.date to end.date minus a day (Google's end is exclusive;
+ * never before the start), no times. Timed: the instants as ISO, their UTC dates (an end before the start → the start).
+ * Only the title is kept: never a description, place, attendee or link.
+ * → { google_id, title, busy, all_day, start_date, end_date, start_at, end_at }
+ */
+export function meetingRow(ev) {
+  if (!ev || typeof ev !== 'object') return null;
+  const id = str(ev.id);
+  if (!id || ev.status === 'cancelled') return null;
+  if (ev.eventType === 'workingLocation' || ev.eventType === 'birthday') return null;
+  const attendees = Array.isArray(ev.attendees) ? ev.attendees : [];
+  if (attendees.some((a) => a?.self === true && a.responseStatus === 'declined')) return null;
+  const busy = ev.visibility === 'private' || ev.visibility === 'confidential';
+  const title = busy ? '' : clip(str(ev.summary), MAX_TITLE);
+  const start = ev.start && typeof ev.start === 'object' ? ev.start : {};
+  const end = ev.end && typeof ev.end === 'object' ? ev.end : {};
+
+  if (start.date !== undefined && start.dateTime === undefined) {
+    const startDate = validYmd(start.date);
+    if (!startDate) return null;
+    const endExclusive = validYmd(end.date);
+    let endDate = endExclusive ? ymdOf(new Date(Date.parse(`${endExclusive}T00:00:00Z`) - 86400000)) : startDate;
+    if (endDate < startDate) endDate = startDate;
+    return { google_id: id, title, busy, all_day: true, start_date: startDate, end_date: endDate, start_at: null, end_at: null };
+  }
+
+  const a = Date.parse(str(start.dateTime));
+  if (!Number.isFinite(a)) return null;
+  const b = Date.parse(str(end.dateTime));
+  const startAt = new Date(a);
+  const endAt = Number.isFinite(b) && b >= a ? new Date(b) : startAt;
+  return {
+    google_id: id, title, busy, all_day: false, start_date: ymdOf(startAt), end_date: ymdOf(endAt),
+    start_at: startAt.toISOString(), end_at: endAt.toISOString(),
+  };
+}
+
+// One person's primary calendar in the window → their rows (one per event id), or an HttpError.
+async function calendarRows(fetch, token, win) {
+  const rows = new Map();
+  let pageToken = '';
+  for (let n = 0; n < CALENDAR_PAGES; n++) {
+    const q = new URLSearchParams({
+      timeMin: win.timeMin, timeMax: win.timeMax, singleEvents: 'true', orderBy: 'startTime', maxResults: '2500',
+      maxAttendees: '1', showDeleted: 'false',
+    });
+    for (const type of CALENDAR_EVENT_TYPES) q.append('eventTypes', type);
+    q.set('fields', CALENDAR_FIELDS);
+    if (pageToken) q.set('pageToken', pageToken);
+    const data = await google(fetch, `${CALENDAR_EVENTS}?${q}`, { method: 'GET', headers: { Authorization: `Bearer ${token}` } });
+    for (const ev of Array.isArray(data?.items) ? data.items : []) {
+      const row = meetingRow(ev);
+      if (row) rows.set(row.google_id, row);
+    }
+    pageToken = str(data?.nextPageToken);
+    if (!pageToken) return [...rows.values()];
+  }
+  throw new HttpError(422, TOO_MANY_EVENTS);
+}
+
+// A failure → the short text saved for that person: ours, or Google's message with the access token cut out.
+function calendarError(e, token) {
+  if (!(e instanceof HttpError)) return CAL_FAILED;
+  if (e.status === 409) return e.message === CAL_NOT_CONNECTED ? CAL_NOT_CONNECTED : CAL_RECONNECT; // and p_reconnect
+  let message = e.message;
+  if (token) message = message.split(token).join('…');
+  return clip(message.replace(/\s+/g, ' ').trim(), CAL_ERROR_LENGTH) || CAL_FAILED;
+}
+
+// The ids rpc calendar_claim returned (PostgREST gives a setof uuid as bare values; objects are read too).
+function claimedIds(data) {
+  const list = Array.isArray(data) ? data : [];
+  return [...new Set(list.map((x) => str(x && typeof x === 'object' ? Object.values(x)[0] : x)).filter(Boolean))];
+}
+
+// Claims the people whose turn it is (connected staff not synced in the last 10 minutes, or 1 minute when forced) and
+// syncs them one at a time with their own Google accounts. One person's failure (saved as their error, with reconnect
+// when their Google connection needs it) never stops the others. Every save carries this run's start, so an older run
+// finishing late never overwrites a newer one's meetings or status (calendar_save).
+async function calendarSync(body, cfg, fetch) {
+  const started = new Date();
+  const start = started.toISOString();
+  const db = (path, init, fail) => rest(cfg, fetch, 'calendar-sync', path, init, fail);
+  const claimed = claimedIds(await db('rpc/calendar_claim', {
+    method: 'POST', body: { p_gap: body.force === true ? 60 : 600 },
+  }, 'Could not start the calendar sync.'));
+  const result = { ok: true, claimed: claimed.length, synced: 0, failed: 0 };
+  if (!claimed.length) return result;
+
+  const win = calendarWindow(teamToday(started));
+  for (const uid of claimed) {
+    let rows = [];
+    let error = '';
+    let reconnect = false;
+    let token = '';
+    try {
+      ({ token } = await googleAccess(cfg, fetch, { uid }, {
+        unread: CAL_UNREAD, notConnected: CAL_NOT_CONNECTED, reconnect: CAL_RECONNECT,
+      }, hasCalendar));
+      rows = await calendarRows(fetch, token, win);
+    } catch (e) {
+      rows = [];
+      reconnect = e instanceof HttpError && e.status === 409;
+      error = calendarError(e, token);
+    }
+    try {
+      const saved = await db('rpc/calendar_save', {
+        method: 'POST',
+        body: {
+          p_user: uid, p_started: start, p_from: win.from, p_to: win.to, p_rows: rows, p_error: error, p_reconnect: reconnect,
+        },
+      }, 'Could not save the calendar.');
+      if (error) result.failed++;
+      else if (saved === true) result.synced++; // false: no longer connected staff, and their meetings are gone
+    } catch {
+      result.failed++;
+    }
+  }
+  return result;
+}
+
 // ── Entry ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function handle(req, { env = {}, fetch = globalThis.fetch } = {}) {
@@ -1095,9 +1327,19 @@ export async function handle(req, { env = {}, fetch = globalThis.fetch } = {}) {
       await readBody(req);
       return json(200, await outreachSync(cfg, fetch), origin);
     }
+    if (route === 'calendar-sync') {
+      await staffCaller(req, cfg, fetch);
+      return json(200, await calendarSync(await readBody(req), cfg, fetch), origin);
+    }
+    if (route === 'connect') {
+      // Any staff member may connect their calendar; anything else stays admins only.
+      const me = await staffCaller(req, cfg, fetch);
+      const body = await readBody(req);
+      if (body.purpose !== 'calendar') adminOnly(me);
+      return json(200, await connect(body, me, cfg), origin);
+    }
     const me = await caller(req, cfg, fetch);
     const body = await readBody(req);
-    if (route === 'connect') return json(200, await connect(body, me, cfg), origin);
     if (route === 'send') return json(200, await send(body, me, cfg, fetch), origin);
     return json(200, await contract(body, me, cfg, fetch), origin);
   } catch (e) {

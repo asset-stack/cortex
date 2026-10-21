@@ -37,7 +37,10 @@ const item = (name, values, extra = {}) => ({
 
 // Projects: everyone's own page, then the team boards; Marketing, Outreach, Clients and Pipeline: their team boards
 // (docs/PHASE2.md §11).
-const board = (module, name, groups, owner = '') => ({ id: id('b'), module, name: owner ? '' : name, owner, groups });
+// calendar (0009): Posting schedule starts with its 3-month calendar above its tasks, as 0009 sets it once in the database.
+const board = (module, name, groups, owner = '') => ({
+  id: id('b'), module, name: owner ? '' : name, owner, calendar: !owner && module === 'marketing' && name === 'Posting schedule', groups,
+});
 const group = (name, color, items) => ({ id: id('g'), name, color, items });
 
 function boards() {
@@ -416,6 +419,50 @@ const timesheet = (day) => [
   ['16:00', 'Other', '', 'suggested'],
 ].map(([start, category, note, source]) => ({ id: id('te'), user: 'hello', day, start, minutes: 60, category, note, source }));
 
+// Calendar (0009). Team events relative to today: a planning meeting this Monday, an expo over a month's end and a
+// reminder next month. Times are the browser's, as the event form makes them.
+export function demoCalendarEvents(today, idf = uid) {
+  const monday = addDays(today, 1 - isoDow(today));
+  const at = (day, hm) => new Date(`${day}T${hm}:00`).toISOString();
+  const monthEnd = addDays(addMonths(`${today.slice(0, 7)}-01`, 1), -1);
+  const nextMonth = addMonths(`${today.slice(0, 7)}-01`, 1);
+  return [
+    { id: idf('ce'), kind: 'meeting', title: 'Team planning', day: monday, endDay: '', startsAt: at(monday, '09:30'), endsAt: at(monday, '10:30'),
+      people: ['david', 'josh', 'hello'], createdBy: 'david' },
+    { id: idf('ce'), kind: 'event', title: 'Asset Management Expo', day: addDays(monthEnd, -1), endDay: addDays(monthEnd, 1), startsAt: '', endsAt: '',
+      people: ['david', 'josh'], createdBy: 'josh' },
+    { id: idf('ce'), kind: 'reminder', title: 'Renew public liability insurance', day: addDays(nextMonth, 4), endDay: '', startsAt: '', endsAt: '',
+      people: ['josh'], createdBy: 'josh' },
+  ];
+}
+
+// Google meetings for demo mode, shaped like calendar_meetings rows (the store reads them as live mode reads the table).
+// Made fresh from today each time, never saved: last month's (the Archive), this week's (one Private, shown as Busy, and
+// one at 10:00 Sydney, which is the evening before in Tbilisi), and next month's.
+export function demoMeetings(today) {
+  const monday = addDays(today, 1 - isoDow(today));
+  const lastMonth = addMonths(`${today.slice(0, 7)}-01`, -1);
+  const nextMonth = addMonths(`${today.slice(0, 7)}-01`, 1);
+  const timed = (key, user, title, day, utc, minutes, busy = false) => {
+    const start = new Date(`${day}T${utc}:00Z`);
+    const end = new Date(start.getTime() + minutes * 60e3);
+    return {
+      id: `gm-${key}`, user_id: user, title: busy ? '' : title, busy, all_day: false, start_date: start.toISOString().slice(0, 10),
+      end_date: end.toISOString().slice(0, 10), start_at: start.toISOString(), end_at: end.toISOString(),
+    };
+  };
+  return [
+    timed('1', 'david', 'Northside Diocese check-in', addDays(lastMonth, 9), '00:00', 30),
+    timed('2', 'josh', 'Investor call', addDays(lastMonth, 16), '06:00', 45),
+    timed('3', 'david', 'Westbay onboarding call', addDays(monday, 1), '23:00', 60), // Wednesday 10:00 Sydney
+    timed('4', 'josh', 'Dentist', addDays(monday, 2), '08:00', 60, true),
+    timed('5', 'hello', 'Content shoot', addDays(monday, 3), '01:00', 120),
+    { id: 'gm-6', user_id: 'hello', title: 'Leave', busy: false, all_day: true, start_date: addDays(nextMonth, 6), end_date: addDays(nextMonth, 8),
+      start_at: null, end_at: null },
+    timed('7', 'david', 'Harbour Construction demo', addDays(nextMonth, 12), '00:30', 60),
+  ];
+}
+
 export function createSeed() {
   n = 0;
   now = Date.now();
@@ -487,6 +534,8 @@ export function createSeed() {
     todos: [],
     routineRuns: [], // demo only: the routine runs ensureTodosLocal has made (routine_runs in the database)
     seededBoards: [...BOARD_MODULES], // demo only: modules whose starting boards this demo has (migrate() adds new ones once)
+    calendarSeeded: true, // demo only: Posting schedule's calendar was switched on (migrate() does it once for older data)
+    calendarEvents: demoCalendarEvents(today, id),
     payments: [
       { id: id('pay'), invoiceId: invoiceNo(westbay, 'INV-1012'), clientId: westbay.id, amount: 5000, receivedOn: '2026-10-07', reference: 'Part payment INV-1012', statementId: statement.id },
       { id: id('pay'), invoiceId: invoiceNo(harbour, 'INV-1014'), clientId: harbour.id, amount: 7975, receivedOn: '2026-10-06', reference: 'INV-1014', statementId: statement.id },
@@ -599,6 +648,7 @@ export function migrate(data) {
   data.boards.forEach((b) => {
     b.name ??= '';
     b.owner ??= '';
+    b.calendar ??= false; // 0009
     (b.groups ||= []).forEach((g) => (g.items || []).forEach((it) => {
       const values = { ...it.values };
       if (!userIds.has(values.owner)) delete values.owner; // a stale owner is dropped
@@ -634,6 +684,13 @@ export function migrate(data) {
   if (!Array.isArray(data.mailboxes)) Object.assign(data, outreachDemo(localYmd()));
   data.outreachNotes ??= [];
   data.outreachEmails ??= [];
+  // Calendar (0009): Posting schedule's 3-month calendar is switched on once (as 0009 does), so switching it off stays off;
+  // older demo data gets the demo team events.
+  if (!data.calendarSeeded) {
+    data.boards.filter((b) => b.module === 'marketing' && !b.owner && b.name === 'Posting schedule').forEach((b) => { b.calendar = true; });
+    data.calendarSeeded = true;
+  }
+  if (!Array.isArray(data.calendarEvents)) data.calendarEvents = demoCalendarEvents(localYmd());
   if (typeof data.outreachSheet !== 'string') data.outreachSheet = '';
   // Demo only: which routine runs ensureTodosLocal has made (the database's routine_runs), from the to-dos older
   // builds made, so a deleted one doesn't come back.

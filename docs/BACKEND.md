@@ -14,7 +14,9 @@ person's own Projects page) and `0007_outreach.sql`
 cold email the agent sends from each mailbox, read from its Google Sheet; and
 [§13](PHASE2.md#13-0007-boards-under-outreach-and-clients): boards under Outreach and Clients) and `0008_pipeline_stages.sql`
 ([PHASE2.md §14](PHASE2.md#14-0008-pipeline--opportunities--contacted--first-meetings--demos-editable-deals-work-in-progress): Pipeline's stages, editable deals and
-Work in Progress). The rest of this file is phase 1, corrected where 0002–0008 changed it.
+Work in Progress) and `0009_calendar.sql` ([PHASE2.md §15](PHASE2.md#15-0009-the-team-calendar-google-calendar-meetings-and-a-boards-3-month-calendar):
+the team Calendar, Google Calendar meetings and a board's 3-month calendar). The rest of this file is phase 1,
+corrected where 0002–0009 changed it.
 
 - **Roles**: `superadmin | admin | staff` (phase 1's `member` became `staff`). Admins (superadmin or admin) edit
   every module and see finance; only the SuperAdmin changes roles, active flags and module access, and the last
@@ -80,6 +82,7 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
   // 0006: an array (was { projects|marketing: { groups } }). Projects, Marketing, Outreach, then Clients; personal boards first (by
   // owner's name), then team boards in order. A personal board has name '' and owner set (title from boardTitle()).
   boards: [{ id, module: 'projects'|'marketing'|'outreach'|'clients'|'pipeline' /* 0007, 0008 add the last three */, name, owner /* '' | userId */,
+             calendar /* 0009: a team board shows its 3-month calendar */,
              groups: [{ id, name, color,
                items: [{ id, name, values: { people /* [userId] */, status, ... }, done,
                          updates: [{ id, user, text, ts }], subtasks: [{ id, text, done }] }] }] }],
@@ -109,6 +112,10 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
   outreachNotes: [{ id, mailbox /* '' = all mailboxes */, pinned, body, author, createdAt }],        // newest first
   outreachSheet: '<the sheet link>',   // absent in live mode for someone without Outreach access
   outreachEmails: [ … ],               // demo only; live mode reads outreach_emails through useStore().outreach
+  // 0009 (docs/PHASE2.md §15): the team's Calendar events, by day. Google meetings are not in state: both modes read
+  // them through useStore().calendar (calendar_meetings in live mode).
+  calendarEvents: [{ id, kind /* meeting | event | reminder */, title, day, endDay /* all day, '' = one day */,
+                     startsAt, endsAt /* ISO instants, '' for all day */, people: [userId], createdBy }],
   // phase 2: moduleAccess, todos, routines, payments, bankStatements, expenses, subscriptions, timeEntries,
   // clients[].plans and clients[].usage (docs/PHASE2.md §2)
 }

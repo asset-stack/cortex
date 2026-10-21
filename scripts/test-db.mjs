@@ -7,8 +7,10 @@
 // 0005_work_tools.sql (each person's Tools in My Work); then 0006_boards.sql (sub-boards under Projects and Marketing,
 // each person's own Projects page, and who sees and edits which board); then 0007_outreach.sql (outreach mailboxes,
 // the agent's emails read from its sheet, notes and the sheet's link: who reads and writes what, the guards, and the
-// dashboard RPCs, which must give the same numbers as src/lib/outreach.js). Last, the sync engine's writes of every
-// synced table (flatten() rows as PostgREST upserts), personal pages and Outreach included.
+// dashboard RPCs, which must give the same numbers as src/lib/outreach.js); then 0008_pipeline_stages.sql (Pipeline's
+// stages, Work in Progress); then 0009_calendar.sql (the team's calendar events, each person's Google meetings and the
+// calendar sync's RPCs, a calendar on boards). Last, the sync engine's writes of every synced table (flatten() rows as
+// PostgREST upserts), personal pages, Outreach and calendar events included.
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -26,6 +28,7 @@ const migration5 = await readFile(new URL('supabase/migrations/0005_work_tools.s
 const migration6 = await readFile(new URL('supabase/migrations/0006_boards.sql', root), 'utf8');
 const migration7 = await readFile(new URL('supabase/migrations/0007_outreach.sql', root), 'utf8');
 const migration8 = await readFile(new URL('supabase/migrations/0008_pipeline_stages.sql', root), 'utf8');
+const migration9 = await readFile(new URL('supabase/migrations/0009_calendar.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -2557,6 +2560,622 @@ async function phase8(ctx) {
   return ctx;
 }
 
+// Phase 9: 0009_calendar.sql (the team's calendar events, each person's Google meetings, the calendar sync, a calendar on
+// boards) -----------------------------------------------------------------------------------------------------------
+
+async function applyMigration9() {
+  await as(null);
+  try {
+    await db.exec(migration9);
+    return null;
+  } catch (e) {
+    await db.exec('rollback').catch(() => {});
+    return e.message;
+  }
+}
+
+const CALENDAR_TABLES = ['public.calendar_events', 'public.calendar_meetings', 'private.calendar_sync'];
+const CALENDAR_FUNCTIONS = ['public.calendar_claim', 'public.calendar_save', 'public.calendar_status', 'public.calendar_forget',
+  'public.protect_calendar_event', 'public.google_me', 'private.has_calendar'];
+const SCOPE = {
+  read: 'https://www.googleapis.com/auth/calendar.readonly',
+  full: 'https://www.googleapis.com/auth/calendar',
+  events: 'https://www.googleapis.com/auth/calendar.events',
+  business: 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/drive',
+};
+
+// Everything 0009 makes (tables, columns, constraints, indexes, triggers, policies, functions, grants, realtime and the
+// boards column), in a form that compares across runs and databases.
+async function calendarShape(dbx) {
+  const q = async (sql, params) => (await dbx.query(sql, params)).rows;
+  const ofTables = `(select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname || '.' || c.relname = any($1::text[]))`;
+  return {
+    tables: await q(`select c.oid::regclass::text as t, c.relrowsecurity as rls, (select array_agg(a::text order by a::text) from unnest(c.relacl) a) as acl
+      from pg_class c where c.oid in ${ofTables} order by 1`, [CALENDAR_TABLES]),
+    columns: await q(`select table_schema, table_name, column_name, udt_name, is_nullable, column_default from information_schema.columns
+      where table_schema || '.' || table_name = any($1::text[]) or (table_schema = 'public' and table_name = 'boards' and column_name = 'calendar')
+      order by 1, 2, ordinal_position`, [CALENDAR_TABLES]),
+    constraints: await q(`select conrelid::regclass::text as t, conname, pg_get_constraintdef(oid) as def from pg_constraint
+      where conrelid in ${ofTables} order by 1, 2`, [CALENDAR_TABLES]),
+    indexes: await q(`select schemaname, tablename, indexname, indexdef from pg_indexes
+      where schemaname || '.' || tablename = any($1::text[]) order by 1, 2, 3`, [CALENDAR_TABLES]),
+    triggers: await q(`select tgrelid::regclass::text as t, tgname, pg_get_triggerdef(oid) as def from pg_trigger
+      where not tgisinternal and (tgrelid in ${ofTables} or tgname = 'calendar_forget') order by 1, 2`, [CALENDAR_TABLES]),
+    policies: await q(`select schemaname, tablename, policyname, cmd, permissive, roles::text as roles, qual, with_check from pg_policies
+      where schemaname || '.' || tablename = any($1::text[]) order by 1, 2, 3`, [CALENDAR_TABLES]),
+    functions: await q(`select pronamespace::regnamespace::text as ns, proname, prosecdef, provolatile, proconfig, md5(prosrc) as src,
+        pg_get_function_identity_arguments(oid) as args, pg_get_function_result(oid) as result,
+        (select array_agg(a::text order by a::text) from unnest(proacl) a) as acl
+      from pg_proc where pronamespace::regnamespace::text || '.' || proname = any($1::text[]) order by 1, 2`, [CALENDAR_FUNCTIONS]),
+    published: (await q(`select schemaname || '.' || tablename as t from pg_publication_tables where pubname = 'supabase_realtime'
+      and schemaname || '.' || tablename = any($1::text[]) order by 1`, [CALENDAR_TABLES])).map((r) => r.t),
+  };
+}
+
+// 64–77. 0009: the team Calendar and a calendar on boards (docs/PHASE2.md §15) ---------------------------------------------
+async function phase9(ctx) {
+  const { alice, boss, david, hello, carol, newcomer, early, late, board } = ctx;
+  const calendarBoards = async (dbx = db) => (await dbx.query(`select module || ':' || name as b from public.boards
+    where calendar order by 1`)).rows.map((r) => r.b);
+
+  // 64. On the database the phases above leave behind: whole, again, and statement by statement --------------------------
+
+  await as(null);
+  // A decoy: a Projects team board also called Posting schedule (only Marketing's team board gets the calendar).
+  await db.query("insert into public.boards (module, name, position) values ('projects', 'Posting schedule', 9)");
+  const publishedBefore = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'")).n;
+  const first = await applyMigration9();
+  const body = migration9.replace(/--.*$/gm, '').trim();
+  check('64. 0009 runs on top of 0008 and its rows, as one transaction (begin … commit when run whole)',
+    first === null && /^begin;/i.test(body) && /commit;$/i.test(body), first);
+  if (first) return null;
+  const shape = await calendarShape(db);
+  const flaggedFirst = await calendarBoards();
+  const second = await applyMigration9();
+  await as(null);
+  const splitErrors = await runSplit(db, migration9, { continueOnError: true });
+  const reshaped = await calendarShape(db);
+  check('64. 0009 re-runs whole and statement by statement (the editor) cleanly, changing nothing, and never mentions module_level',
+    second === null && !splitErrors.length && !shapeDiff(shape, reshaped).length && !migration9.includes('module_level')
+      && stable(await calendarBoards()) === stable(flaggedFirst),
+    { second, splitErrors, changed: shapeDiff(shape, reshaped) });
+
+  // 65. On a fresh database after 0008: statement by statement ends as a whole run does; Supabase's default grants --------
+
+  const freshAt8 = async (supabaseDefaults = false) => {
+    const dbx = new PGlite({ extensions: { pgcrypto } });
+    await dbx.exec(SUPABASE_STUB);
+    if (supabaseDefaults) {
+      await dbx.exec(`alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+        alter default privileges in schema public grant all on tables to service_role`);
+    }
+    for (const m of [migration, migration2, migration3, migration4, migration5, migration6, migration7, migration8]) await dbx.exec(m);
+    return dbx;
+  };
+  const whole = await freshAt8();
+  const wholeError = await whole.exec(migration9).then(() => null, (e) => e.message);
+  const wholeShape = await calendarShape(whole);
+  const wholeFlags = await calendarBoards(whole);
+  await whole.close();
+  const stop = await freshAt8();
+  const stopErrors = await runSplit(stop, migration9);
+  const stopShape = await calendarShape(stop);
+  const stopFlags = await calendarBoards(stop);
+  const againErrors = await runSplit(stop, migration9);
+  const againShape = await calendarShape(stop);
+  await stop.close();
+  const carry = await freshAt8();
+  const carryErrors = await runSplit(carry, migration9, { continueOnError: true });
+  const carryShape = await calendarShape(carry);
+  await carry.close();
+  const statements = splitSql(migration9).length;
+  check('65. 0009 run statement by statement on a fresh database (stopping at the first error, or carrying on) ends exactly as a '
+    + 'whole run does, Posting schedule showing its calendar; a second statement-by-statement run changes nothing',
+    statements > 25 && wholeError === null && !stopErrors.length && !carryErrors.length && !againErrors.length
+      && !shapeDiff(wholeShape, stopShape).length && !shapeDiff(wholeShape, carryShape).length && !shapeDiff(wholeShape, againShape).length
+      && stable(wholeFlags) === stable(['marketing:Posting schedule']) && stable(stopFlags) === stable(wholeFlags),
+    { statements, wholeError, stopErrors, carryErrors, againErrors, stop: shapeDiff(wholeShape, stopShape),
+      carry: shapeDiff(wholeShape, carryShape), again: shapeDiff(wholeShape, againShape), wholeFlags, stopFlags });
+  check('65. ...and a fresh database ends with the same tables, policies, functions, triggers and grants as the used one',
+    !shapeDiff(wholeShape, shape).length, shapeDiff(wholeShape, shape));
+
+  const supa = await freshAt8(true);
+  const supaRun = await supa.exec(migration9).then(() => null, (e) => e.message);
+  const supaFns = supaRun ?? (await supa.query(`select f, has_function_privilege('anon', f, 'execute') as anon,
+      has_function_privilege('authenticated', f, 'execute') as signed_in, has_function_privilege('service_role', f, 'execute') as secret
+    from unnest(array['public.calendar_claim(int)', 'public.calendar_save(uuid, timestamptz, date, date, jsonb, text, boolean)',
+      'public.calendar_status()', 'public.google_me()', 'private.has_calendar(text)']) f`)).rows;
+  const supaTables = supaRun ?? (await supa.query(`select t,
+      (select string_agg(p, ',') from unnest(array['select', 'insert', 'update', 'delete', 'truncate']) p
+        where has_table_privilege('anon', t, p)) as anon,
+      (select string_agg(p, ',') from unnest(array['select', 'insert', 'update', 'delete', 'truncate']) p
+        where has_table_privilege('authenticated', t, p)) as signed_in
+    from unnest(array['public.calendar_events', 'public.calendar_meetings']) t order by t`)).rows;
+  await supa.close();
+  const fn = (name) => (Array.isArray(supaFns) ? supaFns.find((r) => r.f.startsWith(name)) : null) || {};
+  check('65. with Supabase\'s defaults (new functions granted to anon and everyone), anon calls none of them; signed-in users only '
+    + 'calendar_status and google_me; only the secret key claims and saves; has_calendar is nobody\'s; anon reaches neither table '
+    + 'and signed-in users only read the meetings',
+    supaRun === null && supaFns.every((r) => !r.anon)
+      && !fn('public.calendar_claim').signed_in && fn('public.calendar_claim').secret
+      && !fn('public.calendar_save').signed_in && fn('public.calendar_save').secret
+      && fn('public.calendar_status').signed_in && fn('public.google_me').signed_in
+      && !fn('private.has_calendar').signed_in && !fn('private.has_calendar').secret
+      && supaTables.every((r) => r.anon === null) && supaTables.find((r) => r.t === 'public.calendar_meetings')?.signed_in === 'select',
+    { supaRun, supaFns, supaTables });
+
+  // 66. boards.calendar: on for Marketing's Posting schedule once; admins switch it; a re-run never switches it back ---------
+
+  const posting = board['Posting schedule'];
+  const column = await one(`select data_type, is_nullable, column_default from information_schema.columns
+    where table_schema = 'public' and table_name = 'boards' and column_name = 'calendar'`);
+  const staffSwitch = {};
+  for (const [name, user] of Object.entries({ hello, newcomer, alice })) {
+    await as(user);
+    staffSwitch[name] = {
+      off: await affected('update public.boards set calendar = false where id = $1', [posting]),
+      on: await affected("update public.boards set calendar = true where module = 'marketing' and owner_id is null and id <> $1", [posting]),
+    };
+  }
+  await as(boss);
+  const renamed = await affected("update public.boards set name = 'Posting plan' where id = $1", [posting]);
+  const afterRename = await calendarBoards();
+  const switchedOff = await affected('update public.boards set calendar = false where id = $1', [posting]);
+  const rerunOff = await applyMigration9();
+  const afterRerun = await calendarBoards();
+  await as(boss);
+  const pageSwitch = await affected('update public.boards set calendar = true where id = $1', [ctx.page[alice]]);
+  const switchedOn = await affected("update public.boards set calendar = true, name = 'Posting schedule' where id = $1", [posting]);
+  await as(null);
+  const afterOn = await calendarBoards();
+  check('66. boards.calendar (boolean, not null, default false) starts on for Marketing\'s Posting schedule team board only (not a '
+    + 'Projects board of that name); a rename keeps it; staff can\'t switch it; admins switch team boards (never a personal '
+    + 'page); switched off, a re-run of 0009 leaves it off',
+    column?.data_type === 'boolean' && column.is_nullable === 'NO' && column.column_default === 'false'
+      && stable(flaggedFirst) === stable(['marketing:Posting schedule'])
+      && Object.values(staffSwitch).every((s) => s.off === 0 && s.on === 0)
+      && renamed === 1 && stable(afterRename) === stable(['marketing:Posting plan']) && switchedOff === 1
+      && rerunOff === null && stable(afterRerun) === stable([]) && pageSwitch === 0 && switchedOn === 1
+      && stable(afterOn) === stable(['marketing:Posting schedule']),
+    { column, flaggedFirst, staffSwitch, renamed, afterRename, switchedOff, rerunOff, afterRerun, pageSwitch, switchedOn, afterOn });
+
+  // 67. calendar_events: who sees, adds, changes and removes what -------------------------------------------------------
+
+  const addEvent = async (user, f = {}) => {
+    if (user === 'anon') { await as(null); await db.exec('set role anon'); } else await as(user);
+    const pick = (k, d) => (k in f ? f[k] : d);
+    const r = await attempt(`insert into public.calendar_events (kind, title, day, end_day, starts_at, ends_at, people, created_by)
+      values ($1, $2, $3, $4, $5, $6, $7, $8) returning id, created_by`,
+    [pick('kind', 'event'), pick('title', 'Event'), pick('day', '2026-10-22'), pick('endDay', null), pick('startsAt', null),
+      pick('endsAt', null), pick('people', []), pick('createdBy', null)]);
+    await as(null);
+    return r;
+  };
+  const helloEvent = await addEvent(hello, { title: 'Site visit', createdBy: boss, people: [hello, alice] });
+  const helloSpare = await addEvent(hello, { title: 'Spare', kind: 'reminder' });
+  const bossEvent = await addEvent(boss, { kind: 'meeting', title: 'Board meeting', startsAt: '2026-10-22T23:00:00Z', endsAt: '2026-10-23T00:00:00Z' });
+  const bossSpare = await addEvent(boss, { title: 'Conference', day: '2026-11-02', endDay: '2026-11-04' });
+  const carolAdd = await addEvent(carol);
+  const anonAdd = await addEvent('anon');
+  const ownerAdd = await addEvent(null, { title: 'From the SQL editor', createdBy: alice });
+  const ids = [helloEvent?.id, helloSpare?.id, bossEvent?.id, bossSpare?.id];
+  const seen = {};
+  for (const [name, user] of Object.entries({ hello, alice, boss, carol })) {
+    await as(user);
+    seen[name] = (await one('select count(*)::int as n from public.calendar_events where id = any($1::uuid[])', [ids])).n;
+  }
+  await as(null);
+  await db.exec('set role anon');
+  const anonRead = await error('select * from public.calendar_events');
+  await as(hello);
+  const own = {
+    update: await affected("update public.calendar_events set title = 'Site visit (moved)', day = '2026-10-23' where id = $1", [helloEvent?.id]),
+    reassign: await affected('update public.calendar_events set created_by = $2 where id = $1', [helloEvent?.id, alice]),
+    others: await affected("update public.calendar_events set title = 'Mine now' where id = $1", [bossEvent?.id]),
+    othersDelete: await affected('delete from public.calendar_events where id = $1', [bossEvent?.id]),
+    delete: await affected('delete from public.calendar_events where id = $1', [helloSpare?.id]),
+  };
+  await as(alice);
+  const helloRow = (await one('select row_to_json(e) as r from public.calendar_events e where id = $1', [helloEvent?.id]))?.r;
+  const other = {
+    update: await affected("update public.calendar_events set title = 'Changed' where id = $1", [helloEvent?.id]),
+    delete: await affected('delete from public.calendar_events where id = $1', [helloEvent?.id]),
+    upsert: await postgrestUpsert('calendar_events', [normalizeRow('calendar_events', { ...helloRow, title: 'Changed' })]),
+  };
+  await as(carol);
+  const inactive = {
+    update: await affected("update public.calendar_events set title = 'Changed' where id = $1", [helloEvent?.id]),
+    delete: await affected('delete from public.calendar_events where id = $1', [bossSpare?.id]),
+  };
+  await as(boss);
+  const admin = {
+    update: await affected("update public.calendar_events set title = 'Site visit (confirmed)' where id = $1", [helloEvent?.id]),
+    upsert: await postgrestUpsert('calendar_events', [normalizeRow('calendar_events', { ...helloRow, title: 'Site visit (confirmed)', created_by: boss })]),
+  };
+  await as(early);
+  const otherAdminDelete = await affected('delete from public.calendar_events where id = $1', [bossSpare?.id]);
+  await as(null);
+  const after = await one('select title, day, created_by, updated_by from public.calendar_events where id = $1', [helloEvent?.id]);
+  const left = (await rows('select id from public.calendar_events where id = any($1::uuid[]) order by title', [ids])).map((r) => r.id);
+  check('67. calendar_events: staff add events as themselves (a spoofed created_by is replaced; the SQL editor may set it) and every '
+    + 'staff member sees them; their author changes and removes their own, never someone else\'s or who added it',
+    helloEvent?.created_by === hello && bossEvent?.created_by === boss && ownerAdd?.created_by === alice
+      && seen.hello === 4 && seen.alice === 4 && seen.boss === 4 && seen.carol === 0
+      && own.update === 1 && own.reassign === 1 && own.others === 0 && own.othersDelete === 0 && own.delete === 1,
+    { helloEvent, bossEvent, ownerAdd, seen, own });
+  check('67. ...another staff member can\'t change or remove it (nor upsert over it); an inactive account sees and writes nothing; anon '
+    + 'nothing; admins change and remove anyone\'s, and the author stays',
+    other.update === 0 && other.delete === 0 && typeof other.upsert === 'string' && typeof carolAdd === 'string'
+      && inactive.update === 0 && inactive.delete === 0 && typeof anonAdd === 'string' && anonRead !== null
+      && admin.update === 1 && admin.upsert === null && otherAdminDelete === 1 && after?.title === 'Site visit (confirmed)'
+      && after.created_by === hello && after.updated_by === boss && stable(left) === stable([bossEvent?.id, helloEvent?.id]),
+    { other, carolAdd, inactive, anonAdd, anonRead, admin, otherAdminDelete, after, left });
+
+  // 68. calendar_events: what a row may hold -------------------------------------------------------------------------
+
+  const shapes = {
+    kind: await addEvent(hello, { kind: 'party' }),
+    longTitle: await addEvent(hello, { title: 'x'.repeat(201) }),
+    maxTitle: await addEvent(hello, { title: 'x'.repeat(200) }),
+    noDay: await addEvent(hello, { day: null }),
+    endBefore: await addEvent(hello, { day: '2026-10-22', endDay: '2026-10-21' }),
+    sameDay: await addEvent(hello, { day: '2026-10-22', endDay: '2026-10-22' }),
+    endOnly: await addEvent(hello, { endsAt: '2026-10-22T02:00:00Z' }),
+    endsFirst: await addEvent(hello, { startsAt: '2026-10-22T02:00:00Z', endsAt: '2026-10-22T01:00:00Z' }),
+    startOnly: await addEvent(hello, { kind: 'reminder', startsAt: '2026-10-22T02:00:00Z' }),
+    timed: await addEvent(hello, { kind: 'meeting', startsAt: '2026-10-22T01:00:00Z', endsAt: '2026-10-22T01:00:00Z' }),
+  };
+  const refusedShape = ['kind', 'longTitle', 'noDay', 'endBefore', 'endOnly', 'endsFirst'];
+  const savedShape = ['maxTitle', 'sameDay', 'startOnly', 'timed'];
+  await as(hello);
+  const defaults = await attempt("insert into public.calendar_events (day) values ('2026-12-01') returning id, kind, title, end_day, starts_at, ends_at, people, created_by");
+  await as(null);
+  check('68. calendar_events checks: kind is meeting, event or reminder; a title of at most 200; a day; end_day not before day; ends_at '
+    + 'only with starts_at and not before it; an all-day event (no times) by default',
+    refusedShape.every((k) => typeof shapes[k] === 'string') && savedShape.every((k) => typeof shapes[k]?.id === 'string')
+      && defaults?.kind === 'event' && defaults.title === '' && defaults.end_day === null && defaults.starts_at === null
+      && defaults.ends_at === null && stable(defaults.people) === stable([]) && defaults.created_by === hello,
+    { shapes, defaults });
+  await db.query('delete from public.calendar_events where id = any($1::uuid[])',
+    [[...savedShape.map((k) => shapes[k]?.id), ownerAdd?.id, defaults?.id].filter(Boolean)]);
+
+  // 69. Tables, grants and realtime --------------------------------------------------------------------------------------
+
+  const tableInfo = await rows(`select t,
+      (select relrowsecurity from pg_class where oid = t::regclass) as rls,
+      exists (select 1 from pg_trigger where tgrelid = t::regclass and tgname = 'touch') as touch,
+      exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname || '.' || tablename = t) as published,
+      (select string_agg(p, ',') from unnest(array['select', 'insert', 'update', 'delete', 'truncate']) p where has_table_privilege('anon', t, p)) as anon,
+      (select string_agg(p, ',') from unnest(array['select', 'insert', 'update', 'delete', 'truncate']) p
+        where has_table_privilege('authenticated', t, p)) as signed_in
+    from unnest($1::text[]) as t order by t`, [CALENDAR_TABLES]);
+  const info = Object.fromEntries(tableInfo.map(({ t, ...r }) => [t, r]));
+  const noRls = await rows(`select n.nspname || '.' || c.relname as t from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname in ('public', 'private') and c.relkind = 'r' and not c.relrowsecurity`);
+  const publishedAfter = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'")).n;
+  check('69. calendar tables: RLS on (private.calendar_sync too), no anon access; signed-in users write events (touch()), only read '
+    + 'meetings, and never reach the sync table',
+    CALENDAR_TABLES.every((t) => info[t]?.rls && info[t].anon === null) && !noRls.length
+      && info['public.calendar_events'].touch && info['public.calendar_events'].signed_in.startsWith('select,insert,update,delete')
+      && info['public.calendar_meetings'].signed_in === 'select' && info['private.calendar_sync'].signed_in === null,
+    { info, noRls });
+  check('69. realtime publishes calendar_events (38 → 39 tables), never the meetings or the sync table',
+    publishedBefore === 38 && publishedAfter === 39 && info['public.calendar_events'].published
+      && !info['public.calendar_meetings'].published && !info['private.calendar_sync'].published,
+    { publishedBefore, publishedAfter });
+
+  // 70. Who may call what -----------------------------------------------------------------------------------------------
+
+  const fnInfo = await rows(`select f, has_function_privilege('anon', f, 'execute') as anon,
+      has_function_privilege('authenticated', f, 'execute') as signed_in, has_function_privilege('service_role', f, 'execute') as secret,
+      (select prosecdef from pg_proc where oid = f::regprocedure) as definer
+    from unnest(array['public.calendar_claim(int)', 'public.calendar_save(uuid, timestamptz, date, date, jsonb, text, boolean)',
+      'public.calendar_status()', 'public.google_me()', 'private.has_calendar(text)']) f`);
+  const fi = Object.fromEntries(fnInfo.map(({ f, ...r }) => [f.replace(/\(.*$/, ''), r]));
+  const tryCalls = async (user) => {
+    if (user === 'anon') { await as(null); await db.exec('set role anon'); } else await as(user);
+    const r = {
+      claim: await error('select public.calendar_claim(30)'),
+      save: await error("select public.calendar_save($1, now(), '2026-10-01', '2026-12-31', '[]'::jsonb)", [hello]),
+      status: await error('select public.calendar_status()'),
+      hasCalendar: await error("select private.has_calendar('x')"),
+    };
+    await as(null);
+    return r;
+  };
+  const calls = { staff: await tryCalls(hello), admin: await tryCalls(david), inactive: await tryCalls(carol), anon: await tryCalls('anon') };
+  check('70. calendar_claim and calendar_save are the secret key\'s only (security definer); calendar_status is for signed-in staff; '
+    + 'private.has_calendar is no one\'s to call',
+    fi['public.calendar_claim'].secret && !fi['public.calendar_claim'].signed_in && !fi['public.calendar_claim'].anon
+      && fi['public.calendar_save'].secret && !fi['public.calendar_save'].signed_in && !fi['public.calendar_save'].anon
+      && fi['public.calendar_status'].signed_in && !fi['public.calendar_status'].anon && fi['public.google_me'].signed_in
+      && !fi['public.google_me'].anon && !fi['private.has_calendar'].signed_in && !fi['private.has_calendar'].anon
+      && fnInfo.filter((r) => r.f.startsWith('public.')).every((r) => r.definer)
+      && Object.values(calls).every((c) => c.claim !== null && c.save !== null && c.hasCalendar !== null)
+      && calls.staff.status === null && calls.admin.status === null && calls.inactive.status !== null && calls.anon.status !== null,
+    { fnInfo, calls });
+
+  // 71. Which scopes read the calendar; google_me says so -------------------------------------------------------------
+
+  const hasCalendar = await rows(`select s, private.has_calendar(s) as ok from unnest($1::text[]) with ordinality as x (s, i) order by i`, [[
+    null, '', SCOPE.read, SCOPE.full, `openid email ${SCOPE.read}`, `openid  email\n${SCOPE.full} ${SCOPE.business}`,
+    SCOPE.events, `${SCOPE.read}.x`, `x${SCOPE.full}`, `${SCOPE.full}/`, SCOPE.business, 'calendar.readonly',
+  ]]);
+  check('71. has_calendar: true only when one whole space-separated scope is calendar.readonly or calendar (not calendar.events, a '
+    + 'longer or shorter look-alike, or none)',
+    stable(hasCalendar.map((r) => r.ok)) === stable([false, false, true, true, true, true, false, false, false, false, false, false]),
+    hasCalendar);
+
+  // Google connections from here on: David business and calendar; Hello (staff) the calendar only; Boss the full calendar
+  // scope; Josh (early) business only; New (newcomer) calendar.events only; Carol (inactive) the calendar; Late the calendar
+  // but no longer an @assetstackai.com address (changed in the SQL editor); Alice none.
+  const connect = async (user, email, scopes) => {
+    await asSecretKey();
+    await db.query("select public.google_save($1, $2, 'refresh-token', $3)", [user, email, scopes]);
+    await as(null);
+  };
+  await connect(david, 'super.example@assetstackai.com', `openid email ${SCOPE.business} ${SCOPE.read}`);
+  await connect(hello, 'staff.example@assetstackai.com', `openid email ${SCOPE.read}`);
+  await connect(boss, 'boss@assetstackai.com', `openid email ${SCOPE.full}`);
+  await connect(early, 'you@assetstackai.com', `openid email ${SCOPE.business}`);
+  await connect(newcomer, 'new.example@assetstackai.com', `openid email ${SCOPE.events}`);
+  await connect(carol, 'carol@assetstackai.com', `openid email ${SCOPE.read}`);
+  await connect(late, 'late.example@assetstackai.com', `openid email ${SCOPE.read}`);
+  await db.query("update public.profiles set email = 'late.example@example.com' where id = $1", [late]);
+  const me = {};
+  for (const [name, user] of Object.entries({ david, hello, boss, early, newcomer, alice })) {
+    await as(user);
+    me[name] = (await one('select public.google_me() as me')).me;
+  }
+  await as(carol);
+  const carolMe = await error('select public.google_me()');
+  await as(null);
+  const flags = Object.fromEntries(Object.entries(me).map(([k, v]) => [k, [v.calendar, v.business]]));
+  check('71. google_me keeps its fields (uid, name, email, admin, google_email, connected_at; never a token or scope) and adds calendar '
+    + 'and business; staff and admins call it, inactive accounts can\'t',
+    Object.values(me).every((v) => stable(Object.keys(v).sort()) === stable(['admin', 'business', 'calendar', 'connected_at', 'email',
+      'google_email', 'name', 'uid']) && !/refresh|googleapis/.test(JSON.stringify(v)))
+      && me.david.uid === david && me.david.admin === true && me.david.google_email === 'super.example@assetstackai.com'
+      && me.hello.uid === hello && me.hello.admin === false && me.alice.google_email === null && me.alice.connected_at === null
+      && stable(flags) === stable({
+        david: [true, true], hello: [true, false], boss: [true, false], early: [false, true], newcomer: [false, false], alice: [false, false],
+      })
+      && typeof carolMe === 'string',
+    { me, carolMe });
+
+  // 72. calendar_claim: who is due a sync, at most once per gap ---------------------------------------------------------
+
+  const claim = async (gap) => {
+    await asSecretKey();
+    const r = await db.query(gap === undefined ? 'select c as id from public.calendar_claim() c' : 'select c as id from public.calendar_claim($1) c',
+      gap === undefined ? [] : [gap]);
+    await as(null);
+    return r.rows.map((x) => x.id).sort();
+  };
+  const ago = (user, seconds) => db.query("update private.calendar_sync set claimed_at = now() - make_interval(secs => $2) where user_id = $1",
+    [user, seconds]);
+  const sorted = (...list) => [...list].sort();
+  const claims = { first: await claim(), again: await claim(), forced: await claim(60) };
+  await ago(hello, 61);
+  await ago(boss, 45);
+  await ago(david, 20);
+  claims.after61 = await claim(60);
+  claims.floor = await claim(0);
+  await ago(david, 599);
+  claims.before600 = await claim();
+  await ago(david, 601);
+  claims.after600 = await claim();
+  await db.query('update private.calendar_sync set claimed_at = null where user_id = $1', [hello]);
+  claims.unclaimed = await claim();
+  const syncRows = (await rows('select user_id from private.calendar_sync order by user_id')).map((r) => r.user_id);
+  check('72. calendar_claim claims active @assetstackai.com staff whose Google account reads the calendar (not business-only, '
+    + 'calendar.events, inactive or another domain), each at most once per p_gap seconds (600 by default, never under 30)',
+    stable(claims.first) === stable(sorted(boss, david, hello)) && stable(claims.again) === stable([]) && stable(claims.forced) === stable([])
+      && stable(claims.after61) === stable([hello]) && stable(claims.floor) === stable([boss]) && stable(claims.before600) === stable([])
+      && stable(claims.after600) === stable([david]) && stable(claims.unclaimed) === stable([hello])
+      && stable(syncRows) === stable(sorted(boss, david, hello)),
+    { claims, syncRows, expected: { boss, david, hello } });
+
+  // 73. calendar_save: a person's meetings and their last sync -----------------------------------------------------------
+
+  const save = async (user, started, list, { err = '', reconnect = false, from = '2026-10-01', to = '2026-12-31' } = {}) => {
+    await asSecretKey();
+    const r = await attempt(`select public.calendar_save($1::uuid, $2::timestamptz, $3::date, $4::date, $5::jsonb, $6::text, $7::boolean) as ok`,
+      [user, started, from, to, JSON.stringify(list), err, reconnect]);
+    await as(null);
+    return typeof r === 'string' ? r : r?.ok;
+  };
+  const meeting = (id, f = {}) => {
+    const start = f.start ?? '2026-10-22';
+    const end = f.end ?? start;
+    return {
+      google_id: id, title: f.title ?? `Meeting ${id}`, busy: f.busy ?? false, all_day: Boolean(f.allDay), start_date: start, end_date: end,
+      start_at: f.allDay ? null : `${start}T01:00:00.000Z`, end_at: f.allDay ? null : `${end}T02:00:00.000Z`,
+    };
+  };
+  const meetingsOf = async (user) => (await rows(`select google_id, title, busy, all_day, start_date::text as start_date, end_date::text as end_date,
+      start_at, end_at, synced_at from public.calendar_meetings where user_id = $1 order by google_id`, [user]))
+    .map((r) => ({ ...r, start_at: r.start_at?.toISOString() ?? null, end_at: r.end_at?.toISOString() ?? null, synced_at: r.synced_at.toISOString() }));
+  const syncOf = async (user) => {
+    const r = await one('select claimed_at, synced_at, error, reconnect, events from private.calendar_sync where user_id = $1', [user]);
+    return r && { synced_at: r.synced_at?.toISOString() ?? null, error: r.error, reconnect: r.reconnect, events: r.events };
+  };
+  const T = (m) => new Date(Date.UTC(2026, 9, 21, 0, m)).toISOString(); // runs started on 21 October, m minutes past midnight UTC
+  const at = (list) => Object.fromEntries(list.map((r) => [r.google_id, r]));
+  const runs = {};
+  runs.first = await save(hello, T(10), [
+    meeting('g1', { title: '  Standup  ' }), meeting('g2', { title: 'Private review', busy: true }),
+    meeting('g3', { allDay: true, start: '2026-10-23', end: '2026-10-24' }), meeting('g4', { allDay: true, start: '2026-09-30', end: '2026-10-01' }),
+    meeting('g5', { start: '2026-11-05' }), meeting('g6', { allDay: true, start: '2026-12-31', end: '2027-01-01' }),
+    meeting('g9', { allDay: true, start: '2026-10-01' }),
+  ]);
+  const afterFirst = at(await meetingsOf(hello));
+  const syncFirst = await syncOf(hello);
+  runs.second = await save(hello, T(20), [meeting('g1', { title: 'Standup (moved)', start: '2026-10-29' }), meeting('g3', {
+    allDay: true, start: '2026-10-23', end: '2026-10-24' })]);
+  const afterSecond = at(await meetingsOf(hello));
+  const syncSecond = await syncOf(hello);
+  check('73. calendar_save stores a person\'s meetings (title trimmed; a private one busy with no title; all-day ones without times) '
+    + 'and their sync (when, how many, no error)',
+    runs.first === true && Object.keys(afterFirst).join() === 'g1,g2,g3,g4,g5,g6,g9' && afterFirst.g1.title === 'Standup'
+      && afterFirst.g2.busy === true && afterFirst.g2.title === '' && afterFirst.g3.all_day === true && afterFirst.g3.start_at === null
+      && afterFirst.g3.end_date === '2026-10-24' && afterFirst.g1.start_at === '2026-10-22T01:00:00.000Z'
+      && Object.values(afterFirst).every((r) => r.synced_at === T(10))
+      && stable(syncFirst) === stable({ synced_at: T(10), error: '', reconnect: false, events: 7 }),
+    { runs, afterFirst, syncFirst });
+  check('73. a newer run updates what it saw and removes what it didn\'t strictly inside the window (from and to inclusive); a meeting '
+    + 'crossing the window\'s edge stays',
+    runs.second === true && Object.keys(afterSecond).join() === 'g1,g3,g4,g6' && afterSecond.g1.title === 'Standup (moved)'
+      && afterSecond.g1.start_date === '2026-10-29' && afterSecond.g1.synced_at === T(20) && afterSecond.g3.synced_at === T(20)
+      && afterSecond.g4.synced_at === T(10) && afterSecond.g6.synced_at === T(10)
+      && stable(syncSecond) === stable({ synced_at: T(20), error: '', reconnect: false, events: 2 }),
+    { runs, afterSecond, syncSecond });
+
+  runs.older = await save(hello, T(0), [meeting('g1', { title: 'Old title' }), meeting('g7', { start: '2026-11-10' })]);
+  const afterOlder = at(await meetingsOf(hello));
+  const syncOlder = await syncOf(hello);
+  runs.failed = await save(hello, T(30), [meeting('g8')], { err: 'Too many events' });
+  const afterFailed = at(await meetingsOf(hello));
+  const syncFailed = await syncOf(hello);
+  runs.reconnect = await save(hello, T(40), [], { err: 'Google needs reconnecting', reconnect: true });
+  const syncReconnect = await syncOf(hello);
+  runs.olderError = await save(hello, T(5), [], { err: 'An old error' });
+  const syncOlderError = await syncOf(hello);
+  runs.recovered = await save(hello, T(50), [meeting('g1', { title: 'Standup (moved)', start: '2026-10-29' }), meeting('g3', {
+    allDay: true, start: '2026-10-23', end: '2026-10-24' })]);
+  const afterRecovered = at(await meetingsOf(hello));
+  const syncRecovered = await syncOf(hello);
+  check('73. an older run never overwrites a newer one\'s meetings or sync; a run with an error writes and removes no meetings and '
+    + 'keeps the last good sync\'s time and count; the next good run clears the error and reconnect flag',
+    runs.older === true && afterOlder.g1.title === 'Standup (moved)' && afterOlder.g1.synced_at === T(20) && afterOlder.g7?.synced_at === T(0)
+      && stable(syncOlder) === stable(syncSecond)
+      && runs.failed === true && !afterFailed.g8 && afterFailed.g7 && Object.keys(afterFailed).join() === 'g1,g3,g4,g6,g7'
+      && stable(syncFailed) === stable({ synced_at: T(20), error: 'Too many events', reconnect: false, events: 2 })
+      && runs.reconnect === true && stable(syncReconnect) === stable({ synced_at: T(20), error: 'Google needs reconnecting', reconnect: true, events: 2 })
+      && runs.olderError === true && stable(syncOlderError) === stable(syncReconnect)
+      && runs.recovered === true && Object.keys(afterRecovered).join() === 'g1,g3,g4,g6' && afterRecovered.g1.synced_at === T(50)
+      && stable(syncRecovered) === stable({ synced_at: T(50), error: '', reconnect: false, events: 2 }),
+    { runs, afterOlder, syncOlder, afterFailed, syncFailed, syncReconnect, syncOlderError, afterRecovered, syncRecovered });
+
+  runs.messy = await save(boss, T(10), [
+    meeting('b1'), meeting('b1'), { ...meeting('b2'), google_id: '' }, { ...meeting('b3'), start_date: null },
+    meeting('b4', { allDay: true, start: '2026-10-25', end: '2026-10-24' }), meeting('b5', { title: 'y'.repeat(250) }),
+    { google_id: 'b6', start_date: '2026-10-26', end_date: '2026-10-26' },
+  ]);
+  const messy = at(await meetingsOf(boss));
+  check('73. a malformed payload doesn\'t stop a save: a repeated meeting is saved once, one without an id or a start date is skipped, '
+    + 'an end before the start is the start, a title is cut to 200, missing fields take their defaults',
+    runs.messy === true && Object.keys(messy).join() === 'b1,b4,b5,b6' && messy.b4.end_date === '2026-10-25' && messy.b5.title.length === 200
+      && messy.b6.title === '' && messy.b6.busy === false && messy.b6.all_day === false && messy.b6.start_at === null,
+    { runs, messy });
+
+  // 74. calendar_meetings: read by staff, written by no one signed in --------------------------------------------------
+
+  const allMeetings = (await one('select count(*)::int as n from public.calendar_meetings')).n;
+  const meetingAccess = {};
+  for (const [name, user] of Object.entries({ hello, alice, boss, carol })) {
+    await as(user);
+    meetingAccess[name] = {
+      read: (await one('select count(*)::int as n from public.calendar_meetings')).n,
+      insert: await error("insert into public.calendar_meetings (user_id, google_id, start_date, end_date) values ($1, 'x', '2026-10-22', '2026-10-22')",
+        [user]),
+      update: await affected("update public.calendar_meetings set title = 'Changed' where user_id = $1", [user]),
+      delete: await affected('delete from public.calendar_meetings where user_id = $1', [user]),
+    };
+  }
+  await as(null);
+  await db.exec('set role anon');
+  const anonMeetings = await error('select * from public.calendar_meetings');
+  await as(null);
+  const meetingsAfter = (await one('select count(*)::int as n from public.calendar_meetings')).n;
+  check('74. calendar_meetings: every active staff member reads everyone\'s; nobody signed in (not even an admin) inserts, changes or '
+    + 'removes one; inactive accounts read nothing; anon nothing',
+    allMeetings === 8 && meetingAccess.hello.read === 8 && meetingAccess.alice.read === 8 && meetingAccess.boss.read === 8
+      && meetingAccess.carol.read === 0
+      && Object.values(meetingAccess).every((a) => typeof a.insert === 'string' && typeof a.update === 'string' && typeof a.delete === 'string')
+      && anonMeetings !== null && meetingsAfter === allMeetings,
+    { allMeetings, meetingAccess, anonMeetings, meetingsAfter });
+
+  // 75. calendar_status: the team's connections and syncs, never a token or scope --------------------------------------
+
+  runs.bossReconnect = await save(boss, T(20), [], { err: 'Google needs reconnecting', reconnect: true });
+  await as(alice);
+  const status = (await one('select public.calendar_status() as s')).s;
+  await as(null);
+  const activeIds = (await rows('select id from public.profiles where active order by name, id')).map((r) => r.id);
+  const person = (id) => status.people.find((p) => p.user_id === id);
+  const iso = (v) => (v ? new Date(v).toISOString() : v);
+  const earliest = (await one('select min(start_date)::text as d from public.calendar_meetings')).d;
+  check('75. calendar_status (any staff member): every active person by name with whether their Google account reads the calendar and '
+    + 'their last sync (when, error, reconnect needed); the earliest meeting kept and the newest sync; never a token or scope',
+    stable(Object.keys(status).sort()) === stable(['earliest', 'people', 'synced_at'])
+      && stable(status.people.map((p) => p.user_id)) === stable(activeIds) && !person(carol)
+      && status.people.every((p) => stable(Object.keys(p).sort()) === stable(['connected', 'error', 'reconnect', 'synced_at', 'user_id']))
+      && stable({ ...person(hello), synced_at: iso(person(hello)?.synced_at) })
+        === stable({ user_id: hello, connected: true, synced_at: T(50), error: '', reconnect: false })
+      && person(boss).connected === true && person(boss).error === 'Google needs reconnecting' && person(boss).reconnect === true
+      && person(boss).synced_at !== null && person(david).connected === true && person(david).synced_at === null
+      && person(early).connected === false && person(newcomer).connected === false && person(alice).connected === false
+      && person(late).connected === true && status.earliest === earliest && earliest === '2026-09-30'
+      && iso(status.synced_at) === T(50) && !/refresh|googleapis|scope/.test(JSON.stringify(status)),
+    { status, activeIds, earliest });
+
+  // 76. calendar_save forgets anyone no longer active staff with a calendar connection ---------------------------------
+
+  const plant = async (user) => {
+    await db.query(`insert into public.calendar_meetings (user_id, google_id, title, start_date, end_date) values ($1, 'planted', 'Planted',
+      '2026-10-22', '2026-10-22') on conflict do nothing`, [user]);
+    await db.query('insert into private.calendar_sync (user_id, synced_at) values ($1, now()) on conflict do nothing', [user]);
+  };
+  const leftFor = async (user) => (await one(`select (select count(*)::int from public.calendar_meetings where user_id = $1)
+    + (select count(*)::int from private.calendar_sync where user_id = $1) as n`, [user])).n;
+  const forgot = {};
+  for (const [name, user] of Object.entries({ carol, late, alice, newcomer, early })) {
+    await plant(user);
+    const had = await leftFor(user);
+    const ok = await save(user, T(60), [meeting('n1')]);
+    forgot[name] = { had, ok, left: await leftFor(user) };
+  }
+  check('76. calendar_save forgets (and returns false for) someone inactive, no longer @assetstackai.com, with no Google account, or '
+    + 'whose account doesn\'t read the calendar: their meetings and sync go, nothing new is written',
+    Object.values(forgot).every((f) => f.had === 2 && f.ok === false && f.left === 0), forgot);
+
+  // 77. Forgetting: disconnecting Google, reconnecting without the calendar, or being deactivated -------------------------
+
+  runs.david = await save(david, T(60), [meeting('d1')]);
+  await connect(early, 'you@assetstackai.com', `openid email ${SCOPE.business} ${SCOPE.read}`);
+  runs.early = await save(early, T(60), [meeting('e1')]);
+  const before77 = { hello: await leftFor(hello), boss: await leftFor(boss), david: await leftFor(david), early: await leftFor(early) };
+  await as(hello);
+  const disconnected = (await one('select public.google_disconnect() as ok')).ok;
+  await as(null);
+  await connect(boss, 'boss@assetstackai.com', `openid email ${SCOPE.business} ${SCOPE.full}`);
+  const bossKept = await leftFor(boss);
+  await connect(boss, 'boss@assetstackai.com', `openid email ${SCOPE.business}`);
+  await as(david);
+  const renameDavid = await affected("update public.profiles set name = 'Super Example', active = true where id = $1", [david]);
+  const deactivate = await affected('update public.profiles set active = false where id = $1', [early]);
+  await as(null);
+  const after77 = { hello: await leftFor(hello), boss: await leftFor(boss), david: await leftFor(david), early: await leftFor(early) };
+  await as(david);
+  const reactivate = await affected('update public.profiles set active = true where id = $1', [early]);
+  await as(null);
+  const triggers = (await rows(`select tgrelid::regclass::text as t from pg_trigger where tgname = 'calendar_forget' order by 1`)).map((r) => r.t);
+  check('77. a person\'s meetings and sync are forgotten when they disconnect Google, reconnect without the calendar (reconnecting with '
+    + 'it keeps them) or are deactivated (other profile changes keep them)',
+    runs.david === true && runs.early === true && stable(before77) === stable({ hello: 5, boss: 5, david: 2, early: 2 })
+      && disconnected === true && bossKept === 5 && renameDavid === 1 && deactivate === 1 && reactivate === 1
+      && stable(after77) === stable({ hello: 0, boss: 0, david: 2, early: 0 })
+      && stable(triggers) === stable(['private.google_accounts', 'profiles']),
+    { runs, before77, disconnected, bossKept, renameDavid, deactivate, after77, reactivate, triggers });
+
+  // Back as the phases above left them (Late's address; David's own calendar stays connected for the sync check).
+  await db.query("update public.profiles set email = 'late.example@assetstackai.com' where id = $1", [late]);
+  await as(null);
+  return ctx;
+}
+
 async function phase7(ctx) {
   const { alice, boss, david, hello, carol, newcomer, early, late } = ctx;
 
@@ -3330,7 +3949,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
         id: itm, name: 'Item', values: { people: [david, alice], status: 'Done', due: '2026-10-30' }, done: true,
         updates: [{ id: uid(), user: david, text: 'Update', ts: '2026-10-01T03:00:00.000Z' }], subtasks: [{ id: uid(), text: 'Sub', done: true }],
       }] }] },
-      { id: teamM, module: 'marketing', name: 'Sync check', owner: '', groups: [{ id: grp2, name: 'Sync check', color: '#bfe9ff', items: [] }] },
+      { id: teamM, module: 'marketing', name: 'Sync check', owner: '', calendar: true, groups: [{ id: grp2, name: 'Sync check', color: '#bfe9ff', items: [] }] },
     ],
     clients: [{
       id: cli, name: 'Example Client', group: 'Active', status: 'Active', priority: 'P1', next: 'Call', sector: 'Utilities',
@@ -3392,6 +4011,14 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
       { id: uid(), mailbox: '', pinned: false, body: 'For every mailbox', author: david, createdAt: '2026-10-06T00:00:00.000Z' },
     ],
     outreachSheet: 'https://docs.google.com/spreadsheets/d/1ExampleSyncCheckSheetId0123456789/edit#gid=0',
+    calendarEvents: [
+      { id: uid(), kind: 'event', title: 'Sync check conference', day: '2026-10-20', endDay: '2026-10-22', startsAt: '', endsAt: '', people: [david, alice],
+        createdBy: david },
+      { id: uid(), kind: 'meeting', title: 'Sync check meeting', day: '2026-10-23', endDay: '', startsAt: '2026-10-22T23:00:00.000Z',
+        endsAt: '2026-10-23T00:30:00.000Z', people: [], createdBy: david },
+      { id: uid(), kind: 'reminder', title: 'Sync check reminder', day: '2026-10-24', endDay: '', startsAt: '2026-10-23T22:00:00.000Z', endsAt: '',
+        people: [hello], createdBy: david },
+    ],
   });
   // Columns the database sets itself whatever a signed-in request sends (protect_outreach_note: a note's date is when
   // it was saved): compared without them here, and checked to be the server's below.
@@ -3460,6 +4087,25 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
       && staffNoteBack.body === 'From staff (tidied)' && sheetSaves.viewer === 0 && sheetSaves.editor === 0 && sheetSaves.admin === 1
       && stable(sheetBack) === stable(sheet),
     { outSaved, staffNoteBack, sheetSaves, sheet, sheetBack });
+
+  // Calendar events for whoever may write them, as the sync sends them: staff add their own and change them; another staff
+  // member's upsert over one is refused; an admin re-saving one keeps its author; a spoofed author is the saver.
+  const calRows = (list) => outRows('calendar_events', { calendarEvents: list });
+  const staffEvent = { id: uid(), kind: 'event', title: 'From staff', day: '2026-10-27', endDay: '', startsAt: '', endsAt: '', people: [alice], createdBy: alice };
+  const calSaved = {
+    staffNew: await saveOut(alice, 'calendar_events', calRows([staffEvent])),
+    staffEdit: await saveOut(alice, 'calendar_events', calRows([{ ...staffEvent, title: 'From staff (edited)' }])),
+    otherStaff: await saveOut(hello, 'calendar_events', calRows([{ ...staffEvent, title: 'Not mine', createdBy: hello }])),
+    spoofed: await saveOut(hello, 'calendar_events', calRows([{ ...staffEvent, id: uid(), title: 'Spoofed', createdBy: boss }])),
+    adminResave: await saveOut(boss, 'calendar_events', calRows([{ ...staffEvent, title: 'From staff (tidied)', createdBy: boss }])),
+  };
+  const calBack = (await rows(`select title, created_by from public.calendar_events where title in ('From staff (tidied)', 'Spoofed')
+    order by title`)).map((r) => [r.title, r.created_by]);
+  check('sync: calendar events save for whoever may write them: staff their own (new and edited), never someone else\'s; an admin '
+    + 're-saving one keeps its author; the author is always whoever saved it',
+    calSaved.staffNew === null && calSaved.staffEdit === null && typeof calSaved.otherStaff === 'string' && calSaved.spoofed === null
+      && calSaved.adminResave === null && stable(calBack) === stable([['From staff (tidied)', alice], ['Spoofed', hello]]),
+    { calSaved, calBack });
 
   // Boards for the people who may write them (39.), saved the same way. A personal page's own row is never sent:
   // flatten() makes it exactly as the database holds it (unnamed, position 0), so diff() leaves it out (no client may
@@ -3650,7 +4296,8 @@ try {
   const ctx6 = ctx5 && await phase6(ctx5);
   const ctx7 = ctx6 && await phase7(ctx6);
   const ctx8 = ctx7 && await phase8(ctx7);
-  if (ctx8) await syncWriteCheck(ctx8);
+  const ctx9 = ctx8 && await phase9(ctx8);
+  if (ctx9) await syncWriteCheck(ctx9);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);
