@@ -9,8 +9,8 @@
 --   the Google OAuth client it was made with ('default': the @assetstackai.com Workspace), so another Workspace's client
 --   can be added later. The refresh token never leaves the private schema except to the function (outreach_gmail_job).
 -- - private.outreach_gmail_sync: each connected mailbox's read of Gmail: the claim that keeps two runs apart, the run that
---   holds it, Gmail's history cursor, the threads still to read (and, for those Gmail answered with a server error, in how
---   many runs), the last result, and when the first full read finished.
+--   holds it, Gmail's history cursor, the threads still to read (and, for those Gmail answered with a server error, how
+--   many times, counted at most once every 10 minutes), the last result, and when the first full read finished.
 -- - outreach_threads: the COLD threads (we wrote first, to a new outside contact; the function decides, once) with only
 --   their headers' facts: who, our first subject, when, how many of ours, and the first reply, auto-reply and bounce.
 --   Never a body, snippet or reply subject. outreach_messages: each of our emails and each answer in them (sent, reply,

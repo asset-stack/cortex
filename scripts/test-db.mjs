@@ -3464,7 +3464,7 @@ async function phase10(ctx) {
   check('80. ...and a fresh database ends with the same tables, policies, functions, triggers and grants as the used one',
     !shapeDiff(wholeShape, shape).length, shapeDiff(wholeShape, shape));
 
-  // private.outreach_gmail_sync.failures (queued thread id → in how many runs Gmail answered it with a server error). A
+  // private.outreach_gmail_sync.failures (queued thread id → { n, at }: how often Gmail answered it with a server error). A
   // database that ran an earlier draft of 0010 lacks it: simulated by dropping it, with a mailbox's sync row in place; 0010
   // run again (whole, or statement by statement) adds it ({} for the row already there) and ends as a fresh run does.
   const FAILURES_COLUMN = { udt_name: 'jsonb', is_nullable: 'NO', column_default: "'{}'::jsonb" };
@@ -3868,7 +3868,7 @@ async function phase10(ctx) {
       && afterMessy.sync.history_id === '3003' && afterMessy.sync.scan_from === null && afterMessy.sync.synced_at === T(40),
     { runs, afterStale, afterMessy });
 
-  // The cursor's failures (queued thread id → in how many runs Gmail answered it with a server error; the function keeps
+  // The cursor's failures (queued thread id → { n, at }: how often Gmail answered it with a server error; the function keeps
   // only ids still queued): stored as given, replacing what was there; a key left out or null keeps it, as does one that
   // isn't an object; an error save never stores it; the job gives it back.
   const failuresOf = async (mailbox) => (await one(`select to_jsonb(s) -> 'failures' as failures from private.outreach_gmail_sync s
