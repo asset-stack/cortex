@@ -3464,6 +3464,51 @@ async function phase10(ctx) {
   check('80. ...and a fresh database ends with the same tables, policies, functions, triggers and grants as the used one',
     !shapeDiff(wholeShape, shape).length, shapeDiff(wholeShape, shape));
 
+  // private.outreach_gmail_sync.failures (queued thread id → in how many runs Gmail answered it with a server error). A
+  // database that ran an earlier draft of 0010 lacks it: simulated by dropping it, with a mailbox's sync row in place; 0010
+  // run again (whole, or statement by statement) adds it ({} for the row already there) and ends as a fresh run does.
+  const FAILURES_COLUMN = { udt_name: 'jsonb', is_nullable: 'NO', column_default: "'{}'::jsonb" };
+  const failuresColumn = (sh) => {
+    const c = sh.columns.find((x) => x.table_schema === 'private' && x.table_name === 'outreach_gmail_sync' && x.column_name === 'failures');
+    return c ? { udt_name: c.udt_name, is_nullable: c.is_nullable, column_default: c.column_default } : null;
+  };
+  const draftRerun = async (rerun) => {
+    const dbx = await freshAt9();
+    await dbx.exec(migration10);
+    const box = (await dbx.query("insert into public.outreach_mailboxes (name, addresses) values ('Draft', array['draft@assetstackai.com']) returning id")).rows[0].id;
+    await dbx.query("insert into private.outreach_gmail (mailbox_id, email, refresh_token, scopes) values ($1, 'draft@assetstackai.com', 'refresh-token-d', $2)",
+      [box, GMAIL_READ]);
+    await dbx.query("insert into private.outreach_gmail_sync (mailbox_id, history_id, pending) values ($1, '77', array['d1', 'd2'])", [box]);
+    await dbx.exec('alter table private.outreach_gmail_sync drop column if exists failures');
+    const dropped = failuresColumn(await gmailShape(dbx));
+    const errors = await rerun(dbx);
+    const sh = await gmailShape(dbx);
+    const row = (await dbx.query(`select s.history_id, s.pending, to_jsonb(s) -> 'failures' as failures from private.outreach_gmail_sync s
+      where s.mailbox_id = $1`, [box])).rows[0];
+    const job = await dbx.query('select public.outreach_gmail_job($1) as j', [box]).then((r) => r.rows[0].j, (e) => ({ failures: e.message }));
+    const saved = await dbx.query(`select public.outreach_gmail_save($1, now(), '[]', '[]', '{"pending": ["d2"], "failures": {"d2": 1}}') as ok`, [box])
+      .then((r) => r.rows[0].ok, (e) => e.message);
+    const after = (await dbx.query(`select s.pending, to_jsonb(s) -> 'failures' as failures from private.outreach_gmail_sync s
+      where s.mailbox_id = $1`, [box])).rows[0];
+    await dbx.close();
+    return { dropped, errors, column: failuresColumn(sh), diff: shapeDiff(wholeShape, sh), row, job: job?.failures, saved, after };
+  };
+  const drafts = {
+    whole: await draftRerun((dbx) => dbx.exec(migration10).then(() => [], async (e) => {
+      await dbx.exec('rollback').catch(() => {});
+      return [e.message];
+    })),
+    split: await draftRerun((dbx) => runSplit(dbx, migration10)),
+  };
+  check('80. private.outreach_gmail_sync.failures is jsonb, not null, default {} after a whole run (fresh or on the used database); on a '
+    + 'database that ran an earlier draft without it (a sync row in place), 0010 run again whole or statement by statement adds it '
+    + '({} for that row, its cursor kept), ends as a fresh run does, and the job and save use it',
+    stable(failuresColumn(wholeShape)) === stable(FAILURES_COLUMN) && stable(failuresColumn(shape)) === stable(FAILURES_COLUMN)
+      && Object.values(drafts).every((d) => d.dropped === null && !d.errors.length && stable(d.column) === stable(FAILURES_COLUMN)
+        && !d.diff.length && stable(d.row) === stable({ history_id: '77', pending: ['d1', 'd2'], failures: {} }) && stable(d.job) === stable({})
+        && d.saved === true && stable(d.after) === stable({ pending: ['d2'], failures: { d2: 1 } })),
+    { whole: failuresColumn(wholeShape), used: failuresColumn(shape), drafts });
+
   const SIGNED_IN = ['status', 'disconnect', 'daily', 'breakdown', 'threads'];
   const SECRET = ['connect', 'known', 'claim', 'job', 'save'];
   const INVOKER = ['daily', 'breakdown', 'threads'];
@@ -3701,7 +3746,7 @@ async function phase10(ctx) {
     from public.outreach_messages where mailbox_id = $1 order by message_id`, [mailbox]))
     .map((r) => [r.message_id, { thread: r.thread_id, kind: r.kind, at: iso(r.at), day: r.day, synced_at: iso(r.synced_at) }]));
   const syncOf = async (mailbox) => {
-    const r = await one(`select claimed_at, run_started, synced_at, ready_at, history_id, scan_from, pending, error, reconnect
+    const r = await one(`select claimed_at, run_started, synced_at, ready_at, history_id, scan_from, pending, failures, error, reconnect
       from private.outreach_gmail_sync where mailbox_id = $1`, [mailbox]);
     return r ? Object.fromEntries(Object.entries(r).map(([k, v]) => [k, iso(v)])) : null;
   };
@@ -3823,6 +3868,49 @@ async function phase10(ctx) {
       && afterMessy.sync.history_id === '3003' && afterMessy.sync.scan_from === null && afterMessy.sync.synced_at === T(40),
     { runs, afterStale, afterMessy });
 
+  // The cursor's failures (queued thread id → in how many runs Gmail answered it with a server error; the function keeps
+  // only ids still queued): stored as given, replacing what was there; a key left out or null keeps it, as does one that
+  // isn't an object; an error save never stores it; the job gives it back.
+  const failuresOf = async (mailbox) => (await one(`select to_jsonb(s) -> 'failures' as failures from private.outreach_gmail_sync s
+    where s.mailbox_id = $1`, [mailbox]))?.failures;
+  const jobFailures = async (mailbox) => {
+    await asSecretKey();
+    const j = (await one('select public.outreach_gmail_job($1) as j', [mailbox])).j;
+    await as(null);
+    return j?.failures;
+  };
+  const FAILED = { f1: 1, f2: 4 };
+  const fails = { before: await failuresOf(M1) };
+  fails.store = await gsave(M1, T(40), [], [], { pending: ['f1', 'f2', 'f3'], failures: FAILED });
+  fails.stored = await failuresOf(M1);
+  fails.job = await jobFailures(M1);
+  fails.missing = await gsave(M1, T(40), [], [], { pending: ['f1', 'f2', 'f3'] });
+  fails.afterMissing = await failuresOf(M1);
+  fails.nullKey = await gsave(M1, T(40), [], [], { pending: ['f1', 'f2', 'f3'], failures: null });
+  fails.afterNull = await failuresOf(M1);
+  fails.notObject = [];
+  for (const bad of [['f1'], 'f1', 3, true]) {
+    fails.notObject.push({ saved: await gsave(M1, T(40), [], [], { pending: ['f1', 'f2', 'f3'], failures: bad }), failures: await failuresOf(M1) });
+  }
+  fails.errorSave = await gsave(M1, T(40), [], [], { pending: ['f3'], failures: { f3: 1 } }, { err: 'Gmail is busy' });
+  fails.afterError = await syncOf(M1);
+  fails.replace = await gsave(M1, T(40), [], [], { pending: ['f2', 'f3'], failures: { f2: 5 } });
+  fails.afterReplace = await syncOf(M1);
+  fails.clear = await gsave(M1, T(40), [], [], { pending: [], failures: {} });
+  fails.afterClear = await syncOf(M1);
+  check('85. the cursor\'s failures (queued thread id → runs Gmail answered it with a server error): {} until given; stored as given, '
+    + 'replacing what was there, and given back by the job; a key left out or null, or one that isn\'t an object, keeps what\'s stored; '
+    + 'an error save never stores it (nor the queue)',
+    stable(fails.before) === stable({}) && fails.store === true && stable(fails.stored) === stable(FAILED) && stable(fails.job) === stable(FAILED)
+      && fails.missing === true && stable(fails.afterMissing) === stable(FAILED) && fails.nullKey === true && stable(fails.afterNull) === stable(FAILED)
+      && fails.notObject.length === 4 && fails.notObject.every((x) => x.saved === true && stable(x.failures) === stable(FAILED))
+      && fails.errorSave === true && fails.afterError.error === 'Gmail is busy' && stable(fails.afterError.failures) === stable(FAILED)
+      && stable(fails.afterError.pending) === stable(['f1', 'f2', 'f3'])
+      && fails.replace === true && stable(fails.afterReplace.failures) === stable({ f2: 5 }) && fails.afterReplace.error === ''
+      && fails.clear === true && stable(fails.afterClear.failures) === stable({}) && stable(fails.afterClear.pending) === stable([])
+      && fails.afterClear.history_id === '3003' && fails.afterClear.synced_at === T(40),
+    fails);
+
   const statusOf = async (user) => {
     if (user === 'anon') { await as(null); await db.exec('set role anon'); } else await as(user);
     const r = await attempt('select public.outreach_gmail_status() as s');
@@ -3875,9 +3963,11 @@ async function phase10(ctx) {
   };
   await as(null);
   check('86. outreach_gmail_job gives the connection (account, token, scopes, client), the mailbox\'s addresses (lower case, once), the '
-    + 'cursor, the last save, whether it\'s ready and the run holding it; null for a mailbox with no connection',
-    stable(Object.keys(jobs.one || {}).sort()) === stable(['addresses', 'client', 'email', 'history_id', 'pending', 'ready', 'refresh_token',
-      'run_started', 'scan_from', 'scopes', 'synced_at'])
+    + 'cursor (failures {} when none, or no sync row yet), the last save, whether it\'s ready and the run holding it; null for a mailbox '
+    + 'with no connection',
+    stable(Object.keys(jobs.one || {}).sort()) === stable(['addresses', 'client', 'email', 'failures', 'history_id', 'pending', 'ready',
+      'refresh_token', 'run_started', 'scan_from', 'scopes', 'synced_at'])
+      && stable(jobs.one.failures) === stable({}) && stable(jobs.two?.failures) === stable({}) && stable(jobs.paused?.failures) === stable({})
       && jobs.one.email === 'one@assetstackai.com' && jobs.one.refresh_token === 'refresh-token-1' && jobs.one.scopes === READ
       && jobs.one.client === 'default' && stable([...jobs.one.addresses].sort()) === stable(['one@assetstack.org', 'one@assetstackai.com'])
       && jobs.one.history_id === '3003' && stable(jobs.one.pending) === stable([]) && jobs.one.ready === true
@@ -4168,6 +4258,7 @@ async function phase10(ctx) {
   await db.query("update private.outreach_gmail set refresh_token = 'refresh-token-1b' where mailbox_id = $1", [M1]);
   forget.refresh = await countsFor(M1);
   // A failed run, then an admin reconnects the same account (another case): kept, and the error and reconnect flag clear.
+  forget.failuresSave = await gsave(M1, T(100), [], [], { pending: ['g1'], failures: { g1: 2 } });
   forget.errorSave = await gsave(M1, T(100), [], [], {}, { err: 'Token has been expired or revoked.', reconnect: true });
   forget.errored = await syncOf(M1);
   forget.reconnect = await gconnect(M1, 'One@AssetStackAI.com', { by: david, token: 'refresh-token-1c' });
@@ -4179,6 +4270,7 @@ async function phase10(ctx) {
   forget.otherAccount = { ...(await countsFor(M1)), email: (await connOf(M1))?.email };
   // Another OAuth client (a later Workspace), set in the SQL editor here: forgotten.
   forget.seedClient = await seed(M1, T(110), 'c1');
+  forget.failuresAfter = { row: await failuresOf(M1), job: await jobFailures(M1) };
   forget.beforeClient = await countsFor(M1);
   await db.query("update private.outreach_gmail set client = 'second' where mailbox_id = $1", [M1]);
   forget.client = await countsFor(M1);
@@ -4194,10 +4286,13 @@ async function phase10(ctx) {
   forget.scopeSave = await gsave(M1, T(130), [thread('s2', { first: '2026-10-20T01:00:00.000Z' })], [], {});
   forget.scopeLeft = await countsFor(M1);
   check('91. a token refresh, and an admin reconnecting the same account (any case) with the Gmail scope, keep what was read (and the '
-    + 'reconnect clears the last error); another account (the mailbox\'s other address) or another client forgets it',
+    + 'reconnect clears the last error; the queue\'s failures stay); another account (the mailbox\'s other address) or another client '
+    + 'forgets it (the sync row and its failures with it: the next claim starts at {})',
     oneBefore.threads > 0 && oneBefore.messages > 0 && oneBefore.sync === 1 && stable(forget.refresh) === stable(oneBefore)
       && forget.errorSave === true && forget.errored.reconnect === true && forget.errored.error !== ''
       && forget.reconnect === 'ok' && stable(forget.sameAccount) === stable(oneBefore) && sameSync.error === '' && sameSync.reconnect === false
+      && forget.failuresSave === true && stable(sameSync.failures) === stable({ g1: 2 }) && stable(sameSync.pending) === stable(['g1'])
+      && stable(forget.failuresAfter) === stable({ row: {}, job: {} })
       && sameConn.refresh_token === 'refresh-token-1c' && sameConn.connected_by === david && sameConn.email === 'one@assetstackai.com'
       && forget.other === 'ok' && stable(forget.otherAccount) === stable({ threads: 0, messages: 0, sync: 0, connection: 1, email: 'one@assetstack.org' })
       && forget.seedClient === true && forget.beforeClient.threads === 1 && forget.beforeClient.sync === 1

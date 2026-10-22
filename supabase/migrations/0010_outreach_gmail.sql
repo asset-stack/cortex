@@ -9,7 +9,8 @@
 --   the Google OAuth client it was made with ('default': the @assetstackai.com Workspace), so another Workspace's client
 --   can be added later. The refresh token never leaves the private schema except to the function (outreach_gmail_job).
 -- - private.outreach_gmail_sync: each connected mailbox's read of Gmail: the claim that keeps two runs apart, the run that
---   holds it, Gmail's history cursor, the threads still to read, the last result, and when the first full read finished.
+--   holds it, Gmail's history cursor, the threads still to read (and, for those Gmail answered with a server error, in how
+--   many runs), the last result, and when the first full read finished.
 -- - outreach_threads: the COLD threads (we wrote first, to a new outside contact; the function decides, once) with only
 --   their headers' facts: who, our first subject, when, how many of ours, and the first reply, auto-reply and bounce.
 --   Never a body, snippet or reply subject. outreach_messages: each of our emails and each answer in them (sent, reply,
@@ -63,8 +64,13 @@ create table if not exists private.outreach_gmail_sync (
   scan_from timestamptz,
   pending text[] not null default '{}',
   error text not null default '',
-  reconnect boolean not null default false
+  reconnect boolean not null default false,
+  failures jsonb not null default '{}'::jsonb
 );
+
+-- failures: queued thread id → in how many runs Gmail answered it with a server error (the function drops it after a few).
+-- Added here too for a database that ran an earlier draft of this file without it.
+alter table private.outreach_gmail_sync add column if not exists failures jsonb not null default '{}'::jsonb;
 
 alter table private.outreach_gmail_sync enable row level security;
 revoke all on private.outreach_gmail_sync from public, anon, authenticated;
@@ -251,7 +257,8 @@ language sql security definer set search_path = public as $$
 $$;
 
 -- One claimed mailbox's job: its connection (with the token, for the function only), its addresses, where the last read
--- got to, and run_started (the claim's time: pass it back as outreach_gmail_save's p_started). Null with no connection.
+-- got to (failures: {} when none), and run_started (the claim's time: pass it back as outreach_gmail_save's p_started).
+-- Null with no connection.
 create or replace function public.outreach_gmail_job(p_mailbox uuid) returns jsonb
 language sql stable security definer set search_path = public as $$
   select jsonb_build_object(
@@ -264,6 +271,7 @@ language sql stable security definer set search_path = public as $$
     'history_id', coalesce(s.history_id, ''),
     'scan_from', s.scan_from,
     'pending', to_jsonb(coalesce(s.pending, '{}'::text[])),
+    'failures', coalesce(s.failures, '{}'::jsonb),
     'synced_at', s.synced_at,
     'ready', s.ready_at is not null,
     'run_started', s.run_started)
@@ -276,7 +284,8 @@ $$;
 -- Saves part of one mailbox's run, started at p_started: its cold threads (p_threads: [{thread_id, sender,
 -- prospect_email, prospect_name, recipients, subject, first_at, last_sent_at, sent_count, reply_at, reply_message_id,
 -- auto_at, bounce_at}]), their messages (p_messages: [{message_id, thread_id, kind, at}]) and where the read got to
--- (p_cursor: {history_id, scan_from, pending}; a key left out or null keeps what's stored). Days are Sydney's.
+-- (p_cursor: {history_id, scan_from, pending, failures}; a key left out or null keeps what's stored, as does a pending
+-- that isn't a list or failures that isn't an object). Days are Sydney's.
 -- A mailbox no longer active, or no longer connected with the read scope, gets no save (false): the claim is released
 -- and its sync row (ready, cursor, queue) and threads stay; a connection that went or lost the scope was forgotten then
 -- (§8), sync row and all. The check locks the mailbox and the connection (for share) until the save commits, so a
@@ -294,6 +303,7 @@ declare
   v_threads jsonb := case when jsonb_typeof(p_threads) = 'array' then p_threads else '[]'::jsonb end;
   v_messages jsonb := case when jsonb_typeof(p_messages) = 'array' then p_messages else '[]'::jsonb end;
   v_cursor jsonb := case when jsonb_typeof(p_cursor) = 'object' then p_cursor else '{}'::jsonb end;
+  v_failures jsonb := case when jsonb_typeof(v_cursor -> 'failures') = 'object' then v_cursor -> 'failures' end;
   v_pending text[];
   v_run timestamptz;
 begin
@@ -359,15 +369,17 @@ begin
     if jsonb_typeof(v_cursor -> 'pending') = 'array' then
       v_pending := array(select jsonb_array_elements_text(v_cursor -> 'pending'));
     end if;
-    insert into private.outreach_gmail_sync as s (mailbox_id, run_started, synced_at, history_id, scan_from, pending, error,
-      reconnect, ready_at)
+    insert into private.outreach_gmail_sync as s (mailbox_id, run_started, synced_at, history_id, scan_from, pending, failures,
+      error, reconnect, ready_at)
     values (p_mailbox, p_started, p_started, coalesce(v_cursor ->> 'history_id', ''), (v_cursor ->> 'scan_from')::timestamptz,
-            coalesce(v_pending, '{}'), '', false, case when cardinality(coalesce(v_pending, '{}')) = 0 then now() end)
+            coalesce(v_pending, '{}'), coalesce(v_failures, '{}'::jsonb), '', false,
+            case when cardinality(coalesce(v_pending, '{}')) = 0 then now() end)
     on conflict (mailbox_id) do update
       set synced_at = p_started,
           history_id = coalesce(v_cursor ->> 'history_id', s.history_id),
           scan_from = coalesce((v_cursor ->> 'scan_from')::timestamptz, s.scan_from),
           pending = coalesce(v_pending, s.pending),
+          failures = coalesce(v_failures, s.failures),
           error = '',
           reconnect = false,
           ready_at = case when cardinality(coalesce(v_pending, s.pending)) = 0 then coalesce(s.ready_at, now()) else s.ready_at end;
