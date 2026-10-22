@@ -1423,8 +1423,11 @@ const GMAIL_HISTORY_FIELDS = 'history(id,messagesAdded(message(id,threadId,label
 const RATE_REASONS = ['rateLimitExceeded', 'userRateLimitExceeded', 'RATE_LIMIT_EXCEEDED', 'quotaExceeded'];
 const GMAIL_TRANSIENT = [500, 502, 503, 504]; // a passing Gmail server error: retried once, like a rate limit
 // A thread whose read answers a server error (after the retry) goes to the back of the queue and is tried again next
-// run; one that does so in this many runs is dropped. This many server errors in one run stop the mailbox, as a rate limit.
+// run. Its failures count at most once per GMAIL_FAILURE_SPACING (runs can come a minute or seconds apart: a first read's
+// forced retries, a Sync now chain), and one that reaches GMAIL_THREAD_FAILURES counted failures (so spread over at least
+// 40 minutes) is dropped. GMAIL_SERVER_STOP server errors in one run stop the mailbox, as a rate limit.
 const GMAIL_THREAD_FAILURES = 5;
+const GMAIL_FAILURE_SPACING = 10 * 60 * 1000; // ms
 const GMAIL_SERVER_STOP = 3;
 // Saved per mailbox (outreach_gmail_sync.error, which Outreach shows): short, never a token or an address.
 const GMAIL_RECONNECT = 'Reconnect this mailbox’s Gmail in Settings → Outreach.';
@@ -1445,9 +1448,11 @@ const THREAD_ID = /^[A-Za-z0-9_-]{1,100}$/;
 class RateLimited extends Error {}
 /**
  * A Gmail 500, 502, 503 or 504 that came back after the one retry. A thread's read (or its prior-inbound check) moves
- * that thread to the back of the queue with one more failure (dropped at GMAIL_THREAD_FAILURES) and goes on with the
- * others, so a thread Gmail keeps failing on never blocks the queue and a short outage never loses one; GMAIL_SERVER_STOP
- * of them in a run stop the mailbox as a rate limit. The profile, list or history step saves "Gmail is busy".
+ * that thread to the back of the queue, counting one more failure when its last counted one is at least
+ * GMAIL_FAILURE_SPACING old (dropped at GMAIL_THREAD_FAILURES), and goes on with the others, so a thread Gmail keeps
+ * failing on never blocks the queue and an outage of under 40 minutes never loses one, however often runs come;
+ * GMAIL_SERVER_STOP of them in a run stop the mailbox as a rate limit. The profile, list or history step saves "Gmail is
+ * busy".
  */
 class GmailServerError extends RateLimited {}
 
@@ -1478,10 +1483,17 @@ const localOf = (email) => {
 };
 const unique = (list) => [...new Set(list)];
 const threadIds = (list) => unique((Array.isArray(list) ? list : []).map(str).filter((t) => THREAD_ID.test(t)));
-// job.failures ({ thread id: runs it answered a server error }) → a Map of the valid entries (positive whole counts).
-const failureCounts = (v) => new Map(v && typeof v === 'object' && !Array.isArray(v)
-  ? Object.entries(v).filter(([t, n]) => THREAD_ID.test(t) && Number.isInteger(n) && n > 0) : []);
 const validTime = (v) => typeof v === 'string' && Number.isFinite(Date.parse(v));
+const wholeCount = (n) => Number.isInteger(n) && n > 0;
+// job.failures ({ thread id: { n: counted server errors, at: ISO time of the last counted one } }) → a Map of the valid
+// entries (n a positive whole number, at a valid time; any other entry is ignored). A legacy plain count n → { n, at: '' }
+// (its next failure counts), written back as that plain count (failureOut) while it isn't counted again.
+const failureCounts = (v) => new Map(!v || typeof v !== 'object' || Array.isArray(v) ? [] : Object.entries(v).flatMap(([t, e]) => {
+  if (!THREAD_ID.test(t)) return [];
+  if (wholeCount(e)) return [[t, { n: e, at: '' }]];
+  return e && typeof e === 'object' && wholeCount(e.n) && validTime(e.at) ? [[t, { n: e.n, at: e.at }]] : [];
+}));
+const failureOut = ({ n, at }) => (at ? { n, at } : n);
 
 // Whether `email` is on one of `domains` (a Set of lower-case domains) or a subdomain of one.
 function onDomain(email, domains) {
@@ -1984,9 +1996,11 @@ function knownContext(known, addresses) {
 // rest of the queue as the cursor. Stopped by its deadline with more to read: the last save releases the claim and more
 // is true (call again now). Stopped by a rate limit: the claim is held (due again after its gap) and more is false, so a
 // Sync now chain doesn't hammer a limited Gmail. A thread Gmail answers with a server error twice (its read or its
-// prior-inbound check) goes to the back of the saved queue with its count in cursor.failures (job.failures in); at
-// GMAIL_THREAD_FAILURES runs it is dropped, and a read clears it. GMAIL_SERVER_STOP of them in a run stop the mailbox as a
-// rate limit. Only such threads left: more is false and the claim is held too (tried again after the gap, not at once).
+// prior-inbound check) goes to the back of the saved queue with its count in cursor.failures (job.failures in: { n, at });
+// a failure counts (n + 1, at now) only when there is no count yet or the last counted one is GMAIL_FAILURE_SPACING old,
+// so runs a minute or seconds apart never add up. At GMAIL_THREAD_FAILURES counted failures it is dropped, and a read
+// clears it. GMAIL_SERVER_STOP of them in a run stop the mailbox as a rate limit. Only such threads left: more is false and
+// the claim is held too (tried again after the gap, not at once).
 // → { status: 'synced' | 'failed' | 'skipped', more, pending }
 async function gmailMailbox(id, run) {
   const { cfg, fetch, db, lim, now, sleep, until } = run;
@@ -1994,7 +2008,7 @@ async function gmailMailbox(id, run) {
   let pending = [];
   let queue = 0; // the queue as last saved (or as the job read it): what a failed run leaves pending
   let serverErrors = 0; // thread reads that ended in a Gmail server error this run (logged as a count)
-  let dropped = 0; // of those, threads dropped at GMAIL_THREAD_FAILURES (logged as a count)
+  let dropped = 0; // of those, threads dropped at GMAIL_THREAD_FAILURES counted failures (logged as a count)
   let refresh = '';
   let token = '';
   let step = 'job';
@@ -2095,12 +2109,15 @@ async function gmailMailbox(id, run) {
           if (!(e instanceof RateLimited)) throw e;
           if (e instanceof GmailServerError) {
             serverErrors++;
-            const n = (failures.get(tid) || 0) + 1;
-            if (n >= GMAIL_THREAD_FAILURES) {
+            const was = failures.get(tid);
+            const at = now();
+            const spaced = !was || !validTime(was.at) || at - Date.parse(was.at) >= GMAIL_FAILURE_SPACING;
+            const entry = spaced ? { n: (was ? was.n : 0) + 1, at: new Date(at).toISOString() } : was; // else not counted again
+            if (entry.n >= GMAIL_THREAD_FAILURES) {
               done.add(tid); // given up on, as a 404
               dropped++;
             } else {
-              failures.set(tid, n);
+              failures.set(tid, entry);
               later.add(tid); // never the front of the queue: the others go first
             }
             if (serverErrors < GMAIL_SERVER_STOP) return;
@@ -2115,7 +2132,7 @@ async function gmailMailbox(id, run) {
       const last = stop || i + lim.saveEvery >= batch.length;
       const more = last && !limited && (remaining.length > later.size || historyMore);
       const kept = rows.filter(Boolean);
-      const counts = Object.fromEntries(remaining.filter((t) => failures.has(t)).map((t) => [t, failures.get(t)]));
+      const counts = Object.fromEntries(remaining.filter((t) => failures.has(t)).map((t) => [t, failureOut(failures.get(t))]));
       step = 'save';
       const saved = await save({
         threads: kept.map((r) => r.thread), messages: kept.flatMap((r) => r.messages), cursor: { ...cursor, pending: remaining, failures: counts },

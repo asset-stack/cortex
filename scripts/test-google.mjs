@@ -7,7 +7,8 @@
 // calendar (a staff member's calendar connect and callback, which alone opts in with calendar_share; calendar-sync:
 // claim, events.list, the rows calendar_save gets, reconnects and per-person failures) and Outreach from Gmail (a
 // mailbox connect and its callback; outreach-gmail-sync: claim, first read, history, restart, the headers-only thread
-// read, the cold rule and message kinds, caps, deadline, rate limits and server errors, a chain's since and claim gap,
+// read, the cold rule and message kinds, caps, deadline, rate limits and server errors (a thread's counted at most once
+// every 10 minutes), a chain's since and claim gap,
 // the save bodies, per-mailbox failures; never a token, body, snippet or reply subject saved, and no address or subject
 // logged). Exits non-zero when any check fails.
 import assert from 'node:assert/strict';
@@ -3120,6 +3121,9 @@ await check('gmail sync: Gmail rate limits — one short back-off, then stop wit
 const serverLog = (n, dropped = 0, stopped = false) => `google/outreach-gmail-sync: a Gmail server error on ${n} thread(s), ${dropped} dropped${stopped ? ', mailbox stopped' : ''}`;
 const server = () => reply(503, { error: { code: 503, message: 'Backend Error' } });
 const QUIET = { history_id: '8000' }; // an incremental run with no new history (the default history answers 8999)
+const MIN = 60000;
+const F = (n, at = GSTART) => ({ n, at }); // a failures entry: n counted server errors, the last at `at` (the fixed clock)
+const SPACED = iso(GNOW - 10 * MIN); // a last counted failure GMAIL_FAILURE_SPACING (10 minutes) before the fixed clock
 
 await check('gmail sync: a Gmail 500, 502, 503 or 504 — one back-off and retry; a thread’s twice goes to the back of the queue with its count and the rest is read; profile, listing or history → busy; others not retried', async () => {
   for (const status of [500, 502, 503, 504]) {
@@ -3135,7 +3139,7 @@ await check('gmail sync: a Gmail 500, 502, 503 or 504 — one back-off and retry
     assert.deepEqual([twice.sleeps, fetched(twice).filter((x) => x === 'tC')], [[2000], ['tC', 'tC']], `${status}: one back-off, one retry`);
     assert.deepEqual(fetched(twice).filter((x) => x !== 'tC'), LISTED.filter((x) => x !== 'tC'), `${status}: every other thread still read`);
     assert.deepEqual(twice.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor, b.p_release, b.p_error]), [[
-      ['tA', 'tB', 'tDraftFirst'], { history_id: '9100', scan_from: iso(GNOW - 90 * DAY), pending: ['tC'], failures: { tC: 1 } }, false, '',
+      ['tA', 'tB', 'tDraftFirst'], { history_id: '9100', scan_from: iso(GNOW - 90 * DAY), pending: ['tC'], failures: { tC: F(1) } }, false, '',
     ]], `${status}: the rest saved; tC kept in the queue with one failure; the claim held (only it is left); no error`);
     assert.deepEqual(twice.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 1, since: GSTART }, `${status}: not called again at once`);
     assert.deepEqual(twice.logs, [serverLog(1)], `${status}: a count, nothing else`);
@@ -3149,13 +3153,13 @@ await check('gmail sync: a Gmail 500, 502, 503 or 504 — one back-off and retry
   // Behind every thread not yet read, never at the front: the cap leaves a queue, tC goes after it (more, released).
   const capped = await gSync({ limits: { parallel: 1, threadsPerRun: 4 }, threads: (id) => (id === 'tC' ? server() : THREADS[id]) });
   assert.deepEqual(capped.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending, b.p_cursor.failures, b.p_release]), [
-    [['tA', 'tB'], [...LISTED.slice(4), 'tC'], { tC: 1 }, true],
+    [['tA', 'tB'], [...LISTED.slice(4), 'tC'], { tC: F(1) }, true],
   ]);
   assert.deepEqual(pick(capped.data, ['more', 'pending']), { more: true, pending: LISTED.length - 3 });
   // Six at a time, two threads failing: both to the back (in queue order), one log line counting them.
   const two = await gSync({ threads: (id) => (id === 'tA' || id === 'tC' ? server() : THREADS[id]) });
   assert.deepEqual(two.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending, b.p_cursor.failures, b.p_release]), [
-    [['tB', 'tDraftFirst'], ['tA', 'tC'], { tA: 1, tC: 1 }, false],
+    [['tB', 'tDraftFirst'], ['tA', 'tC'], { tA: F(1), tC: F(1) }, false],
   ]);
   assert.deepEqual([two.sleeps, two.logs], [[2000, 2000], [serverLog(2)]]);
   gNoTokens(two);
@@ -3163,7 +3167,7 @@ await check('gmail sync: a Gmail 500, 502, 503 or 504 — one back-off and retry
   let k = 0;
   const thenServer = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? (k++ === 0 ? reply(429, {}) : server()) : THREADS[id]) });
   assert.deepEqual(thenServer.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending, b.p_cursor.failures, b.p_release]), [
-    [['tA', 'tB', 'tDraftFirst'], ['tC'], { tC: 1 }, false],
+    [['tA', 'tB', 'tDraftFirst'], ['tC'], { tC: F(1) }, false],
   ]);
   let j = 0;
   const thenLimit = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? (j++ === 0 ? server() : reply(429, {})) : THREADS[id]) });
@@ -3176,35 +3180,106 @@ await check('gmail sync: a Gmail 500, 502, 503 or 504 — one back-off and retry
   }
 });
 
-await check('gmail sync: a thread’s server-error count grows run by run (job.failures in, cursor.failures out, pending ids only); dropped at 5 (counted in the log); a read or a 404 clears it', async () => {
+await check('gmail sync: a thread’s server-error count grows (job.failures in, cursor.failures out as { n, at }, pending ids only); dropped at 5 (counted in the log); a read or a 404 clears it', async () => {
   const job = (pending, failures) => ({ jobs: { [MB1]: gJob(MB1, { ...QUIET, pending, failures }) } });
   const threads = (id) => (id === 'tC' ? server() : THREADS[id]);
-  // tC fails again (2 → 3); tOld is gone from Gmail (404: its count goes); tGone isn't queued any more; bad entries ignored.
-  const third = await gSync({ ...job(['tOld', 'tC'], { tC: 2, tOld: 1, tGone: 3, 'bad id!': 1, tStr: '2', tZero: 0, tHalf: 1.5 }), threads });
+  // tC fails again 10 minutes after its last counted failure (2 → 3, at now); tOld is gone from Gmail (404: its count
+  // goes); tGone isn't queued any more; bad ids ignored.
+  const third = await gSync({ ...job(['tOld', 'tC'], { tC: F(2, SPACED), tOld: F(1, SPACED), tGone: F(3, SPACED), 'bad id!': F(1, SPACED) }), threads });
   assert.deepEqual(fetched(third), ['tOld', 'tC', 'tC']);
-  assert.deepEqual(third.saved.map((b) => [b.p_cursor, b.p_release]), [[{ history_id: '8999', pending: ['tC'], failures: { tC: 3 } }, false]]);
+  assert.deepEqual(third.saved.map((b) => [b.p_cursor, b.p_release]), [[{ history_id: '8999', pending: ['tC'], failures: { tC: F(3) } }, false]]);
   assert.deepEqual(third.logs, [serverLog(1)]);
   // Not an object: no counts.
   for (const failures of [null, [], 'tC', 3]) {
     const r = await gSync({ ...job(['tC'], failures), threads });
-    assert.deepEqual(r.saved[0].p_cursor, { history_id: '8999', pending: ['tC'], failures: { tC: 1 } }, JSON.stringify(failures));
+    assert.deepEqual(r.saved[0].p_cursor, { history_id: '8999', pending: ['tC'], failures: { tC: F(1) } }, JSON.stringify(failures));
   }
-  // The fifth run: dropped (as a 404), the queue empties, the log counts it; nothing else to read, so nothing is held.
-  const fifth = await gSync({ ...job(['tC'], { tC: 4 }), threads });
+  // The fifth counted failure: dropped (as a 404), the queue empties, the log counts it; nothing else to read, so nothing is held.
+  const fifth = await gSync({ ...job(['tC'], { tC: F(4, SPACED) }), threads });
   assert.deepEqual([fetched(fifth), fifth.saved.map((b) => [b.p_threads, b.p_cursor, b.p_release])], [['tC', 'tC'], [[[], { history_id: '8999', pending: [], failures: {} }, false]]]);
   assert.deepEqual([fifth.data.pending, fifth.logs], [0, [serverLog(1, 1)]]);
   // Read at last (count 4): saved as usual, the count cleared.
-  const back = await gSync({ ...job(['tC'], { tC: 4 }) });
+  const back = await gSync({ ...job(['tC'], { tC: F(4, iso(GNOW - MIN)) }) });
   assert.deepEqual(back.saved.map((b) => [b.p_threads, b.p_cursor]), [[[ROW_C], { history_id: '8999', pending: [], failures: {} }]]);
   assert.deepEqual(back.logs, []);
-  // A count waiting beyond threadsPerRun is kept (still queued); one read this run goes.
-  const wait = await gSync({ ...job(['tA', 'tB', 'tC'], { tA: 1, tC: 2 }), limits: { threadsPerRun: 2 } });
-  assert.deepEqual(wait.saved.map((b) => [b.p_cursor.pending, b.p_cursor.failures, b.p_release]), [[['tC'], { tC: 2 }, true]]);
+  // A count waiting beyond threadsPerRun is kept as it was (still queued); one read this run goes.
+  const wait = await gSync({ ...job(['tA', 'tB', 'tC'], { tA: F(1, SPACED), tC: F(2, SPACED) }), limits: { threadsPerRun: 2 } });
+  assert.deepEqual(wait.saved.map((b) => [b.p_cursor.pending, b.p_cursor.failures, b.p_release]), [[['tC'], { tC: F(2, SPACED) }, true]]);
   assert.equal(wait.data.more, true, 'not read yet this run: call again');
   // A rate limit never counts: tC's count stays as it was.
-  const limited = await gSync({ ...job(['tC'], { tC: 2 }), threads: (id) => (id === 'tC' ? reply(429, {}) : THREADS[id]) });
-  assert.deepEqual(limited.saved.map((b) => [b.p_cursor, b.p_release]), [[{ history_id: '8999', pending: ['tC'], failures: { tC: 2 } }, false]]);
+  const limited = await gSync({ ...job(['tC'], { tC: F(2, SPACED) }), threads: (id) => (id === 'tC' ? reply(429, {}) : THREADS[id]) });
+  assert.deepEqual(limited.saved.map((b) => [b.p_cursor, b.p_release]), [[{ history_id: '8999', pending: ['tC'], failures: { tC: F(2, SPACED) } }, false]]);
   assert.deepEqual(limited.logs, []);
+});
+
+await check('gmail sync: a thread’s server errors count at most once every 10 minutes — runs a minute apart never drop it (n stays 1); 10+ minutes after the last counted one adds 1; the 5th spaced one drops it', async () => {
+  const threads = (id) => (id === 'tC' ? server() : THREADS[id]);
+  const run = (failures, ms, over = {}) => gSync({ jobs: { [MB1]: gJob(MB1, { ...QUIET, pending: ['tC'], failures, ...over }) }, threads, now: () => ms });
+  const rows = (r) => r.saved.map((b) => [b.p_threads, b.p_cursor.pending, b.p_cursor.failures, b.p_release]);
+  // Ten failing runs a minute apart (a first read's forced retries), each from the last one's saved cursor: tC stays
+  // queued with one counted failure, at the first.
+  let failures = {};
+  for (let i = 0; i < 10; i++) {
+    const r = await run(failures, GNOW + i * MIN);
+    assert.deepEqual(rows(r), [[[], ['tC'], { tC: F(1) }, false]], `run ${i + 1}`);
+    assert.deepEqual([r.data.pending, r.logs], [1, [serverLog(1)]], `run ${i + 1}`);
+    failures = r.saved[0].p_cursor.failures;
+  }
+  // A Sync now chain seconds apart: the same.
+  const chained = await run({ tC: F(4) }, GNOW + 5000);
+  assert.deepEqual([rows(chained), chained.logs], [[[[], ['tC'], { tC: F(4) }, false]], [serverLog(1)]], 'n 4, not counted again: kept');
+  // Just under 10 minutes after the last counted failure: not counted; 10 minutes or more: n + 1, at now.
+  const early = await run({ tC: F(2) }, GNOW + 10 * MIN - 1);
+  assert.deepEqual(rows(early), [[[], ['tC'], { tC: F(2) }, false]]);
+  for (const ms of [GNOW + 10 * MIN, GNOW + 3 * DAY]) {
+    const later = await run({ tC: F(2) }, ms);
+    assert.deepEqual(rows(later), [[[], ['tC'], { tC: F(3, iso(ms)) }, false]], iso(ms));
+  }
+  // Failures every minute for 40 minutes, each run from the last one's cursor: counted at 0, 10, 20 and 30 minutes, and
+  // the fifth (at 40) drops it (as a 404, counted in the log); the queue is empty then.
+  failures = {};
+  for (let m = 0; m <= 40; m++) {
+    const r = await run(failures, GNOW + m * MIN);
+    const n = Math.floor(m / 10) + 1;
+    if (m < 40) {
+      assert.deepEqual(rows(r), [[[], ['tC'], { tC: F(n, iso(GNOW + (n - 1) * 10 * MIN)) }, false]], `minute ${m}`);
+      assert.deepEqual(r.logs, [serverLog(1)], `minute ${m}`);
+    } else {
+      assert.deepEqual(rows(r), [[[], [], {}, false]], 'dropped at the fifth');
+      assert.deepEqual([r.data.pending, r.logs], [0, [serverLog(1, 1)]]);
+    }
+    failures = r.saved[0].p_cursor.failures;
+  }
+});
+
+await check('gmail sync: legacy plain counts in job.failures still work (the first failure after one counts, an untried one is written back as it was); an entry with a bad n or at is ignored', async () => {
+  const threads = (id) => (id === 'tC' ? server() : THREADS[id]);
+  const job = (pending, failures) => ({ jobs: { [MB1]: gJob(MB1, { ...QUIET, pending, failures }) } });
+  const rows = (r) => r.saved.map((b) => [b.p_threads, b.p_cursor.pending, b.p_cursor.failures, b.p_release]);
+  // tC (2) fails: counted (3, at now); tB (3) isn't tried this run (threadsPerRun 1): written back as 3.
+  const legacy = await gSync({ ...job(['tC', 'tB'], { tC: 2, tB: 3 }), threads, limits: { threadsPerRun: 1 } });
+  assert.deepEqual(rows(legacy), [[[], ['tB', 'tC'], { tB: 3, tC: F(3) }, true]]);
+  // Read back a minute later: tC's count now has a time, so it isn't counted again.
+  const after = await gSync({ ...job(['tC'], legacy.saved[0].p_cursor.failures), threads, now: () => GNOW + MIN });
+  assert.deepEqual(rows(after), [[[], ['tC'], { tC: F(3) }, false]]);
+  // A legacy 4: the next failure is the fifth, dropped.
+  const four = await gSync({ ...job(['tC'], { tC: 4 }), threads });
+  assert.deepEqual([rows(four), four.logs], [[[[], [], {}, false]], [serverLog(1, 1)]]);
+  // Read: cleared.
+  const read = await gSync({ ...job(['tC'], { tC: 2 }) });
+  assert.deepEqual(rows(read), [[[ROW_C], [], {}, false]]);
+  // A bad n or at (or a bad legacy count): ignored, so tC's failure is its first.
+  const bad = [
+    '2', 0, -1, 1.5, true, null, [2], {}, { n: 0, at: GSTART }, { n: -2, at: GSTART }, { n: 1.5, at: GSTART }, { n: '2', at: GSTART },
+    { n: 2 }, { n: 2, at: '' }, { n: 2, at: 'yesterday' }, { n: 2, at: GNOW }, { n: 2, at: null }, { at: GSTART },
+  ];
+  for (const entry of bad) {
+    const r = await gSync({ ...job(['tC'], { tC: entry }), threads, now: () => GNOW + MIN });
+    assert.deepEqual(rows(r), [[[], ['tC'], { tC: F(1, iso(GNOW + MIN)) }, false]], JSON.stringify(entry));
+  }
+  // An ignored entry for a thread that is read is simply gone.
+  const gone = await gSync({ ...job(['tC'], { tC: { n: 2, at: 'yesterday' } }) });
+  assert.deepEqual(rows(gone), [[[ROW_C], [], {}, false]]);
 });
 
 await check('gmail sync: 3 server errors in a run stop the mailbox as a rate limit — a first read during an outage keeps every thread queued (never an empty queue), and the next run reads them', async () => {
@@ -3213,7 +3288,7 @@ await check('gmail sync: 3 server errors in a run stop the mailbox as a rate lim
   assert.deepEqual(outage.sleeps, [2000, 2000, 2000]);
   const queue = [...LISTED.slice(3), 'tA', 'tB', 'tC'];
   assert.deepEqual(outage.saved.map((b) => [b.p_threads, b.p_cursor, b.p_release, b.p_error]), [[
-    [], { history_id: '9100', scan_from: iso(GNOW - 90 * DAY), pending: queue, failures: { tA: 1, tB: 1, tC: 1 } }, false, '',
+    [], { history_id: '9100', scan_from: iso(GNOW - 90 * DAY), pending: queue, failures: { tA: F(1), tB: F(1), tC: F(1) } }, false, '',
   ]], 'the claim held, no error');
   assert.deepEqual(outage.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: LISTED.length, since: GSTART });
   assert.deepEqual(outage.logs, [serverLog(3, 0, true)]);
@@ -3222,7 +3297,7 @@ await check('gmail sync: 3 server errors in a run stop the mailbox as a rate lim
   const lanes = await gSync({ threads: server });
   assert.deepEqual(fetched(lanes).sort(), [...LISTED.slice(0, 6), ...LISTED.slice(0, 6)].sort());
   assert.deepEqual(lanes.saved.map((b) => [b.p_cursor.pending, b.p_cursor.failures, b.p_release]), [
-    [[...LISTED.slice(6), ...LISTED.slice(0, 6)], Object.fromEntries(LISTED.slice(0, 6).map((t) => [t, 1])), false],
+    [[...LISTED.slice(6), ...LISTED.slice(0, 6)], Object.fromEntries(LISTED.slice(0, 6).map((t) => [t, F(1)])), false],
   ]);
   assert.deepEqual([lanes.data.more, lanes.logs], [false, [serverLog(6, 0, true)]]);
   // Gmail is back: the next run (from the saved cursor) reads the whole queue.
@@ -3233,11 +3308,11 @@ await check('gmail sync: 3 server errors in a run stop the mailbox as a rate lim
   // The prior-inbound check's server errors count the same, mixed with reads'.
   const priorFails = (q) => q.includes('dee@example.org') || q.includes('bo@example.net');
   const prior = await gSync({ limits: { parallel: 1 }, prior: (c, q) => (priorFails(q) ? server() : reply(200, q.includes('sam@example.org') ? { messages: [{ id: 'older-1' }] } : {})) });
-  assert.deepEqual(prior.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending, b.p_cursor.failures]), [[['tA', 'tDraftFirst'], ['tB', 'tC'], { tB: 1, tC: 1 }]]);
+  assert.deepEqual(prior.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending, b.p_cursor.failures]), [[['tA', 'tDraftFirst'], ['tB', 'tC'], { tB: F(1), tC: F(1) }]]);
   assert.deepEqual(prior.logs, [serverLog(2)]);
   const mixed = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tA' ? server() : THREADS[id]), prior: (c, q) => (priorFails(q) ? server() : reply(200, {})) });
   assert.deepEqual(mixed.saved.map((b) => [b.p_threads, b.p_cursor.pending, b.p_cursor.failures, b.p_release]), [
-    [[], [...LISTED.slice(3), 'tA', 'tB', 'tC'], { tA: 1, tB: 1, tC: 1 }, false],
+    [[], [...LISTED.slice(3), 'tA', 'tB', 'tC'], { tA: F(1), tB: F(1), tC: F(1) }, false],
   ]);
   assert.deepEqual([mixed.data.more, mixed.logs], [false, [serverLog(3, 0, true)]]);
 });
@@ -3245,16 +3320,24 @@ await check('gmail sync: 3 server errors in a run stop the mailbox as a rate lim
 await check('gmail sync: a stored cold thread whose new reply answers a server error stays queued (the reply isn’t lost) while history moves on; read next run', async () => {
   const replied = () => reply(200, { history: [{ id: '8001', messagesAdded: [{ message: { id: 'mA4', threadId: 'tA', labelIds: ['INBOX'] } }] }], historyId: '8002' });
   const r = await gSync({ jobs: { [MB1]: gJob(MB1, QUIET) }, stored: ['tA'], history: replied, threads: (id) => (id === 'tA' ? server() : THREADS[id]) });
-  assert.deepEqual(r.saved.map((b) => [b.p_threads, b.p_cursor, b.p_release]), [[[], { history_id: '8002', pending: ['tA'], failures: { tA: 1 } }, false]]);
+  assert.deepEqual(r.saved.map((b) => [b.p_threads, b.p_cursor, b.p_release]), [[[], { history_id: '8002', pending: ['tA'], failures: { tA: F(1) } }, false]]);
   assert.deepEqual(pick(r.data, ['synced', 'more', 'pending']), { synced: 1, more: false, pending: 1 });
+  // Repeated Sync now presses a minute apart while Gmail still fails: the reply stays queued, counted once.
+  let failures = r.saved[0].p_cursor.failures;
+  for (let i = 1; i <= 8; i++) {
+    const press = await gSync({ body: { force: true }, jobs: { [MB1]: gJob(MB1, { history_id: '8002', pending: ['tA'], failures }) }, stored: ['tA'],
+      threads: (id) => (id === 'tA' ? server() : THREADS[id]), now: () => GNOW + i * MIN });
+    assert.deepEqual(press.saved.map((b) => [b.p_threads, b.p_cursor.pending, b.p_cursor.failures]), [[[], ['tA'], { tA: F(1) }]], `press ${i}`);
+    failures = press.saved[0].p_cursor.failures;
+  }
   // Next run: no new history, the queued thread read (a stored one: refreshed, no cold check), its count cleared.
-  const next = await gSync({ jobs: { [MB1]: gJob(MB1, { history_id: '8002', pending: ['tA'], failures: { tA: 1 } }) }, stored: ['tA'] });
+  const next = await gSync({ jobs: { [MB1]: gJob(MB1, { history_id: '8002', pending: ['tA'], failures }) }, stored: ['tA'] });
   assert.deepEqual(next.saved.map((b) => [b.p_threads, b.p_cursor]), [[[ROW_A], { history_id: '8999', pending: [], failures: {} }]]);
   assert.equal(next.priors.length, 0);
   // A new sent thread from history the same way: queued, not dropped.
   const sent = () => reply(200, { history: [{ id: '8001', messagesAdded: [{ message: { id: 'mC1', threadId: 'tC', labelIds: ['SENT'] } }] }], historyId: '8002' });
   const fresh = await gSync({ jobs: { [MB1]: gJob(MB1, QUIET) }, history: sent, threads: (id) => (id === 'tC' ? server() : THREADS[id]) });
-  assert.deepEqual(fresh.saved.map((b) => b.p_cursor), [{ history_id: '8002', pending: ['tC'], failures: { tC: 1 } }]);
+  assert.deepEqual(fresh.saved.map((b) => b.p_cursor), [{ history_id: '8002', pending: ['tC'], failures: { tC: F(1) } }]);
 });
 
 await check('gmail sync: a rate limit holds only that mailbox — the next one is still read; more false even with history or a queue left', async () => {
