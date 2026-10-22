@@ -572,7 +572,8 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
    **as the mailbox** (not as yourself, unless it is your own mailbox) → **Allow**. Whoever connects must be a Cortex
    admin and able to sign in to that mailbox (its owner, or an admin with its password). Back in Settings the row reads
    *Reading Gmail · N left* while Cortex reads the last 90 days, then *Gmail: address · synced …*. Leave Settings or
-   Outreach open until then: the first read runs in steps of a few hundred threads, and only while a page is open.
+   Outreach open until then: the first read runs in steps of a few hundred threads, only while one of those pages is
+   open (if Gmail asks it to slow down, it carries on by itself a minute later).
 7. **Tell the team** what Cortex reads and keeps (above), and that the Outreach numbers for a connected mailbox now
    come from Gmail.
 
@@ -581,13 +582,16 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
   **Replies**: prospects who answered (once per thread, on the day of their first reply). **Reply rate**: replies ÷
   prospects. **Bounces**: threads that bounced. **Meetings**: from the sheet. Opens stay *Not tracked*.
 - A thread is judged once, when Cortex first sees it: our first message, to one to five outside people (colleagues
-  copied in don't count), none of them known (above). Replies, auto-replies and bounces in it are counted as they arrive; a reply to someone else's thread
+  copied in don't count), none of them known (above). Our later emails in it count as follow-ups when they go to someone
+  outside (forwarding it to a colleague doesn't).
+- **All** lists each prospect once every active mailbox is counted from Gmail; until then it lists the sheet's emails
+  (pick a mailbox to see its prospects). The breakdown's *Prospects (Gmail)* then covers only the Gmail mailboxes. Replies, auto-replies and bounces in it are counted as they arrive; a reply to someone else's thread
   is never counted.
 - Opening Outreach reads new mail when a mailbox was last read over 10 minutes ago; **Sync now** reads at once (with
   the sheet). Nothing reads on a timer.
 - **Disconnect Gmail** (same row) removes that mailbox's Gmail numbers at once, and Outreach counts it from the sheet
   again. Taking the connected address off the mailbox, or reconnecting as a different account, does the same; switching
-  the mailbox off keeps its numbers and stops reading. If the row says *reconnect* (the mailbox's password changed, or
+  the mailbox off keeps its numbers and stops reading (its row says *paused*) until it's switched on again. If the row says *reconnect* (the mailbox's password changed, or
   its access was removed at Google), click **Reconnect Gmail**.
 - Only `@assetstackai.com` mailboxes for now. `@assetstack.org` and `@assetstackai.com.au` are a separate Workspace:
   they need their own Google client there before they can connect (`docs/PHASE2.md` §16, *Later*).
@@ -601,7 +605,7 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
 | **Connect Gmail** comes back with "Sign in as one of this mailbox's addresses" | Google was signed in as someone else, or the account isn't listed on the mailbox. Connect again and pick (or add) the mailbox's own account. |
 | Google: "Access blocked: … admin_policy_enforced", or "Cortex needs permission to access resources in your organization" when connecting Gmail | The Workspace limits Gmail to trusted apps: section 14 step 3. |
 | **Connect Gmail** comes back with "Allow Cortex to read Gmail to connect it" | The Gmail box was unticked on Google's screen, or the scope is missing from **Data Access** (section 14 step 2). Connect again and leave it ticked. |
-| Outreach says "Reading Gmail" for a long time | The first read runs only while Outreach or Settings is open (a few hundred threads a step). Keep one open; **Sync now** picks it up again. |
+| Outreach says "Reading Gmail" for a long time | The first read runs only while Outreach or Settings is open (a few hundred threads a step, and it waits a minute when Gmail asks it to slow down). Keep one open; **Sync now** picks it up again at once. |
 | A mailbox's numbers changed when its Gmail was read | Expected: Gmail counts every cold email it sent (follow-ups too, and ones the agent didn't log) to new outside contacts only, where the sheet counted the emails the agent logged. |
 | "Only @assetstackai.com Google accounts can sign in." | A personal Google account was chosen. Sign in with the work account. |
 | Google: "Access blocked … can only be used within its organization" | The account isn't in the Workspace. Expected for outsiders. |

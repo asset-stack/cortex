@@ -1424,8 +1424,8 @@ function demoOutreach(state) {
       mailboxes: (state?.mailboxes || []).map((m) => {
         const g = gmail[m.id];
         return {
-          mailbox: m.id, connected: Boolean(g), email: g?.email || '', connectedAt: g?.connectedAt || '', syncedAt: g?.syncedAt || '',
-          ready: Boolean(g?.readyAt), pending: 0, error: '', reconnect: false,
+          mailbox: m.id, active: m.active !== false, connected: Boolean(g), email: g?.email || '', connectedAt: g?.connectedAt || '',
+          syncedAt: g?.syncedAt || '', ready: Boolean(g?.readyAt), pending: 0, error: '', reconnect: false,
         };
       }),
     }),
@@ -1455,7 +1455,7 @@ function liveOutreach(syncOutreach, flush, syncGmail) {
         return {
           ok: true,
           mailboxes: (data?.mailboxes || []).map((m) => ({
-            mailbox: m.mailbox_id, connected: Boolean(m.connected), email: m.email || '', connectedAt: m.connected_at || '',
+            mailbox: m.mailbox_id, active: m.active !== false, connected: Boolean(m.connected), email: m.email || '', connectedAt: m.connected_at || '',
             syncedAt: m.synced_at || '', ready: Boolean(m.ready), pending: Number(m.pending) || 0, error: m.error || '', reconnect: Boolean(m.reconnect),
           })),
         };

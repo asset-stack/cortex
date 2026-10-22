@@ -106,9 +106,16 @@ export default function Emails() {
       });
   }, [from, to, version]);
 
-  // Mailboxes counted from Gmail: connected and through their first read.
-  const gmailOf = useMemo(() => new Map(data.gmail.filter((g) => g.connected).map((g) => [g.mailbox, g.ready ? 'ready' : 'reading'])), [data.gmail]);
+  // Mailboxes counted from Gmail: connected and through their first read (a mailbox switched off keeps counting so);
+  // 'reading' while an active one's first read goes on.
+  const gmailOf = useMemo(() => new Map(data.gmail.filter((g) => g.connected && (g.ready || g.active !== false))
+    .map((g) => [g.mailbox, g.ready ? 'ready' : 'reading'])), [data.gmail]);
   const readyBoxes = useMemo(() => new Set([...gmailOf].filter(([, v]) => v === 'ready').map(([k]) => k)), [gmailOf]);
+  // Every active mailbox counted from Gmail: then All lists prospect threads too, else the sheet's list (which has them all).
+  const allGmail = useMemo(() => {
+    const on = mailboxes.filter((m) => m.active !== false);
+    return on.length > 0 && on.every((m) => readyBoxes.has(m.id));
+  }, [mailboxes, readyBoxes]);
   const daily = useMemo(
     () => mergeDaily(knownMailbox(data.daily, mailboxes), knownMailbox(data.gmailDaily, mailboxes), readyBoxes),
     [data.daily, data.gmailDaily, mailboxes, readyBoxes],
@@ -183,11 +190,11 @@ export default function Emails() {
 
       <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
         <Notes filter={current} mailboxes={mailboxes} />
-        <Breakdown rows={breakdown} gmailRows={gmailBreakdown} mailbox={mb} />
+        <Breakdown rows={breakdown} gmailRows={gmailBreakdown} mailbox={mb} gmailOnly={mb === null ? allGmail && !hasUnassigned : readyBoxes.has(mb)} />
       </div>
 
       <div className="mt-6">
-        <EmailList mailbox={mb} from={from} to={to} mailboxes={mailboxes} gmail={readyBoxes} version={version} />
+        <EmailList mailbox={mb} from={from} to={to} mailboxes={mailboxes} gmail={readyBoxes} allGmail={allGmail} version={version} />
       </div>
     </div>
   );

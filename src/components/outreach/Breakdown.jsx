@@ -40,8 +40,9 @@ function Bars({ title, items, total, label, color }) {
  * Contacts logged in the period by what happened (sent, draft saved, each skipped reason) and emails replied to by
  * kind, from outreach.breakdown(); and, for mailboxes counted from Gmail (`gmailRows`, outreach.gmailBreakdown()), the
  * prospects emailed in the period by outcome and by emails sent. `mailbox`: null for all, '' Unassigned, or an id.
+ * `gmailOnly`: every mailbox shown is counted from Gmail (else the Gmail bars say they cover only those mailboxes).
  */
-export default function Breakdown({ rows, gmailRows = [], mailbox, className }) {
+export default function Breakdown({ rows, gmailRows = [], mailbox, gmailOnly = true, className }) {
   const sum = (list, kind) => {
     const m = new Map();
     (list || []).forEach((r) => {
@@ -61,7 +62,7 @@ export default function Breakdown({ rows, gmailRows = [], mailbox, className }) 
       <div className="mt-4 grid gap-6 sm:grid-cols-2">
         {outcomes.length > 0 && (
           <>
-            <Bars title="Prospects" items={outcomes} total={total(outcomes)} label={(v) => OUTCOMES[v][0]} color={(v) => OUTCOMES[v][1]} />
+            <Bars title={gmailOnly ? 'Prospects' : 'Prospects (Gmail)'} items={outcomes} total={total(outcomes)} label={(v) => OUTCOMES[v][0]} color={(v) => OUTCOMES[v][1]} />
             <Bars title="Emails per prospect" items={followups} total={total(followups)} label={followupLabel} color={() => '#3987e5'} />
           </>
         )}

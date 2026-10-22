@@ -792,7 +792,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   known email (profiles, client contacts, client access, invoice recipients), at a client's domain (free-mail domains
   aside) or a no-reply address; and the prospect (the first outside To, else Cc) has never written to this mailbox before it
   (`from:<prospect> before:<first email>`). Outreach contacts (the prospects in Pipeline) are deliberately not excluded.
-  In a cold thread each message of ours is `sent` (the first email and each follow-up) and each of theirs is `reply`,
+  In a cold thread each message of ours to someone outside is `sent` (the first email and each follow-up; one only to
+  colleagues, like a forward to ops, counts as nothing) and each of theirs is `reply`,
   `auto` (Auto-Submitted, X-Autoreply / X-Autorespond, Precedence auto_reply / bulk / junk, an out-of-office subject)
   or `bounce` (mailer-daemon / postmaster, a delivery-status report, X-Failed-Recipients); colleagues, no-reply senders
   and calendar notifications count as nothing.
@@ -809,9 +810,11 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   - For the function only: `outreach_gmail_connect()` (the Google account must be one of the mailbox's addresses and the
     caller an active admin), `outreach_gmail_known()` (the exclusion lists), `outreach_gmail_claim()` (10 minutes
     between reads, 1 with Sync now; three mailboxes a run), `outreach_gmail_job()` and `outreach_gmail_save()` (locks
-    the mailbox and its connection first, the newer run wins, an error writes nothing).
-  - For the app: `outreach_gmail_status()` (Outreach viewers: connected, address, synced, ready, threads left, error,
-    reconnect; never a token), `outreach_gmail_disconnect()` (admins), and `outreach_gmail_daily()` /
+    the mailbox and its connection first, the newer run wins, a run whose claim was forgotten by a disconnect or another
+    account saves nothing, an error writes nothing; a mailbox switched off mid-run keeps its sync and just frees the
+    claim).
+  - For the app: `outreach_gmail_status()` (Outreach viewers: the mailbox's active flag, connected, address, synced,
+    ready, threads left, error, reconnect; never a token), `outreach_gmail_disconnect()` (admins), and `outreach_gmail_daily()` /
     `outreach_gmail_breakdown()` / `outreach_gmail_threads()` (security invoker; the last adds the sheet's organisation,
     role, tier and reply status from the row with the thread's id, else the prospect's newest row). They equal
     `gmailDaily()` / `gmailBreakdown()` / `filterThreads()` in `src/lib/outreach.js` (demo mode), checked by
@@ -828,22 +831,29 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   (`in:sent after:…`), after that follows Gmail's history from the stored point (sent mail, and answers in stored cold
   threads; when Google says the point is too old it scans again from the last sync); then reads the queued threads,
   newest first, as metadata only (named headers, never `snippet`, `full` or `raw`), up to 500 a run, saving every 100,
-  and answers `{ claimed, synced, failed, more, pending }` so the page runs it again while `more`. One mailbox's
-  failure never stops the others; Google refusing the mailbox asks for **Reconnect**. Logs carry counts only.
+  and answers `{ claimed, synced, failed, more, pending }` so the page runs it again while `more` (also true when it
+  claimed three, as more may be due). A Gmail rate limit or a 500/502/503/504 waits once, then ends the run with more to
+  read. One mailbox's failure never stops the others; Google refusing the mailbox asks for **Reconnect**. Logs carry
+  counts only.
 - **App**:
   - **Outreach** (`Emails.jsx`): the numbers are `mergeDaily()`: a mailbox whose first read is done counts Sent (each
     cold email, follow-ups too), **Prospects** (threads started), Replies, auto-replies and Bounces from Gmail and only
     Meetings from the sheet; others, and Unassigned, stay on the sheet (each email a prospect). Reply rate = replies ÷
     prospects. Mailbox cards counted from Gmail carry a mail mark. The Breakdown adds **Prospects** (replied, auto-reply,
-    no reply yet, bounced) and **Emails per prospect** (1, 2, 3, 4 or more). The list (`EmailList.jsx`), for Gmail
-    mailboxes: **Sent / Replies / Bounced**, a row per prospect thread (the sheet's organisation when it matches, the
-    contact, subject, emails sent, the outcome; the drawer adds Open in Gmail), and the sheet's own list as **Sheet**.
+    no reply yet, bounced; *Prospects (Gmail)* when some mailboxes shown are on the sheet) and **Emails per prospect**
+    (1, 2, 3, 4 or more). The list (`EmailList.jsx`), for a Gmail mailbox (and for All once every active mailbox is
+    one; until then All lists the sheet's emails): **Sent / Replies / Bounced**, a row per prospect thread (the sheet's
+    organisation when it matches, the contact, subject, emails sent, the outcome; the drawer adds Open in Gmail), and
+    the sheet's own list as **Sheet**.
   - `SyncStatus.jsx`: opening Outreach asks Gmail to sync (the function skips mailboxes read in the last 10 minutes);
-    **Sync now** syncs the sheet and Gmail together; a first read chains runs while there's more (at most 30). The line
-    adds Gmail's state (reading, *N left*, synced, or a mailbox's error).
+    **Sync now** syncs the sheet and Gmail together (forced on every run; the sheet's result shows without waiting for
+    Gmail); runs chain while there's more (at most 30), each that read something refreshing the numbers. While an
+    active mailbox's first read isn't done, it carries on a minute after it stops (at most 10 times a page), on
+    Outreach and on Settings → Outreach. The line adds Gmail's state (reading, *N left*, synced, or a mailbox's error).
   - **Settings → Outreach**: each mailbox row has **Connect Gmail** (a confirm says what is read and kept), then
-    *Gmail: address · synced …* or *Reading Gmail · N left*, **Reconnect Gmail** after an error, **Disconnect Gmail**
-    (confirm). The result of the trip to Google shows on that row, and a connect starts the first read at once.
+    *Gmail: address · synced …* or *Reading Gmail · N left* (*paused* while the mailbox is off), **Reconnect Gmail**
+    after an error, **Disconnect Gmail** (confirm). The result of the trip to Google shows on that row (*connected* only
+    while it still is), and a connect starts the first read at once.
   - Store: `outreach.gmailStatus()`, `gmailDaily()`, `gmailBreakdown()`, `threads()`, `syncGmail({ force })`; actions
     `connectMailboxGmail()`, `disconnectMailboxGmail()` (admins), `syncOutreachGmail()`. Demo mode: David's and Josh's
     mailboxes are connected with seeded threads (from their sheet rows, with follow-ups, plus three sent by hand), Sarah's

@@ -155,16 +155,16 @@ function ThreadDetail({ t, mailboxes }) {
 
 /**
  * The emails list, newest first, 50 at a time. For the agent's sheet: Sent (sent in the period), Replies (replied in it)
- * or All logged, a row per contact. When the mailbox shown (or, for all, any mailbox) is counted from Gmail (`gmail`, a
- * Set of mailbox ids): Sent (prospects first emailed in the period), Replies, Bounced, a row per prospect thread, and
- * the sheet as its own tab. `mailbox`: null for all, '' Unassigned, or an id. `version` changes when the data may have
+ * or All logged, a row per contact. When the mailbox shown is counted from Gmail (`gmail`, a Set of mailbox ids; for
+ * all, `allGmail`: every active mailbox is): Sent (prospects first emailed in the period), Replies, Bounced, a row per
+ * prospect thread, and the sheet as its own tab. `mailbox`: null for all, '' Unassigned, or an id. `version` changes when the data may have
  * (a sync, the demo reset).
  */
-export default function EmailList({ mailbox, from, to, mailboxes, gmail, version }) {
+export default function EmailList({ mailbox, from, to, mailboxes, gmail, allGmail = false, version }) {
   const { outreach } = useStore();
   const api = useRef(outreach);
   api.current = outreach;
-  const gmailOn = mailbox === null ? Boolean(gmail?.size) : Boolean(gmail?.has(mailbox));
+  const gmailOn = mailbox === null ? allGmail : Boolean(gmail?.has(mailbox));
   const tabs = gmailOn ? GMAIL_TABS : TABS;
   const [picked, setOnly] = useState('sent');
   // The same tab in the other list where there is one (the sheet's All logged ⇄ Sheet), else Sent.

@@ -60,13 +60,15 @@ function MailboxGmail({ mailbox: m, gmail, live, note, onChanged }) {
   let line;
   let warn = false;
   if (!gmail?.connected) line = live ? (address ? '' : `Gmail needs an ${ADDRESS_DOMAIN} address`) : 'Gmail: live mode only';
+  else if (m.active === false) line = `Gmail: ${gmail.email} · paused while the mailbox is off`;
   else if (gmail.error) { line = `Gmail: ${gmail.error}`; warn = true; }
   else if (!gmail.ready) line = gmail.pending ? `Reading Gmail · ${gmail.pending.toLocaleString('en-AU')} left` : 'Reading Gmail…';
   else {
     const a = gmail.syncedAt ? ago(gmail.syncedAt) : '';
     line = `Gmail: ${gmail.email}${a && a !== '—' ? ` · ${a === 'now' ? 'synced just now' : `synced ${a} ago`}` : ''}`;
   }
-  const message = error ? { ok: false, text: error } : note;
+  // Back from Google: "connected" only while it still is (a later disconnect or error replaces it).
+  const message = error ? { ok: false, text: error } : note && (!note.ok || (gmail?.connected && !gmail.error && !gmail.reconnect)) ? note : null;
   return (
     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 pl-[18px] text-[12.5px]">
       <Mail className="h-3.5 w-3.5 shrink-0 dimmer" aria-hidden="true" />
@@ -248,11 +250,11 @@ function AddMailbox() {
 
 /** Admins: the agent's Google Sheet (read into Cortex by the sync) and the outreach mailboxes, each its own data set. */
 export default function Outreach() {
-  const { state, actions, outreach } = useStore();
+  const { state, outreach } = useStore();
   const mailboxes = state.mailboxes || [];
   // Each mailbox's Gmail connection (outreach.gmailStatus()), and the message from coming back after Connect Gmail.
   const [gmail, setGmail] = useState([]);
-  const [back] = useState(gmailReturn);
+  const [back, setBack] = useState(gmailReturn);
   const api = useRef(outreach);
   api.current = outreach;
   const loadGmail = useCallback(async () => {
@@ -260,25 +262,26 @@ export default function Outreach() {
     setGmail(res?.ok ? res.mailboxes : []);
   }, []);
   useEffect(() => { loadGmail(); }, [loadGmail, state.mailboxes]);
+  // Drop gmail / reason / mailbox so a reload doesn't repeat it (replaceState fires no hashchange). A connect starts
+  // its first read at once (SyncStatus, which also refreshes these rows as it goes).
+  const [startGmail] = useState(() => Boolean(back?.ok));
   useEffect(() => {
-    if (!back) return;
-    // Drop gmail / reason / mailbox so a reload doesn't repeat it (replaceState fires no hashchange).
-    window.history.replaceState(window.history.state, '', '#/settings?tab=outreach');
-    if (back.ok) actions.syncOutreachGmail({ force: true }).then(loadGmail); // start reading at once
-  }, [back, actions, loadGmail]);
+    if (back) window.history.replaceState(window.history.state, '', '#/settings?tab=outreach');
+  }, [back]);
+  const gmailChanged = useCallback(() => { setBack(null); loadGmail(); }, [loadGmail]);
   return (
     <div className="flex flex-col gap-5">
       <section className="rounded-[26px] glass glass-rim p-5 sm:p-6">
         <h2 className="font-extrabold text-[16px]">Sheet</h2>
         <SheetLink />
-        <SyncStatus reader className="mt-3" />
+        <SyncStatus reader startGmail={startGmail} onSynced={loadGmail} className="mt-3" />
       </section>
       <section className="rounded-[26px] glass glass-rim p-2 sm:p-3">
         <h2 className="px-3 pb-3 pt-2 font-extrabold text-[16px] sm:px-4">Mailboxes</h2>
         <ul>
           {mailboxes.map((m, i) => (
             <MailboxRow key={m.id} mailbox={m} index={i} count={mailboxes.length} mailboxes={mailboxes} live={outreach.live}
-              gmail={gmail.find((g) => g.mailbox === m.id)} note={back?.mailbox === m.id ? back : null} onGmailChanged={loadGmail} />
+              gmail={gmail.find((g) => g.mailbox === m.id)} note={back?.mailbox === m.id ? back : null} onGmailChanged={gmailChanged} />
           ))}
         </ul>
         <AddMailbox />

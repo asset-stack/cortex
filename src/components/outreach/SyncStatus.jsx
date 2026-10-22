@@ -7,6 +7,8 @@ import { cn } from '@/lib/cn';
 
 const STALE = 10 * 60e3;
 const GMAIL_RUNS = 30; // a first read of a mailbox takes several runs: keep going while the function says there's more
+const GMAIL_RETRY = 60e3; // a first read that stopped (Gmail busy, the run cap) carries on a minute later…
+const GMAIL_RETRIES = 10; // …at most this many times while the page stays open
 let autoGmail = 0; // this page load's last automatic Gmail sync (the function also spaces each mailbox's out)
 const NO_TAB = { 'agent tab': 'same name as the agent’s tab', reserved: 'Summary and Notes are the sync’s own tabs', duplicate: 'another mailbox has this name', 'no name': 'it has no name' };
 let autoSynced = { url: '', at: 0 }; // this page load's last automatic sync (of which link), so switching views doesn't repeat it
@@ -16,9 +18,11 @@ let autoSynced = { url: '', at: 0 }; // this page load's last automatic sync (of
  * open when the last sync is missing or over 10 minutes old. `onSynced` runs after a sync that worked. `reader`
  * (Settings → Outreach): whose Google account reads the sheet, and Use my Google for another admin.
  * Connected mailboxes' Gmail (0010) syncs alongside: on open (the function skips a mailbox read in the last 10 minutes)
- * and with Sync now (at once), run after run while a first read has more to go.
+ * and with Sync now (at once), run after run while there's more to read; `onSynced` also runs after each run that read
+ * something. While an active mailbox's first read isn't done, it carries on a minute after it stops, while the page is
+ * open (Outreach and Settings → Outreach). `startGmail`: start reading at once (just back from Connect Gmail).
  */
-export default function SyncStatus({ autoSync = false, onSynced, reader = false, className }) {
+export default function SyncStatus({ autoSync = false, onSynced, reader = false, startGmail = false, className }) {
   const { state, actions, outreach, google } = useStore();
   const { isAdmin } = useAccess();
   const [status, setStatus] = useState(null); // outreach.status()
@@ -44,9 +48,13 @@ export default function SyncStatus({ autoSync = false, onSynced, reader = false,
     if (alive.current && n === seq.current) { setStatus(s); setGmail(g?.ok ? g.mailboxes : []); }
     return s;
   }, []);
-  const anyGmail = gmail.some((g) => g.connected);
+  // Connected mailboxes still switched on (a mailbox switched off keeps its numbers but isn't read).
+  const gmailOn = gmail.filter((g) => g.connected && g.active !== false);
+  const anyGmail = gmailOn.length > 0;
+  const unread = gmailOn.some((g) => !g.ready && !g.reconnect);
 
-  // Gmail: one run reads up to a few hundred threads per mailbox; a first read chains runs while there's more.
+  // Gmail: one run reads up to a few hundred threads per mailbox (three mailboxes a run); runs chain while there's more,
+  // each one that read something refreshing the numbers. `force`: Sync now (mailboxes read over a minute ago, not 10).
   const readingNow = useRef(false);
   const syncGmail = useCallback(async (force) => {
     if (readingNow.current) return null;
@@ -54,31 +62,37 @@ export default function SyncStatus({ autoSync = false, onSynced, reader = false,
     setReading(true);
     let res = null;
     for (let i = 0; i < GMAIL_RUNS; i++) {
-      res = await api.current.syncGmail({ force: force && i === 0 });
-      if (!alive.current || !res?.ok || !res.more) break;
+      res = await api.current.syncGmail({ force });
+      if (!alive.current) break;
+      if (res?.ok && res.claimed) { load(); done.current?.(); }
+      if (!res?.ok || !res.more) break;
     }
     readingNow.current = false;
-    if (alive.current) setReading(false);
+    if (alive.current) { setReading(false); load(); }
     return res;
-  }, []);
+  }, [load]);
   useEffect(() => { load(); }, [load, state.outreachSheet]);
 
   const running = useRef(false);
-  const sync = useCallback(async ({ sheet = true, gmail: withGmail = false, force = true } = {}) => {
+  // The sheet, and Gmail alongside (`gmail`): the sheet's result shows as soon as it's back; Gmail carries on under
+  // "Reading Gmail" (a first read can take many runs).
+  const sync = useCallback(async ({ sheet = true, gmail: withGmail = false } = {}) => {
     if (running.current) return;
     running.current = true;
     setBusy(true);
     setFailed('');
-    const [res, g] = await Promise.all([sheet ? api.current.sync() : null, withGmail ? syncGmail(force) : null]);
+    if (withGmail) {
+      syncGmail(true).then((g) => { if (alive.current && g && !g.ok) setFailed(g.error || 'Gmail sync failed'); });
+    }
+    const res = sheet ? await api.current.sync() : null;
     running.current = false;
     if (!alive.current) return;
     setBusy(false);
-    const problem = (res && !res.ok && (res.error || 'Sync failed')) || (g && !g.ok && (g.error || 'Gmail sync failed')) || '';
-    if (problem) setFailed(problem);
+    if (res && !res.ok) setFailed(res.error || 'Sync failed');
     await load();
-    if ((res && res.ok) || (g && g.ok)) done.current?.();
+    if (res?.ok) done.current?.();
   }, [load, syncGmail]);
-  const syncNow = () => sync({ sheet: Boolean(status?.sheetUrl) || !anyGmail, gmail: anyGmail, force: true });
+  const syncNow = () => sync({ sheet: Boolean(status?.sheetUrl) || !anyGmail, gmail: anyGmail });
 
   useEffect(() => {
     if (!autoSync || !outreach.live || !status?.ok || !status.sheetUrl) return;
@@ -92,8 +106,22 @@ export default function SyncStatus({ autoSync = false, onSynced, reader = false,
   useEffect(() => {
     if (!autoSync || !outreach.live || !anyGmail || Date.now() - autoGmail < STALE) return;
     autoGmail = Date.now();
-    syncGmail(false).then((g) => { if (!alive.current) return; load(); if (g?.ok && g.synced) done.current?.(); });
-  }, [autoSync, outreach.live, anyGmail, syncGmail, load]);
+    syncGmail(false);
+  }, [autoSync, outreach.live, anyGmail, syncGmail]);
+  // Just back from Connect Gmail: start its first read now.
+  const started = useRef(false);
+  useEffect(() => {
+    if (!startGmail || !outreach.live || started.current) return;
+    started.current = true;
+    syncGmail(true);
+  }, [startGmail, outreach.live, syncGmail]);
+  // A first read that stopped before it was done (Gmail busy, the run cap) carries on a minute later.
+  const retries = useRef(0);
+  useEffect(() => {
+    if (!outreach.live || !unread || reading || retries.current >= GMAIL_RETRIES) return undefined;
+    const t = setTimeout(() => { retries.current += 1; syncGmail(true); }, GMAIL_RETRY);
+    return () => clearTimeout(t);
+  }, [outreach.live, unread, reading, syncGmail]);
 
   // Use my Google: this admin's Google account reads the sheet from now on (the last error goes), then a sync.
   const takeOver = async () => {
@@ -114,7 +142,7 @@ export default function SyncStatus({ autoSync = false, onSynced, reader = false,
 
   // Gmail's part of the line: still reading a mailbox, a mailbox's error, or the latest sync.
   const gmailLine = (() => {
-    const on = gmail.filter((g) => g.connected);
+    const on = gmailOn;
     if (!on.length) return null;
     const broken = on.find((g) => g.error || g.reconnect);
     if (broken) return { text: `Gmail: ${broken.error || 'reconnect a mailbox in Settings → Outreach'}`, warn: true };
