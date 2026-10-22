@@ -68,7 +68,8 @@ create table if not exists private.outreach_gmail_sync (
   failures jsonb not null default '{}'::jsonb
 );
 
--- failures: queued thread id → in how many runs Gmail answered it with a server error (the function drops it after a few).
+-- failures: queued thread id → { n, at }: how many times Gmail answered it with a server error, counted at most once every
+-- 10 minutes, and when last counted (the function drops it at five).
 -- Added here too for a database that ran an earlier draft of this file without it.
 alter table private.outreach_gmail_sync add column if not exists failures jsonb not null default '{}'::jsonb;
 

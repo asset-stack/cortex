@@ -838,8 +838,9 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   while reading threads, or after three server errors in a run, the run saves what it read, keeps its claim and answers
   more false (during a first read the page tries again a minute later; otherwise the next Sync now, or the next open
   after 10 minutes); at the profile, list or history step, it saves *Gmail is busy*. A thread that still answers 5xx
-  goes to the back of the queue with its count of failed runs (`outreach_gmail_sync.failures`), and is given up only
-  after five, so an outage never drops threads or marks a first read done early. One mailbox's failure never stops the
+  goes to the back of the queue with a count of its failures (`outreach_gmail_sync.failures`: `{ n, at }`, counted at
+  most once every 10 minutes), and is given up only at five, so after failing for at least 40 minutes; a shorter outage
+  never drops a thread or marks a first read done early. One mailbox's failure never stops the
   others; Google refusing the mailbox asks for **Reconnect**. Logs carry counts only.
 - **App**:
   - **Outreach** (`Emails.jsx`): the numbers are `mergeDaily()`: a mailbox whose first read is done counts Sent (each
