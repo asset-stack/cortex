@@ -268,13 +268,14 @@ export default function Outreach() {
   useEffect(() => {
     if (back) window.history.replaceState(window.history.state, '', '#/settings?tab=outreach');
   }, [back]);
-  const gmailChanged = useCallback(() => { setBack(null); loadGmail(); }, [loadGmail]);
+  const [gmailVersion, setGmailVersion] = useState(0); // SyncStatus reloads its status after a connect or disconnect
+  const gmailChanged = useCallback(() => { setBack(null); loadGmail(); setGmailVersion((n) => n + 1); }, [loadGmail]);
   return (
     <div className="flex flex-col gap-5">
       <section className="rounded-[26px] glass glass-rim p-5 sm:p-6">
         <h2 className="font-extrabold text-[16px]">Sheet</h2>
         <SheetLink />
-        <SyncStatus reader startGmail={startGmail} onSynced={loadGmail} className="mt-3" />
+        <SyncStatus reader startGmail={startGmail} onSynced={loadGmail} version={gmailVersion} className="mt-3" />
       </section>
       <section className="rounded-[26px] glass glass-rim p-2 sm:p-3">
         <h2 className="px-3 pb-3 pt-2 font-extrabold text-[16px] sm:px-4">Mailboxes</h2>

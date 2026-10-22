@@ -832,8 +832,11 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   threads; when Google says the point is too old it scans again from the last sync); then reads the queued threads,
   newest first, as metadata only (named headers, never `snippet`, `full` or `raw`), up to 500 a run, saving every 100,
   and answers `{ claimed, synced, failed, more, pending }` so the page runs it again while `more` (also true when it
-  claimed three, as more may be due). A Gmail rate limit or a 500/502/503/504 waits once, then ends the run with more to
-  read. One mailbox's failure never stops the others; Google refusing the mailbox asks for **Reconnect**. Logs carry
+  claimed three, as more may be due). Mailboxes released by a run (a first read carrying on) are claimed before others;
+  a forced chain sends its start (`since`, from its first answer) so it never claims again what it already read. A Gmail
+  rate limit or a 500/502/503/504 waits once and tries again. Still limited: while reading threads, the run saves what
+  it read, keeps its claim and answers more false (the page tries again a minute later); at the profile, list or history
+  step, it saves *Gmail is busy*. A thread that still answers 5xx is skipped. One mailbox's failure never stops the others; Google refusing the mailbox asks for **Reconnect**. Logs carry
   counts only.
 - **App**:
   - **Outreach** (`Emails.jsx`): the numbers are `mergeDaily()`: a mailbox whose first read is done counts Sent (each
@@ -842,12 +845,13 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
     prospects. Mailbox cards counted from Gmail carry a mail mark. The Breakdown adds **Prospects** (replied, auto-reply,
     no reply yet, bounced; *Prospects (Gmail)* when some mailboxes shown are on the sheet) and **Emails per prospect**
     (1, 2, 3, 4 or more). The list (`EmailList.jsx`), for a Gmail mailbox (and for All once every active mailbox is
-    one; until then All lists the sheet's emails): **Sent / Replies / Bounced**, a row per prospect thread (the sheet's
+    one, and nothing is Unassigned; until then All lists the sheet's emails): **Sent / Replies / Bounced**, a row per prospect thread (the sheet's
     organisation when it matches, the contact, subject, emails sent, the outcome; the drawer adds Open in Gmail), and
     the sheet's own list as **Sheet**.
   - `SyncStatus.jsx`: opening Outreach asks Gmail to sync (the function skips mailboxes read in the last 10 minutes);
-    **Sync now** syncs the sheet and Gmail together (forced on every run; the sheet's result shows without waiting for
-    Gmail); runs chain while there's more (at most 30), each that read something refreshing the numbers. While an
+    **Sync now** syncs the sheet and Gmail together (forced on every run, with the chain's `since`; the sheet's result
+    shows without waiting for Gmail); runs chain while there's more (at most 30), each that read something refreshing
+    the numbers. The sheet syncs on open once per visit. While an
     active mailbox's first read isn't done, it carries on a minute after it stops (at most 10 times a page), on
     Outreach and on Settings → Outreach. The line adds Gmail's state (reading, *N left*, synced, or a mailbox's error).
   - **Settings → Outreach**: each mailbox row has **Connect Gmail** (a confirm says what is read and kept), then

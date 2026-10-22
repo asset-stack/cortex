@@ -231,7 +231,8 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 -- Claims up to p_limit active mailboxes with a Gmail read connection that weren't claimed in the last p_gap seconds
--- (never less than 30), least recently synced first, and returns them. Atomic: two runs at once never claim one mailbox.
+-- (never less than 30): released or never claimed ones first (a first read carrying on), then the least recently
+-- synced, and returns them. Atomic: two runs at once never claim one mailbox.
 -- The run that claims it is the one that holds it (run_started): an older run's later saves change nothing.
 create or replace function public.outreach_gmail_claim(p_gap int default 600, p_limit int default 3) returns setof uuid
 language sql security definer set search_path = public as $$
@@ -242,7 +243,7 @@ language sql security definer set search_path = public as $$
   left join private.outreach_gmail_sync x on x.mailbox_id = m.id
   where m.active and private.has_gmail_read(g.scopes)
     and (x.claimed_at is null or x.claimed_at < now() - make_interval(secs => greatest(coalesce(p_gap, 600), 30)))
-  order by x.synced_at nulls first, m.position, m.id
+  order by x.claimed_at is not null, x.synced_at nulls first, m.position, m.id
   limit greatest(coalesce(p_limit, 3), 0)
   on conflict (mailbox_id) do update set claimed_at = excluded.claimed_at, run_started = excluded.run_started
     where s.claimed_at is null or s.claimed_at < now() - make_interval(secs => greatest(coalesce(p_gap, 600), 30))

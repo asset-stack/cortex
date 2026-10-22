@@ -3648,6 +3648,13 @@ async function phase10(ctx) {
   claims.oldestTwo = await gclaim(600, 2);
   claims.rest = await gclaim(600, 2);
   claims.empty = await gclaim(600, 2);
+  // A released claim (a first read carrying on) goes before one that merely ran out, however recently it synced.
+  await db.query("update private.outreach_gmail_sync set claimed_at = now() - interval '2 hours', synced_at = null where mailbox_id = $1", [M1]);
+  await db.query('update private.outreach_gmail_sync set claimed_at = null, synced_at = now() where mailbox_id = $1', [M2]);
+  claims.released = await gclaim(600, 1);
+  claims.thenDue = await gclaim(600, 1);
+  await db.query('update private.outreach_gmail_sync set synced_at = $2 where mailbox_id = $1', [M1, T(10)]);
+  await db.query('update private.outreach_gmail_sync set synced_at = null where mailbox_id = $1', [M2]);
   const syncRows = (await rows('select mailbox_id from private.outreach_gmail_sync order by mailbox_id')).map((r) => r.mailbox_id);
   check('84. outreach_gmail_claim claims active mailboxes connected with the Gmail read scope (not without it, not inactive, not '
     + 'unconnected), each at most once per p_gap seconds (600 by default, never under 30), stamping claimed_at and run_started; a '
@@ -3657,10 +3664,11 @@ async function phase10(ctx) {
       && stable(claims.after61) === stable([M1]) && stable(claims.floor) === stable([M2]) && stable(claims.before600) === stable([])
       && stable(claims.after600) === stable([M1]),
     { claims, claimedRow, expected: { M1, M2, M3, MP } });
-  check('84. ...at most p_limit at a time, the least recently synced first (never synced first); Paused and the unconnected '
+  check('84. ...at most p_limit at a time, released ones first, then the least recently synced (never synced first); Paused and the unconnected '
     + 'mailboxes never get a sync row',
     connects.threeRead === 'ok' && stable(claims.none) === stable([]) && stable(claims.oldestTwo) === stable(sorted(M2, M3))
       && stable(claims.rest) === stable([M1]) && stable(claims.empty) === stable([])
+      && stable(claims.released) === stable([M2]) && stable(claims.thenDue) === stable([M1])
       && stable(syncRows) === stable(sorted(M1, M2, M3)) && ![MP, boxA, boxB].some((m) => syncRows.includes(m)),
     { claims, syncRows });
 

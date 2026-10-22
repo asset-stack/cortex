@@ -583,16 +583,18 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
   prospects. **Bounces**: threads that bounced. **Meetings**: from the sheet. Opens stay *Not tracked*.
 - A thread is judged once, when Cortex first sees it: our first message, to one to five outside people (colleagues
   copied in don't count), none of them known (above). Our later emails in it count as follow-ups when they go to someone
-  outside (forwarding it to a colleague doesn't).
-- **All** lists each prospect once every active mailbox is counted from Gmail; until then it lists the sheet's emails
-  (pick a mailbox to see its prospects). The breakdown's *Prospects (Gmail)* then covers only the Gmail mailboxes. Replies, auto-replies and bounces in it are counted as they arrive; a reply to someone else's thread
-  is never counted.
+  outside (forwarding it to a colleague doesn't). Replies, auto-replies and bounces in it are counted as they arrive; a
+  reply to someone else's thread is never counted.
+- **All** lists each prospect once every mailbox it shows is counted from Gmail (and nothing is Unassigned); until then
+  it lists the sheet's emails (pick a mailbox to see its prospects), and the breakdown's *Prospects (Gmail)* covers only
+  the Gmail mailboxes.
 - Opening Outreach reads new mail when a mailbox was last read over 10 minutes ago; **Sync now** reads at once (with
-  the sheet). Nothing reads on a timer.
+  the sheet). Nothing reads on a schedule: while a mailbox's first read isn't finished, an open Outreach or Settings →
+  Outreach page carries on with it, and tries again a minute later when Gmail asks it to slow down.
 - **Disconnect Gmail** (same row) removes that mailbox's Gmail numbers at once, and Outreach counts it from the sheet
   again. Taking the connected address off the mailbox, or reconnecting as a different account, does the same; switching
-  the mailbox off keeps its numbers and stops reading (its row says *paused*) until it's switched on again. If the row says *reconnect* (the mailbox's password changed, or
-  its access was removed at Google), click **Reconnect Gmail**.
+  the mailbox off keeps its numbers and stops reading (its row says *paused*) until it's switched on again. If the row
+  says *reconnect* (the mailbox's password changed, or its access was removed at Google), click **Reconnect Gmail**.
 - Only `@assetstackai.com` mailboxes for now. `@assetstack.org` and `@assetstackai.com.au` are a separate Workspace:
   they need their own Google client there before they can connect (`docs/PHASE2.md` §16, *Later*).
 

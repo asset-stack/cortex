@@ -1097,10 +1097,11 @@ function createActions(mutate, mode) {
     },
     // Read every connected mailbox's Gmail into Outreach now (anyone who can see Outreach). `force`: don't wait for the
     // 10-minute gap. → { ok, claimed, synced, failed, more, pending }
-    syncOutreachGmail: async ({ force = false } = {}) => {
+    // `since`: a Sync now chain's start, from its first answer (the function then doesn't read again what this chain read).
+    syncOutreachGmail: async ({ force = false, since = '' } = {}) => {
       const allowed = mode.read((st) => canView(st, 'outreach'));
       if (!allowed) return { ok: false, error: 'You don’t have access to Outreach.' };
-      return mode.invoke('google/outreach-gmail-sync', { force: Boolean(force) });
+      return mode.invoke('google/outreach-gmail-sync', since ? { force: Boolean(force), since } : { force: Boolean(force) });
     },
     // Outreach: read the sheet with my Google account from now on (admins; live mode). → { ok } | { ok: false, error }
     takeOutreachSheet: async () => {
