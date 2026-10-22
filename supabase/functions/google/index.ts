@@ -31,7 +31,8 @@
 //                                                          each one's cold threads (ones we started with a new outside
 //                                                          contact) into outreach_threads / outreach_messages (rpc
 //                                                          outreach_gmail_save): headers only, never a body or snippet;
-//                                                          more = call again (the claim was released)
+//                                                          more = call again (a claim was released, or the claim was
+//                                                          full so others may be due)
 //
 // JWT verification is OFF for this function (Google's callback carries no JWT), so it checks callers itself: the
 // caller's JWT goes to rpc google_me (active staff only; send, contract, a plain and a mailbox connect then need admin),
@@ -1400,7 +1401,7 @@ export const GMAIL_LIMITS = {
   threadsPerRun: 500, // threads read per mailbox per run
   saveEvery: 100, // threads per rpc outreach_gmail_save
   parallel: 6, // threads read at once
-  backoff: 2000, // ms to wait once on a Gmail rate limit before trying again
+  backoff: 2000, // ms to wait once on a Gmail rate limit (or a 500/502/503/504) before trying again
 };
 const DAY_MS = 86400000;
 const LOOKBACK_DAYS = 90; // a first read: our sent mail of the last 90 days
@@ -1419,6 +1420,7 @@ const GMAIL_THREAD_FIELDS = 'id,messages(id,labelIds,internalDate,payload(mimeTy
 const GMAIL_LIST_FIELDS = 'messages(threadId),nextPageToken';
 const GMAIL_HISTORY_FIELDS = 'history(id,messagesAdded(message(id,threadId,labelIds))),nextPageToken,historyId';
 const RATE_REASONS = ['rateLimitExceeded', 'userRateLimitExceeded', 'RATE_LIMIT_EXCEEDED', 'quotaExceeded'];
+const GMAIL_TRANSIENT = [500, 502, 503, 504]; // a passing Gmail server error: handled like a rate limit
 // Saved per mailbox (outreach_gmail_sync.error, which Outreach shows): short, never a token or an address.
 const GMAIL_RECONNECT = 'Reconnect this mailbox’s Gmail in Settings → Outreach.';
 const GMAIL_OTHER_ACCOUNT = 'Signed in as another account.';
@@ -1431,7 +1433,7 @@ const mailboxDomain = (hd) => `Connect Gmail needs an @${hd} address on this mai
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const THREAD_ID = /^[A-Za-z0-9_-]{1,100}$/;
 
-/** A Gmail rate limit that outlasted one short back-off: the run stops there with more to do. */
+/** A Gmail rate limit (or a 500/502/503/504) that outlasted one short back-off: the run stops there with more to do. */
 class RateLimited extends Error {}
 
 /** Whether a space-separated scope list holds gmail.readonly as a whole entry (as private.has_gmail_read() in 0010). */
@@ -1576,7 +1578,10 @@ const isoOf = (msg) => {
 };
 
 const BOUNCE_FROM = /^(?:mailer-daemon|postmaster)$/i;
-const DELAY_NOTICE = /\bdelay(?:ed)?\b/i; // "Delivery Status Notification (Delay)", "Warning: message delayed": not a bounce
+// A delay notice (not a bounce), by how its subject starts: "Delivery Status Notification (Delay)", "Delivery delayed: …",
+// "Warning: message 1Abc delayed 24 hours", "Delayed Mail (still being retried)". Never by "delay" anywhere in it: a real
+// bounce quotes our subject ("Undeliverable: Delayed maintenance on your bridges").
+const DELAY_NOTICE = /^(?:delivery status notification \(delay\)|delivery delayed\b|warning: (?:message \S+ )?delayed?\b|delayed mail\b|message delayed\b)/i;
 const AUTO_SUBJECT = /^(automatic reply|auto[- ]?reply|out of (the )?office|ooo\b|abwesenheit|réponse automatique)/i;
 const CALENDAR_SUBJECT = /^(accepted|declined|tentatively accepted|invitation|updated invitation|canceled event|cancelled event):/i;
 const CALENDAR_SENDER = 'calendar-notification@google.com';
@@ -1605,7 +1610,7 @@ function autoHeaders(h) {
  * - 'ignored': a draft or chat;
  * - 'ours': labelled SENT;
  * - 'bounce': from mailer-daemon or postmaster, a multipart/report delivery-status report, or with X-Failed-Recipients
- *   (a delay notice is 'ignored');
+ *   (a delay notice, known by how its subject starts, is 'ignored');
  * - 'ignored': from an internal domain (or no readable From), or Google Calendar (its sender or an
  *   Accepted:/Declined:/Invitation:… subject);
  * - 'auto': an auto-reply or out-of-office (Auto-Submitted, X-Autoreply, X-Autorespond, Precedence, or the subject);
@@ -1642,6 +1647,9 @@ function threadMessages(thread) {
     .map((x) => x.m);
 }
 
+// Not a colleague: an address on none of the internal domains (the mailbox's own included).
+const outsideOf = (c) => (r) => !onDomain(r.email, c.internal);
+
 // What the first (non-draft) message says, when it is ours; else null.
 function firstFacts(thread, c) {
   const msgs = threadMessages(thread);
@@ -1653,7 +1661,7 @@ function firstFacts(thread, c) {
   const to = parseAddresses(h.to);
   const cc = parseAddresses(h.cc);
   const seen = new Set();
-  const outside = (r) => !onDomain(r.email, c.internal);
+  const outside = outsideOf(c);
   // Colleagues in To or Cc don't count: the outside people do (each address once).
   const recipients = [...to, ...cc].filter((r) => outside(r) && !seen.has(r.email) && seen.add(r.email));
   const type = str(h['content-type'] || first?.payload?.mimeType).toLowerCase();
@@ -1693,7 +1701,9 @@ export function coldThread(thread, ctx = {}) {
  * isn't ours. The row: our From address, the prospect (the first outside To recipient, else Cc) and their display name
  * (≤100), the To/Cc count, our first subject (≤200; never a reply's), when we first and last sent and how many we sent,
  * the first reply (and its message id), auto-reply and bounce. Messages: each of ours ('sent') and each reply, auto-reply
- * and bounce; ignored ones give nothing. Days are worked out by the database, never here.
+ * and bounce; ignored ones give nothing. One of ours after the first counts (sent_count, last_sent_at, a 'sent' row) only
+ * when its To or Cc holds someone outside: a note only to colleagues (a forward of the prospect's reply to ops, say) is
+ * ignored, and so is one with nobody in To or Cc (Bcc isn't seen). Days are worked out by the database, never here.
  */
 export function threadRows(thread, ctx = {}) {
   const c = gmailContext(ctx);
@@ -1706,10 +1716,15 @@ export function threadRows(thread, ctx = {}) {
     sent_count: 0, reply_at: null, reply_message_id: '', auto_at: null, bounce_at: null,
   };
   const messages = [];
+  const outside = outsideOf(c);
   for (const m of f.msgs) {
     const at = isoOf(m);
     const id = str(m.id);
-    const kind = messageKind(m, c);
+    let kind = messageKind(m, c);
+    if (kind === 'ours' && m !== f.msgs[0]) {
+      const h = headersOf(m);
+      if (![...parseAddresses(h.to), ...parseAddresses(h.cc)].some(outside)) kind = 'ignored'; // only to colleagues
+    }
     if (!at || !id || kind === 'ignored') continue;
     if (kind === 'ours') {
       row.sent_count++;
@@ -1810,16 +1825,17 @@ async function mailboxCallback(url, state, origin, cfg, fetch) {
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// A Gmail GET → its JSON. A rate limit (429, or 403 with a rate-limit reason) waits `backoff` once and tries again, then
-// throws RateLimited; a missing scope → 409 (reconnect); 404 → null when `allow404`; anything else → 502 "Gmail returned
-// <status>." (Google's message is never kept: it could quote the mailbox).
+// A Gmail GET → its JSON. A rate limit (429, or 403 with a rate-limit reason) or a passing server error (500, 502, 503,
+// 504) waits `backoff` once and tries again, then throws RateLimited (a thread's read stops the run with more to do; the
+// profile, list or history step saves "Gmail is busy"); a missing scope → 409 (reconnect); 404 → null when `allow404`;
+// anything else → 502 "Gmail returned <status>." (Google's message is never kept: it could quote the mailbox).
 async function gmailGet(fetch, token, url, { sleep, backoff }, allow404 = false) {
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } });
     const data = await readJson(res);
     if (res.ok) return data || {};
     const reasons = googleReasons(data);
-    if (res.status === 429 || (res.status === 403 && reasons.some((r) => RATE_REASONS.includes(r)))) {
+    if (res.status === 429 || GMAIL_TRANSIENT.includes(res.status) || (res.status === 403 && reasons.some((r) => RATE_REASONS.includes(r)))) {
       if (attempt === 0) {
         await sleep(backoff);
         continue;
@@ -2079,8 +2095,10 @@ async function gmailMailbox(id, run) {
 
 // Claims the connected mailboxes whose turn it is (not read in the last 10 minutes, or 1 minute when forced; at most
 // three) and reads them one at a time, each with its own Google account and its share of the run's time. One mailbox's
-// failure (saved as its error, with reconnect when its connection needs it) never stops the others. more: a mailbox has
-// more to read and its claim was released, so the client may call again straight away.
+// failure (saved as its error, with reconnect when its connection needs it) never stops the others. more: the client may
+// call again straight away (a Sync now chain passes force on each call), because a mailbox has more to read and its
+// claim was released, or the claim was full (p_limit mailboxes), so others may be due; a call that claims nothing
+// answers more false.
 async function gmailSync(body, cfg, fetch, { limits = {}, now = Date.now, sleep = pause } = {}) {
   const lim = { ...GMAIL_LIMITS, ...limits };
   const end = now() + lim.deadline;
@@ -2105,6 +2123,7 @@ async function gmailSync(body, cfg, fetch, { limits = {}, now = Date.now, sleep 
     result.more = result.more || r.more;
     result.pending += r.pending;
   }
+  if (claimed.length >= lim.mailboxes) result.more = true; // others may be due
   return result;
 }
 

@@ -2284,8 +2284,9 @@ const MB_SCOPES = `openid email ${GMAIL_READ}`;
 const MB1 = 'b0000000-0000-4000-8000-0000000000b1';
 const MB2 = 'b0000000-0000-4000-8000-0000000000b2';
 const MB3 = 'b0000000-0000-4000-8000-0000000000b3';
+const MB4 = 'b0000000-0000-4000-8000-0000000000b4';
 const BOX1 = 'mailbox-one@assetstackai.com';
-const BOXES = { [MB1]: BOX1, [MB2]: 'mailbox-two@assetstackai.com', [MB3]: 'mailbox-three@assetstackai.com' };
+const BOXES = { [MB1]: BOX1, [MB2]: 'mailbox-two@assetstackai.com', [MB3]: 'mailbox-three@assetstackai.com', [MB4]: 'mailbox-four@assetstackai.com' };
 const GMAIL_RECONNECT = 'Reconnect this mailbox’s Gmail in Settings → Outreach.';
 const GMAIL_BUSY = 'Gmail is busy. Cortex will try again shortly.';
 const GNOW = Date.parse('2026-10-21T00:00:00Z');
@@ -2548,6 +2549,13 @@ await check('gmail helpers: messageKind sorts each message (ours, bounce, auto, 
     ['bounce', from('postmaster@assetstackai.com', { Subject: 'Undeliverable' }), 'our own postmaster still bounces'],
     ['ignored', from('mailer-daemon@googlemail.com', { Subject: 'Delivery Status Notification (Delay)' }), 'a delay notice'],
     ['ignored', from('postmaster@example.org', { Subject: 'Warning: message 1Abc delayed 24 hours' })],
+    ...['Delivery delayed: Asset registers', 'Delayed Mail (still being retried)', 'Message delayed', 'Warning: delayed message', 'DELIVERY STATUS NOTIFICATION (DELAY)']
+      .map((s) => ['ignored', from('mailer-daemon@googlemail.com', { Subject: s }), `a delay notice: ${s}`]),
+    // A delay notice is known by how its subject starts, never by "delay" in the subject it quotes.
+    ['bounce', from('Mail Delivery Subsystem <mailer-daemon@googlemail.com>', { Subject: 'Undeliverable: Delayed maintenance on your bridges', 'X-Failed-Recipients': 'alex@example.org' }),
+      'a bounce quoting “Delayed”'],
+    ['bounce', from('mailer-daemon@googlemail.com', { Subject: 'Delivery Status Notification (Failure) for “Sorry for the delay”' }), 'a failure with “delay” later on'],
+    ['bounce', from('postmaster@example.org', { Subject: 'Undeliverable: Re: the delay on the asset data' }), 'Undeliverable, delay later on'],
     ['reply', from('alex@example.org', { 'Content-Type': 'multipart/report; report-type=disposition-notification' }), 'not a delivery report'],
     ['auto', from('alex@example.org', { 'Auto-Submitted': 'auto-replied' })], ['auto', from('alex@example.org', { 'Auto-Submitted': 'auto-generated; x=y' })],
     ['reply', from('alex@example.org', { 'Auto-Submitted': 'No' })], ['auto', from('alex@example.org', { 'X-Autoreply': 'yes' })],
@@ -2624,6 +2632,25 @@ await check('gmail helpers: threadRows builds the thread row (our first subject 
   assert.deepEqual([long.prospect_name, long.subject], ['Ž'.repeat(100), '😀'.repeat(200)]);
   assert.equal(g.threadRows(THREADS.tInbound, KNOWN), null, 'not ours: no rows');
   assert.equal(g.threadRows({ messages: THREADS.tA.messages }, KNOWN), null, 'no thread id');
+});
+
+await check('gmail helpers: threadRows counts one of ours after the first only when its To or Cc holds someone outside (a forward to a colleague isn’t a cold email)', () => {
+  const ctx = { ...KNOWN, internal: [...KNOWN.internal, 'old.example.com'] };
+  const t = gThread('tW',
+    sentMsg('w1', '2026-10-14T00:00:00Z', { To: 'Alex <alex@example.org>', Subject: 'Asset registers' }),
+    gm('w2', '2026-10-15T00:00:00Z', { From: 'alex@example.org', Subject: 'Re: Asset registers' }),
+    sentMsg('w3', '2026-10-15T01:00:00Z', { To: 'Ops <ops@assetstack.org>', Cc: 'pat@assetstackai.com', Subject: 'Fwd: Re: Asset registers' }),
+    sentMsg('w4', '2026-10-15T02:00:00Z', { To: 'alex@example.org', Cc: 'ops@assetstack.org', Subject: 'Re: Asset registers' }),
+    sentMsg('w5', '2026-10-15T03:00:00Z', { Subject: 'Re: Asset registers' }),
+    sentMsg('w6', '2026-10-15T04:00:00Z', { To: 'ops@assetstack.org', Cc: 'Alex <alex@example.org>', Subject: 'Re: Asset registers' }),
+    sentMsg('w7', '2026-10-15T05:00:00Z', { To: 'box@old.example.com', Subject: 'Fwd: Asset registers' }));
+  const r = g.threadRows(t, ctx);
+  assert.deepEqual(pick(r.thread, ['sent_count', 'last_sent_at', 'reply_at', 'reply_message_id']),
+    { sent_count: 3, last_sent_at: '2026-10-15T04:00:00.000Z', reply_at: '2026-10-15T00:00:00.000Z', reply_message_id: 'w2' });
+  assert.deepEqual(r.messages.map((x) => [x.message_id, x.kind]), [['w1', 'sent'], ['w2', 'reply'], ['w4', 'sent'], ['w6', 'sent']],
+    'the forward to colleagues (w3), nobody in To or Cc (w5) and the mailbox’s own other domain (w7) give nothing');
+  // The first message always counts (it is the cold email).
+  assert.deepEqual(pick(g.threadRows(THREADS.tInternal, KNOWN).thread, ['sent_count', 'last_sent_at']), { sent_count: 1, last_sent_at: '2026-10-14T00:00:00.000Z' });
 });
 
 // ── Mailbox connect ──
@@ -3085,6 +3112,55 @@ await check('gmail sync: Gmail rate limits — one short back-off, then stop wit
   assert.equal(listing.sleeps.length, 1);
 });
 
+await check('gmail sync: a Gmail 500, 502, 503 or 504 is a rate limit — one back-off, then stop with more (no error); profile, listing or history → busy; others not retried', async () => {
+  for (const status of [500, 502, 503, 504]) {
+    const answer = () => reply(status, { error: { code: status, message: 'Backend Error' } });
+    let n = 0;
+    const once = await gSync({ limits: { parallel: 1, backoff: 1234 }, threads: (id) => (id === 'tB' && n++ === 0 ? answer() : THREADS[id]) });
+    assert.deepEqual(once.sleeps, [1234], `${status}: waited once`);
+    assert.deepEqual(fetched(once).filter((x) => x === 'tB'), ['tB', 'tB'], `${status}: tried again`);
+    assert.deepEqual(once.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_error, b.p_release]), [[['tA', 'tB', 'tC', 'tDraftFirst'], '', false]], `${status}: read normally`);
+    assert.deepEqual(once.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0 });
+    const twice = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? answer() : THREADS[id]) });
+    assert.deepEqual([twice.sleeps, fetched(twice).filter((x) => x === 'tC')], [[2000], ['tC', 'tC']], `${status}: one back-off, one retry`);
+    assert.deepEqual(twice.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending[0], b.p_release, b.p_error]), [[['tA', 'tB'], 'tC', true, '']],
+      `${status}: the chunk saved with the claim released, no error`);
+    assert.deepEqual(twice.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: true, pending: LISTED.length - 2 });
+    assert.deepEqual(twice.logs, []);
+    for (const [step, opts] of [['profile', { profile: answer }], ['list', { list: answer }], ['history', { jobs: { [MB1]: gJob(MB1, { history_id: '8000' }) }, history: answer }]]) {
+      const busy = await gSync(opts);
+      assert.deepEqual(busy.saved.map((b) => [b.p_error, b.p_reconnect, b.p_release]), [[GMAIL_BUSY, false, false]], `${status} at ${step}`);
+      assert.deepEqual([pick(busy.data, ['synced', 'failed', 'more']), busy.sleeps.length], [{ synced: 0, failed: 1, more: false }, 1], `${status} at ${step}`);
+      assert.deepEqual(busy.logs, [`google/outreach-gmail-sync: mailbox failed at ${step} rate limited`]);
+    }
+  }
+  for (const status of [400, 501]) {
+    const r = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? reply(status, { error: { code: status } }) : THREADS[id]) });
+    assert.deepEqual([r.sleeps, fetched(r).filter((x) => x === 'tC')], [[], ['tC']], `${status}: not retried`);
+    assert.deepEqual(r.saved.map((b) => [b.p_error, b.p_release]), [[`Gmail returned ${status}.`, false]]);
+  }
+});
+
+await check('gmail sync: a full claim (p_limit mailboxes) answers more, so Sync now reaches a 4th due mailbox; fewer claimed and none with more → more false', async () => {
+  const jobs = { [MB1]: gJob(MB1), [MB2]: gJob(MB2), [MB3]: gJob(MB3), [MB4]: gJob(MB4) };
+  const due = [MB1, MB2, MB3, MB4];
+  // The database: the due mailboxes, p_limit at a time; a claimed one isn't due again.
+  const routes = { [`${RPC}/outreach_gmail_claim`]: (c) => reply(200, due.splice(0, c.json().p_limit)) };
+  const first = await gSync({ body: { force: true }, jobs, routes });
+  assert.deepEqual(first.to(`${RPC}/outreach_gmail_claim`).map((c) => c.json()), [{ p_gap: 60, p_limit: 3 }]);
+  assert.deepEqual(first.data, { ok: true, claimed: 3, synced: 3, failed: 0, more: true, pending: 0 }, 'others may be due');
+  assert.deepEqual(first.saved.map((b) => [b.p_mailbox, b.p_release]), [[MB1, false], [MB2, false], [MB3, false]], 'none of the three has more');
+  const second = await gSync({ body: { force: true }, jobs, routes });
+  assert.deepEqual(second.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0 });
+  assert.deepEqual(second.saved.map((b) => b.p_mailbox), [MB4]);
+  assert.deepEqual((await gSync({ body: { force: true }, jobs, routes })).data, { ok: true, claimed: 0, synced: 0, failed: 0, more: false, pending: 0 });
+  // Two claimed of three, neither with more: done. Two of two: more.
+  assert.deepEqual((await gSync({ claim: [MB1, MB2], jobs })).data, { ok: true, claimed: 2, synced: 2, failed: 0, more: false, pending: 0 });
+  const full = await gSync({ claim: [MB1, MB2], jobs, limits: { mailboxes: 2 } });
+  assert.deepEqual([full.to(`${RPC}/outreach_gmail_claim`)[0].json().p_limit, full.data.more], [2, true]);
+  gNoTokens(first);
+});
+
 await check('gmail sync: save bodies carry only the agreed keys — no snippet, body or text anywhere, no token', async () => {
   const runs = [
     await gSync(), await gSync({ limits: { saveEvery: 1, threadsPerRun: 4 } }),
@@ -3118,12 +3194,12 @@ await check('gmail sync: one mailbox’s failure never stops the others; reconne
         ? reply(400, { error: 'invalid_grant', error_description: 'Token has been expired or revoked.' })
         : reply(200, { access_token: c.form.get('refresh_token').replace('gmail-refresh-', 'gmail-access-') })),
     },
-    profile: (mb) => (mb === MB2 ? reply(500, { error: { code: 500, message: `Backend Error for ${BOXES[MB2]}` } }) : reply(200, { emailAddress: BOXES[mb], historyId: '1' })),
+    profile: (mb) => (mb === MB2 ? reply(400, { error: { code: 400, message: `Bad request for ${BOXES[MB2]}` } }) : reply(200, { emailAddress: BOXES[mb], historyId: '1' })),
   });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.data, { ok: true, claimed: 3, synced: 1, failed: 2, more: false, pending: 0 });
+  assert.deepEqual(r.data, { ok: true, claimed: 3, synced: 1, failed: 2, more: true, pending: 0 }, 'a full claim: more');
   assert.deepEqual(r.saved.map((b) => [b.p_mailbox, b.p_error, b.p_reconnect, b.p_threads.length]), [
-    [MB1, GMAIL_RECONNECT, true, 0], [MB2, 'Gmail returned 500.', false, 0], [MB3, '', false, 4],
+    [MB1, GMAIL_RECONNECT, true, 0], [MB2, 'Gmail returned 400.', false, 0], [MB3, '', false, 4],
   ]);
   assert.ok(r.calls.indexOf(r.saves[0]) < r.calls.indexOf(r.to(TOKEN_URL)[1]), 'one mailbox at a time, in claim order');
   assert.equal(r.to(`${RPC}/outreach_gmail_known`).length, 1, 'known read once per run');
@@ -3140,8 +3216,8 @@ await check('gmail sync: one mailbox’s failure never stops the others; reconne
   const insufficient = await gSync({ profile: () => reply(403, { error: { code: 403, message: 'Request had insufficient authentication scopes.', details: [{ reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' }] } }) });
   assert.deepEqual(insufficient.saved.map((b) => [b.p_error, b.p_reconnect]), [[GMAIL_RECONNECT, true]]);
   // A thread that fails mid-run: the error saved (nothing of the unsaved chunk), the cursor kept for next time.
-  const broken = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? reply(500, { error: { code: 500 } }) : THREADS[id]) });
-  assert.deepEqual(broken.saved.map((b) => [b.p_threads, b.p_cursor, b.p_error, b.p_release]), [[[], {}, 'Gmail returned 500.', false]]);
+  const broken = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? reply(400, { error: { code: 400 } }) : THREADS[id]) });
+  assert.deepEqual(broken.saved.map((b) => [b.p_threads, b.p_cursor, b.p_error, b.p_release]), [[[], {}, 'Gmail returned 400.', false]]);
   const network = await gSync({ profile: () => { throw new TypeError('fetch failed'); } });
   assert.deepEqual(network.saved.map((b) => b.p_error), ['Something went wrong with Gmail.']);
 });

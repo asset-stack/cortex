@@ -19,10 +19,12 @@
 -- - outreach_gmail_daily / _breakdown / _threads: the dashboard's numbers and the threads list (security invoker, so
 --   RLS applies), the same rules as gmailDaily / gmailBreakdown / filterThreads in src/lib/outreach.js. The list brings
 --   along the sheet's row for the thread (by thread id, else the prospect's address).
--- - outreach_gmail_status: each mailbox's connection and sync, never a token or scope. outreach_gmail_disconnect: admins.
+-- - outreach_gmail_status: each mailbox's connection, sync and active flag, never a token or scope.
+--   outreach_gmail_disconnect: admins.
 -- - A mailbox's Gmail data is forgotten when its connection goes (disconnect), moves to another Google account or
---   client, loses the Gmail scope, or its address is taken off the mailbox; removing the mailbox removes it all. A
---   mailbox made inactive keeps its history (it's just no longer read).
+--   client, loses the Gmail scope, or its address is taken off the mailbox; removing the mailbox removes it all. A run
+--   that claimed the mailbox before then saves nothing. A mailbox made inactive keeps its history and its sync (still
+--   ready; it's just no longer read).
 
 begin;
 
@@ -111,6 +113,8 @@ create table if not exists public.outreach_messages (
 );
 
 create index if not exists outreach_messages_day_idx on public.outreach_messages (day);
+-- Removing a thread removes its messages (the foreign key's cascade looks them up by mailbox and thread).
+create index if not exists outreach_messages_thread_idx on public.outreach_messages (mailbox_id, thread_id);
 
 -- The threads list finds the sheet's row for a thread by its Gmail thread id, else the prospect's address.
 create index if not exists outreach_emails_contact_email_lower_idx on public.outreach_emails (lower(contact_email));
@@ -272,12 +276,15 @@ $$;
 -- prospect_email, prospect_name, recipients, subject, first_at, last_sent_at, sent_count, reply_at, reply_message_id,
 -- auto_at, bounce_at}]), their messages (p_messages: [{message_id, thread_id, kind, at}]) and where the read got to
 -- (p_cursor: {history_id, scan_from, pending}; a key left out or null keeps what's stored). Days are Sydney's.
--- A mailbox no longer active with a Gmail read connection gets no save (false): its sync row goes; its threads stay
--- unless the connection went (the forgetting, §8, removed them then). The check locks the mailbox and the connection
--- (for share) until the save commits, so a disconnect or account change arriving meanwhile waits and then forgets what
--- this run wrote. A newer run having claimed the mailbox, nothing changes (true). An older save never overwrites a
--- newer one's rows. A run with an error writes no threads or messages and keeps the cursor and the last good sync's
--- time. p_release frees the claim (the client may then start the next run). Nothing is ever pruned.
+-- A mailbox no longer active, or no longer connected with the read scope, gets no save (false): the claim is released
+-- and its sync row (ready, cursor, queue) and threads stay; a connection that went or lost the scope was forgotten then
+-- (§8), sync row and all. The check locks the mailbox and the connection (for share) until the save commits, so a
+-- disconnect or account change arriving meanwhile waits and then forgets what this run wrote. No sync row means the
+-- claim went with a forgotten connection (every claim makes one; the forgetting removes it): a run from before a
+-- disconnect, reconnect or account change gets no save either (false), so nothing of it (threads, cursor, ready, error)
+-- lands on the new connection. A newer run having claimed the mailbox, nothing changes (true). An older save never
+-- overwrites a newer one's rows. A run with an error writes no threads or messages and keeps the cursor and the last
+-- good sync's time. p_release frees the claim (the client may then start the next run). Nothing is ever pruned.
 create or replace function public.outreach_gmail_save(p_mailbox uuid, p_started timestamptz, p_threads jsonb, p_messages jsonb,
   p_cursor jsonb, p_release boolean default false, p_error text default '', p_reconnect boolean default false) returns boolean
 language plpgsql security definer set search_path = public as $$
@@ -297,11 +304,14 @@ begin
   where m.id = p_mailbox and m.active and private.has_gmail_read(g.scopes)
   for share of m, g;
   if not found then
-    delete from private.outreach_gmail_sync where mailbox_id = p_mailbox;
+    update private.outreach_gmail_sync set claimed_at = null where mailbox_id = p_mailbox;
     return false;
   end if;
 
   select s.run_started into v_run from private.outreach_gmail_sync s where s.mailbox_id = p_mailbox for update;
+  if not found then
+    return false;
+  end if;
   if v_run is not null and v_run > p_started then
     return true;
   end if;
@@ -375,9 +385,10 @@ $$;
 
 -- 6. For the app: each mailbox's connection and sync; disconnecting ------------------------------------------------
 
--- Every mailbox (by position) with whether its Gmail is connected (with the read scope), which account and client, when,
--- and its sync: when it last saved, whether the first full read is done (ready), how many threads are still queued,
--- the last error and whether it needs reconnecting. Nulls for a mailbox with no connection. Never a token or scope.
+-- Every mailbox (by position) with whether it's active (an inactive one is paused, not read), whether its Gmail is
+-- connected (with the read scope), which account and client, when, and its sync: when it last saved, whether the first
+-- full read is done (ready), how many threads are still queued, the last error and whether it needs reconnecting. Nulls
+-- for a mailbox with no connection. Never a token or scope.
 create or replace function public.outreach_gmail_status() returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 begin
@@ -387,6 +398,7 @@ begin
   return jsonb_build_object('mailboxes', coalesce((
     select jsonb_agg(jsonb_build_object(
              'mailbox_id', m.id,
+             'active', m.active,
              'connected', g.mailbox_id is not null and private.has_gmail_read(g.scopes),
              'email', g.email,
              'client', g.client,

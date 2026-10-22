@@ -3508,7 +3508,7 @@ async function phase10(ctx) {
   const publishedAfter = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'")).n;
   const indexes = Object.fromEntries((await rows(`select indexname, indexdef from pg_indexes where indexname = any($1::text[])`, [[
     'outreach_threads_first_day_idx', 'outreach_threads_reply_day_idx', 'outreach_threads_bounce_day_idx', 'outreach_threads_mailbox_id_idx',
-    'outreach_messages_day_idx', ...GMAIL_INDEXES]])).map((r) => [r.indexname, r.indexdef]));
+    'outreach_messages_day_idx', 'outreach_messages_thread_idx', ...GMAIL_INDEXES]])).map((r) => [r.indexname, r.indexdef]));
   const cons = (await rows(`select conrelid::regclass::text || ' ' || pg_get_constraintdef(oid) as d from pg_constraint
     where conrelid = any(array['public.outreach_threads', 'public.outreach_messages', 'private.outreach_gmail']::regclass[])`)).map((r) => r.d);
   const hasCon = (re) => cons.some((d) => re.test(d));
@@ -3519,10 +3519,12 @@ async function phase10(ctx) {
       && info['private.outreach_gmail'].signed_in === null && info['private.outreach_gmail_sync'].signed_in === null
       && info['public.outreach_threads'].secret_reads,
     { info, noRls });
-  check('81. realtime publishes none of them (39 tables before and after); the day, mailbox and sheet-matching indexes exist; '
-    + 'threads are unique per mailbox, messages belong to a thread (removed with it), the client key is checked',
+  check('81. realtime publishes none of them (39 tables before and after); the day, mailbox and sheet-matching indexes exist, and '
+    + 'messages by mailbox and thread (for the cascade); threads are unique per mailbox, messages belong to a thread (removed with '
+    + 'it), the client key is checked',
     publishedBefore === 39 && publishedAfter === 39 && GMAIL_TABLES.every((t) => !info[t].published)
-      && Object.keys(indexes).length === 7 && /lower\(contact_email\)/.test(indexes.outreach_emails_contact_email_lower_idx)
+      && Object.keys(indexes).length === 8 && /lower\(contact_email\)/.test(indexes.outreach_emails_contact_email_lower_idx)
+      && /ON public\.outreach_messages USING btree \(mailbox_id, thread_id\)$/.test(indexes.outreach_messages_thread_idx ?? '')
       && /\(thread_id\)/.test(indexes.outreach_emails_thread_id_idx)
       && hasCon(/^outreach_threads UNIQUE \(mailbox_id, thread_id\)$/)
       && hasCon(/^outreach_messages FOREIGN KEY \(mailbox_id, thread_id\) REFERENCES outreach_threads\(mailbox_id, thread_id\) ON DELETE CASCADE$/)
@@ -3786,8 +3788,10 @@ async function phase10(ctx) {
       && runs.done === true && syncDone.ready_at === syncSecond.ready_at && syncDone.claimed_at === null && stable(syncDone.pending) === stable([]),
     { runs, afterFailed, syncRecovered, syncDone });
 
-  // An older save never overwrites a newer one's rows (here with no run on record: the sync row was removed).
+  // An older save never overwrites a newer one's rows (here a run on record older than the rows: the sync row was
+  // removed and claimed again at T(5)).
   await db.query('delete from private.outreach_gmail_sync where mailbox_id = $1', [M1]);
+  await claimAt(M1, T(5));
   runs.stale = await gsave(M1, T(5), [{ ...t1, subject: 'Stale' }], [message('m-t1-1', 't1', 'reply', '2026-10-21T14:31:00.000Z')], {});
   const afterStale = { threads: await threadsOf(M1), messages: await messagesOf(M1) };
   // A malformed payload doesn't stop a save: not arrays, a null cursor, rows without a thread id or first time, a thread
@@ -3811,15 +3815,26 @@ async function phase10(ctx) {
       && afterMessy.sync.history_id === '3003' && afterMessy.sync.scan_from === null && afterMessy.sync.synced_at === T(40),
     { runs, afterStale, afterMessy });
 
-  // A mailbox made inactive: its save is refused (false) and its sync row goes, but what was read stays.
+  const statusOf = async (user) => {
+    if (user === 'anon') { await as(null); await db.exec('set role anon'); } else await as(user);
+    const r = await attempt('select public.outreach_gmail_status() as s');
+    await as(null);
+    return r && typeof r === 'object' ? r.s : r;
+  };
+  // A mailbox made inactive while a run holds it: its save is refused (false) and the claim released, but its sync row
+  // (ready, cursor, queue) and what was read stay, so its Gmail numbers still count; the status shows it ready, inactive.
   await claimAt(M2, T(10));
   runs.two = await gsave(M2, T(10), [thread('n0', { sender: 'two@assetstackai.com', first: '2026-10-20T01:00:00.000Z' })],
     [message('m-n0', 'n0', 'sent', '2026-10-20T01:00:00.000Z')], { history_id: '50', pending: [] });
+  const twoReady = await syncOf(M2);
+  await claimAt(M2, T(20));
   await as(boss);
   const paused = await affected('update public.outreach_mailboxes set active = false where id = $1', [M2]);
   await as(null);
-  runs.inactive = await gsave(M2, T(20), [thread('n1', { first: '2026-10-20T02:00:00.000Z' })], [], { pending: [] });
-  const inactiveLeft = { threads: Object.keys(await threadsOf(M2)), messages: Object.keys(await messagesOf(M2)), sync: await syncOf(M2),
+  runs.inactive = await gsave(M2, T(20), [thread('n1', { first: '2026-10-20T02:00:00.000Z' })], [], { pending: ['q1'] });
+  const inactiveSync = await syncOf(M2);
+  const inactiveStatus = (await statusOf(hello))?.mailboxes?.find((m) => m.mailbox_id === M2);
+  const inactiveLeft = { threads: Object.keys(await threadsOf(M2)), messages: Object.keys(await messagesOf(M2)),
     connection: (await connOf(M2))?.email ?? null, claimed: (await gclaim(30)).includes(M2) };
   await as(boss);
   const resumed = await affected('update public.outreach_mailboxes set active = true where id = $1', [M2]);
@@ -3828,12 +3843,18 @@ async function phase10(ctx) {
   runs.unconnected = await gsave(boxA, T(20), [], [], {});
   const saveLocks = /perform 1 from public\.outreach_mailboxes m join private\.outreach_gmail g[^;]*private\.has_gmail_read\(g\.scopes\)\s+for share of m, g;/
     .test(migration10);
-  check('85. a mailbox made inactive (or unknown, or not connected) gets no save (false, its sync row removed) but keeps the threads and '
-    + 'messages already read, and its connection; claims skip it; the save\'s check locks the mailbox and connection (for share)',
-    runs.two === true && paused === 1 && runs.inactive === false && stable(inactiveLeft) === stable({ threads: ['n0'], messages: ['m-n0'],
-      sync: null, connection: 'two@assetstackai.com', claimed: false })
+  check('85. a mailbox made inactive while a run holds it (or unknown, or not connected) gets no save (false): the claim is released, '
+    + 'and it keeps its sync (ready, cursor, queue, last save), the threads and messages already read, and its connection; the status '
+    + 'shows it ready and inactive; claims skip it; the save\'s check locks the mailbox and connection (for share)',
+    runs.two === true && twoReady?.ready_at !== null && paused === 1 && runs.inactive === false
+      && stable(inactiveLeft) === stable({ threads: ['n0'], messages: ['m-n0'], connection: 'two@assetstackai.com', claimed: false })
+      && inactiveSync?.claimed_at === null && inactiveSync.ready_at === twoReady.ready_at && inactiveSync.history_id === '50'
+      && stable(inactiveSync.pending) === stable([]) && inactiveSync.synced_at === T(10) && inactiveSync.run_started === T(20)
+      && inactiveSync.error === ''
+      && inactiveStatus?.ready === true && inactiveStatus.active === false && inactiveStatus.connected === true
+      && inactiveStatus.pending === 0 && iso(new Date(inactiveStatus.synced_at)) === T(10)
       && resumed === 1 && runs.unknown === false && runs.unconnected === false && saveLocks,
-    { runs, inactiveLeft, resumed, saveLocks });
+    { runs, twoReady, inactiveSync, inactiveStatus, inactiveLeft, resumed, saveLocks });
 
   // 86. outreach_gmail_job: one mailbox's work, for the function only ------------------------------------------------------
 
@@ -3841,6 +3862,7 @@ async function phase10(ctx) {
   const jobs = {
     one: (await one('select public.outreach_gmail_job($1) as j', [M1])).j,
     two: (await one('select public.outreach_gmail_job($1) as j', [M2])).j,
+    paused: (await one('select public.outreach_gmail_job($1) as j', [MP])).j,
     none: (await one('select public.outreach_gmail_job($1) as j', [boxA])).j,
   };
   await as(null);
@@ -3852,7 +3874,10 @@ async function phase10(ctx) {
       && jobs.one.client === 'default' && stable([...jobs.one.addresses].sort()) === stable(['one@assetstack.org', 'one@assetstackai.com'])
       && jobs.one.history_id === '3003' && stable(jobs.one.pending) === stable([]) && jobs.one.ready === true
       && iso(new Date(jobs.one.run_started)) === T(40) && iso(new Date(jobs.one.synced_at)) === T(40)
-      && jobs.two?.history_id === '' && jobs.two.ready === false && jobs.two.synced_at === null && stable(jobs.two.pending) === stable([])
+      && jobs.two?.history_id === '50' && jobs.two.ready === true && iso(new Date(jobs.two.synced_at)) === T(10)
+      && stable(jobs.two.pending) === stable([])
+      && jobs.paused?.history_id === '' && jobs.paused.ready === false && jobs.paused.synced_at === null
+      && jobs.paused.run_started === null && stable(jobs.paused.pending) === stable([])
       && jobs.none === null,
     jobs);
 
@@ -3861,29 +3886,25 @@ async function phase10(ctx) {
   // Two's last run failed and needs reconnecting.
   await claimAt(M2, T(50));
   runs.twoFailed = await gsave(M2, T(50), [], [], {}, { err: 'Google needs reconnecting', reconnect: true });
-  const statusOf = async (user) => {
-    if (user === 'anon') { await as(null); await db.exec('set role anon'); } else await as(user);
-    const r = await attempt('select public.outreach_gmail_status() as s');
-    await as(null);
-    return r && typeof r === 'object' ? r.s : r;
-  };
   const status = await statusOf(hello);
   const order = (await rows('select id from public.outreach_mailboxes order by position, id')).map((r) => r.id);
   const box = (id) => status?.mailboxes?.find((m) => m.mailbox_id === id);
-  const KEYS = ['client', 'connected', 'connected_at', 'email', 'error', 'mailbox_id', 'pending', 'ready', 'reconnect', 'synced_at'];
+  const KEYS = ['active', 'client', 'connected', 'connected_at', 'email', 'error', 'mailbox_id', 'pending', 'ready', 'reconnect', 'synced_at'];
+  const activeOf = Object.fromEntries((await rows('select id, active from public.outreach_mailboxes')).map((r) => [r.id, r.active]));
   const refusedStatus = { alice: await statusOf(alice), carol: await statusOf(carol), anon: await statusOf('anon') };
   const allowedStatus = { david: await statusOf(david), newcomer: await statusOf(newcomer) };
-  check('87. outreach_gmail_status (Outreach view): every mailbox by position with its connection (account, client, when) and sync '
-    + '(last save, ready, threads queued, error, reconnect); nulls for one never connected; never a token or scope',
+  check('87. outreach_gmail_status (Outreach view): every mailbox by position with whether it\'s active, its connection (account, '
+    + 'client, when) and sync (last save, ready, threads queued, error, reconnect); nulls for one never connected; never a token or scope',
     stable(Object.keys(status || {})) === stable(['mailboxes']) && stable(status.mailboxes.map((m) => m.mailbox_id)) === stable(order)
-      && status.mailboxes.every((m) => stable(Object.keys(m).sort()) === stable(KEYS))
-      && stable(box(boxA)) === stable({ mailbox_id: boxA, connected: false, email: null, client: null, connected_at: null, synced_at: null,
-        ready: null, pending: null, error: null, reconnect: null })
+      && status.mailboxes.every((m) => stable(Object.keys(m).sort()) === stable(KEYS) && m.active === activeOf[m.mailbox_id])
+      && box(MP).active === false && box(M1).active === true
+      && stable(box(boxA)) === stable({ mailbox_id: boxA, active: true, connected: false, email: null, client: null, connected_at: null,
+        synced_at: null, ready: null, pending: null, error: null, reconnect: null })
       && box(M1).connected === true && box(M1).email === 'one@assetstackai.com' && box(M1).client === 'default' && box(M1).connected_at !== null
       && iso(new Date(box(M1).synced_at)) === T(40) && box(M1).ready === true && box(M1).pending === 0 && box(M1).error === ''
       && box(M1).reconnect === false
-      && box(M2).connected === true && box(M2).error === 'Google needs reconnecting' && box(M2).reconnect === true && box(M2).ready === false
-      && box(M2).synced_at === null && box(M3).connected === true && box(M3).ready === false && box(MP).connected === true
+      && box(M2).connected === true && box(M2).error === 'Google needs reconnecting' && box(M2).reconnect === true && box(M2).ready === true
+      && iso(new Date(box(M2).synced_at)) === T(10) && box(M3).connected === true && box(M3).ready === false && box(MP).connected === true
       && !/refresh|googleapis|scope/.test(JSON.stringify(status)),
     { status, order });
   check('87. ...admins and staff with Outreach edit read it too; staff without Outreach, inactive accounts and anon are refused',
@@ -4253,6 +4274,61 @@ async function phase10(ctx) {
       && known.domains.every((d) => !FREE.includes(d) && !known.internal.includes(d))
       && lacks(known.domains, 'prospect-co.example', 'assetstack.org', 'gmail.com', 'bigpond.com', 'example.com'),
     known);
+
+  // 93. A run from before a disconnect, reconnect or account change saves nothing on the new connection ----------------------
+
+  // Five has two addresses. Each time a run claims it and reads its job, then (a) an admin connects it as its other
+  // address, (b) disconnects it and connects the same account again, or (c) disconnects it; then the old run saves (its
+  // threads, messages and cursor) and saves its error. A new claim afterwards reads and saves as usual.
+  await as(boss);
+  const M5 = await addBox('Gmail Five', ['five@assetstackai.com', 'five@assetstack.org'], 8);
+  await as(null);
+  const jobOf = async (mailbox) => {
+    await asSecretKey();
+    const j = (await one('select public.outreach_gmail_job($1) as j', [mailbox])).j;
+    await as(null);
+    return j;
+  };
+  const stale = { connect: await gconnect(M5, 'five@assetstackai.com') };
+  const staleRun = async (name, change) => {
+    const claimed = (await gclaim(30)).includes(M5);
+    const job = await jobOf(M5);
+    const changed = await change();
+    const saved = await gsave(M5, job.run_started, [thread(`old-${name}`, { sender: 'five@assetstackai.com', first: '2026-10-20T01:00:00.000Z' })],
+      [message(`m-old-${name}`, `old-${name}`, 'sent', '2026-10-20T01:00:00.000Z')],
+      { history_id: '9001', scan_from: '2026-07-01T00:00:00.000Z', pending: [] });
+    const errored = await gsave(M5, job.run_started, [], [], {}, { release: true, err: 'Old run: token expired or revoked', reconnect: true });
+    const left = { ...(await countsFor(M5)), sync: await syncOf(M5), email: (await connOf(M5))?.email ?? null };
+    const reconnected = changed === true ? await gconnect(M5, 'five@assetstackai.com') : null;
+    const fresh = { claimed: (await gclaim(30)).includes(M5) };
+    const job2 = await jobOf(M5);
+    fresh.later = Date.parse(job2.run_started) > Date.parse(job.run_started);
+    fresh.saved = await gsave(M5, job2.run_started, [thread(`new-${name}`, { sender: job2.email, first: '2026-10-21T01:00:00.000Z' })],
+      [message(`m-new-${name}`, `new-${name}`, 'sent', '2026-10-21T01:00:00.000Z')], { history_id: '9100', pending: [] }, { release: true });
+    fresh.threads = Object.keys(await threadsOf(M5));
+    fresh.messages = Object.keys(await messagesOf(M5));
+    fresh.sync = await syncOf(M5);
+    return { claimed, started: job.run_started, changed, saved, errored, left, reconnected, fresh };
+  };
+  stale.account = await staleRun('a', () => gconnect(M5, 'five@assetstack.org'));
+  stale.again = await staleRun('b', async () => [await disconnect(boss, M5), await gconnect(M5, 'five@assetstack.org')]);
+  stale.gone = await staleRun('c', () => disconnect(boss, M5));
+  const nothingLeft = (r, email) => r.claimed === true && typeof r.started === 'string' && r.saved === false && r.errored === false
+    && stable(r.left) === stable({ threads: 0, messages: 0, sync: null, connection: email ? 1 : 0, email });
+  const freshOk = (r, name) => r.fresh.claimed === true && r.fresh.later && r.fresh.saved === true
+    && stable(r.fresh.threads) === stable([`new-${name}`]) && stable(r.fresh.messages) === stable([`m-new-${name}`])
+    && r.fresh.sync?.history_id === '9100' && r.fresh.sync.ready_at !== null && r.fresh.sync.error === '' && r.fresh.sync.reconnect === false
+    && r.fresh.sync.claimed_at === null && r.fresh.sync.scan_from === null;
+  check('93. a run that claimed a mailbox before an admin connected it as another of its addresses, disconnected and reconnected it '
+    + '(the same account), or disconnected it, gets no save (false), nor its error save: no threads, messages, cursor, ready or error '
+    + 'land on the new connection (or none); a new claim afterwards reads and saves as usual',
+    stale.connect === 'ok'
+      && stale.account.changed === 'ok' && nothingLeft(stale.account, 'five@assetstack.org') && freshOk(stale.account, 'a')
+      && stable(stale.again.changed) === stable([true, 'ok']) && nothingLeft(stale.again, 'five@assetstack.org') && freshOk(stale.again, 'b')
+      && stale.gone.changed === true && nothingLeft(stale.gone, null) && stale.gone.reconnected === 'ok' && freshOk(stale.gone, 'c'),
+    stale);
+  await as(boss);
+  await db.query('delete from public.outreach_mailboxes where id = $1', [M5]);
 
   await as(null);
   return ctx;
