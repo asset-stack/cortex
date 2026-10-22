@@ -833,11 +833,14 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   newest first, as metadata only (named headers, never `snippet`, `full` or `raw`), up to 500 a run, saving every 100,
   and answers `{ claimed, synced, failed, more, pending }` so the page runs it again while `more` (also true when it
   claimed three, as more may be due). Mailboxes released by a run (a first read carrying on) are claimed before others;
-  a forced chain sends its start (`since`, from its first answer) so it never claims again what it already read. A Gmail
-  rate limit or a 500/502/503/504 waits once and tries again. Still limited: while reading threads, the run saves what
-  it read, keeps its claim and answers more false (the page tries again a minute later); at the profile, list or history
-  step, it saves *Gmail is busy*. A thread that still answers 5xx is skipped. One mailbox's failure never stops the others; Google refusing the mailbox asks for **Reconnect**. Logs carry
-  counts only.
+  a forced chain sends its start (`since`, from its first answer) so it doesn't claim again, within its first 10
+  minutes, what it already read. A Gmail rate limit or a 500/502/503/504 waits once and tries again. Still limited
+  while reading threads, or after three server errors in a run, the run saves what it read, keeps its claim and answers
+  more false (during a first read the page tries again a minute later; otherwise the next Sync now, or the next open
+  after 10 minutes); at the profile, list or history step, it saves *Gmail is busy*. A thread that still answers 5xx
+  goes to the back of the queue with its count of failed runs (`outreach_gmail_sync.failures`), and is given up only
+  after five, so an outage never drops threads or marks a first read done early. One mailbox's failure never stops the
+  others; Google refusing the mailbox asks for **Reconnect**. Logs carry counts only.
 - **App**:
   - **Outreach** (`Emails.jsx`): the numbers are `mergeDaily()`: a mailbox whose first read is done counts Sent (each
     cold email, follow-ups too), **Prospects** (threads started), Replies, auto-replies and Bounces from Gmail and only
@@ -845,7 +848,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
     prospects. Mailbox cards counted from Gmail carry a mail mark. The Breakdown adds **Prospects** (replied, auto-reply,
     no reply yet, bounced; *Prospects (Gmail)* when some mailboxes shown are on the sheet) and **Emails per prospect**
     (1, 2, 3, 4 or more). The list (`EmailList.jsx`), for a Gmail mailbox (and for All once every active mailbox is
-    one, and nothing is Unassigned; until then All lists the sheet's emails): **Sent / Replies / Bounced**, a row per prospect thread (the sheet's
+    one: every mailbox All shows, active or with numbers in the period, none part-way through a first read, and nothing
+    Unassigned; until then All lists the sheet's emails): **Sent / Replies / Bounced**, a row per prospect thread (the sheet's
     organisation when it matches, the contact, subject, emails sent, the outcome; the drawer adds Open in Gmail), and
     the sheet's own list as **Sheet**.
   - `SyncStatus.jsx`: opening Outreach asks Gmail to sync (the function skips mailboxes read in the last 10 minutes);
@@ -859,7 +863,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
     after an error, **Disconnect Gmail** (confirm). The result of the trip to Google shows on that row (*connected* only
     while it still is), and a connect starts the first read at once.
   - Store: `outreach.gmailStatus()`, `gmailDaily()`, `gmailBreakdown()`, `threads()`, `syncGmail({ force })`; actions
-    `connectMailboxGmail()`, `disconnectMailboxGmail()` (admins), `syncOutreachGmail()`. Demo mode: David's and Josh's
+    `connectMailboxGmail()`, `disconnectMailboxGmail()` (admins), `syncOutreachGmail({ force, since })`. Demo mode: David's and Josh's
     mailboxes are connected with seeded threads (from their sheet rows, with follow-ups, plus three sent by hand), Sarah's
     stays on the sheet; Connect says live mode only; Disconnect, removing the address or the mailbox forgets as live does.
 - **Tests**: `scripts/test-db.mjs` phase 10 (re-runs, RLS and grants, connect, claim, save, Sydney days, sticky cold,

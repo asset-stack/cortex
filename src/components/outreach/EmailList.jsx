@@ -156,7 +156,7 @@ function ThreadDetail({ t, mailboxes }) {
 /**
  * The emails list, newest first, 50 at a time. For the agent's sheet: Sent (sent in the period), Replies (replied in it)
  * or All logged, a row per contact. When the mailbox shown is counted from Gmail (`gmail`, a Set of mailbox ids; for
- * all, `allGmail`: every active mailbox is): Sent (prospects first emailed in the period), Replies, Bounced, a row per
+ * all, `allGmail`: every mailbox All shows is, none is part-way through its first read, and nothing is Unassigned): Sent (prospects first emailed in the period), Replies, Bounced, a row per
  * prospect thread, and the sheet as its own tab. `mailbox`: null for all, '' Unassigned, or an id. `version` changes when the data may have
  * (a sync, the demo reset).
  */

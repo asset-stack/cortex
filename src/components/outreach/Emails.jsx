@@ -121,10 +121,12 @@ export default function Emails() {
     [data.gmailBreakdown, mailboxes, readyBoxes],
   );
   const hasUnassigned = daily.some((r) => !r.mailbox) || breakdown.some((r) => !r.mailbox);
-  // Every mailbox All shows (the active ones and any other with numbers in the period) counted from Gmail, and nothing
-  // Unassigned: then All lists prospect threads, else the sheet's list (which has them all).
-  const allGmail = !hasUnassigned && mailboxes.some((m) => m.active !== false)
-    && mailboxes.filter((m) => m.active !== false || daily.some((r) => r.mailbox === m.id)).every((m) => readyBoxes.has(m.id));
+  // Every mailbox All shows (the active ones and any other with numbers in the period) counted from Gmail, no connected
+  // mailbox part-way through its first read (its threads would be listed but not counted), and nothing Unassigned: then
+  // All lists prospect threads, else the sheet's list (which has them all).
+  const shownBoxes = mailboxes.filter((m) => m.active !== false || daily.some((r) => r.mailbox === m.id));
+  const allGmail = !hasUnassigned && shownBoxes.length > 0 && shownBoxes.every((m) => readyBoxes.has(m.id))
+    && data.gmail.every((g) => !g.connected || g.ready);
 
   const options = [
     { id: ALL, label: 'All' },

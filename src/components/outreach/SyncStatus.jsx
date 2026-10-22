@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { useAccess } from '@/lib/access';
@@ -75,7 +75,10 @@ export default function SyncStatus({ autoSync = false, onSynced, reader = false,
     if (alive.current) { setReading(false); load(); }
     return res;
   }, [load]);
-  useEffect(() => { load(); }, [load, state.outreachSheet, state.mailboxes, version]);
+  // Reload when a mailbox's switch or addresses change (not on every other change to state).
+  const boxesKey = useMemo(() => (state.mailboxes || []).map((m) => `${m.id}:${m.active !== false}:${(m.addresses || []).join(',')}`).join('|'),
+    [state.mailboxes]);
+  useEffect(() => { load(); }, [load, state.outreachSheet, boxesKey, version]);
 
   const running = useRef(false);
   // The sheet, and Gmail alongside (`gmail`): the sheet's result shows as soon as it's back; Gmail carries on under
@@ -98,11 +101,12 @@ export default function SyncStatus({ autoSync = false, onSynced, reader = false,
   }, [load, syncGmail]);
   const syncNow = () => sync({ sheet: Boolean(status?.sheetUrl) || !anyGmail, gmail: anyGmail });
 
-  // The sheet on open: once per visit (the status reloads often while Gmail reads, which mustn't sync it again).
-  const sheetChecked = useRef(false);
+  // The sheet on open: once per visit and link (the status reloads often while Gmail reads, which mustn't sync it again;
+  // a new link pasted meanwhile still syncs at once).
+  const sheetChecked = useRef('');
   useEffect(() => {
-    if (!autoSync || !outreach.live || !status?.ok || !status.sheetUrl || sheetChecked.current) return;
-    sheetChecked.current = true;
+    if (!autoSync || !outreach.live || !status?.ok || !status.sheetUrl || sheetChecked.current === status.sheetUrl) return;
+    sheetChecked.current = status.sheetUrl;
     if (autoSynced.url === status.sheetUrl && Date.now() - autoSynced.at < STALE) return; // a new link syncs at once
     const last = Date.parse(status.syncedAt || '');
     if (Number.isFinite(last) && Date.now() - last < STALE) return;
