@@ -26,13 +26,14 @@
 //                                                          primary calendar into
 //                                                          calendar_meetings (rpc calendar_save); titles only, never
 //                                                          descriptions, places, attendees or links
-//   POST outreach-gmail-sync {force?}                    → {ok, claimed, synced, failed, more, pending}: the connected
-//                                                          outreach mailboxes whose turn it is (rpc outreach_gmail_claim),
-//                                                          each one's cold threads (ones we started with a new outside
-//                                                          contact) into outreach_threads / outreach_messages (rpc
-//                                                          outreach_gmail_save): headers only, never a body or snippet;
-//                                                          more = call again (a claim was released, or the claim was
-//                                                          full so others may be due)
+//   POST outreach-gmail-sync {force?, since?}            → {ok, claimed, synced, failed, more, pending, since}: the
+//                                                          connected outreach mailboxes whose turn it is (rpc
+//                                                          outreach_gmail_claim), each one's cold threads (ones we started
+//                                                          with a new outside contact) into outreach_threads /
+//                                                          outreach_messages (rpc outreach_gmail_save): headers only, never
+//                                                          a body or snippet; more = call again (a claim was released, or
+//                                                          the claim was full so others may be due); since = when the
+//                                                          chain started (pass it back on the chain's later calls)
 //
 // JWT verification is OFF for this function (Google's callback carries no JWT), so it checks callers itself: the
 // caller's JWT goes to rpc google_me (active staff only; send, contract, a plain and a mailbox connect then need admin),
@@ -1420,7 +1421,7 @@ const GMAIL_THREAD_FIELDS = 'id,messages(id,labelIds,internalDate,payload(mimeTy
 const GMAIL_LIST_FIELDS = 'messages(threadId),nextPageToken';
 const GMAIL_HISTORY_FIELDS = 'history(id,messagesAdded(message(id,threadId,labelIds))),nextPageToken,historyId';
 const RATE_REASONS = ['rateLimitExceeded', 'userRateLimitExceeded', 'RATE_LIMIT_EXCEEDED', 'quotaExceeded'];
-const GMAIL_TRANSIENT = [500, 502, 503, 504]; // a passing Gmail server error: handled like a rate limit
+const GMAIL_TRANSIENT = [500, 502, 503, 504]; // a passing Gmail server error: retried once, like a rate limit
 // Saved per mailbox (outreach_gmail_sync.error, which Outreach shows): short, never a token or an address.
 const GMAIL_RECONNECT = 'Reconnect this mailbox’s Gmail in Settings → Outreach.';
 const GMAIL_OTHER_ACCOUNT = 'Signed in as another account.';
@@ -1433,8 +1434,17 @@ const mailboxDomain = (hd) => `Connect Gmail needs an @${hd} address on this mai
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const THREAD_ID = /^[A-Za-z0-9_-]{1,100}$/;
 
-/** A Gmail rate limit (or a 500/502/503/504) that outlasted one short back-off: the run stops there with more to do. */
+/**
+ * A Gmail rate limit (429, or 403 with a rate-limit reason) that outlasted one short back-off: a thread's read stops the
+ * mailbox there and holds its claim (no more this chain); the profile, list or history step saves "Gmail is busy".
+ */
 class RateLimited extends Error {}
+/**
+ * A Gmail 500, 502, 503 or 504 that came back after the one retry. A thread's read skips that thread (as a 404) and goes
+ * on with the others, so a thread Gmail keeps failing on never blocks the queue; the profile, list or history step saves
+ * "Gmail is busy", as a rate limit.
+ */
+class GmailServerError extends RateLimited {}
 
 /** Whether a space-separated scope list holds gmail.readonly as a whole entry (as private.has_gmail_read() in 0010). */
 export function hasGmailRead(scopes) {
@@ -1826,21 +1836,22 @@ async function mailboxCallback(url, state, origin, cfg, fetch) {
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // A Gmail GET → its JSON. A rate limit (429, or 403 with a rate-limit reason) or a passing server error (500, 502, 503,
-// 504) waits `backoff` once and tries again, then throws RateLimited (a thread's read stops the run with more to do; the
-// profile, list or history step saves "Gmail is busy"); a missing scope → 409 (reconnect); 404 → null when `allow404`;
-// anything else → 502 "Gmail returned <status>." (Google's message is never kept: it could quote the mailbox).
+// 504) waits `backoff` once and tries again; then a rate limit throws RateLimited and a server error GmailServerError (by
+// the second answer). A missing scope → 409 (reconnect); 404 → null when `allow404`; anything else → 502 "Gmail returned
+// <status>." (Google's message is never kept: it could quote the mailbox).
 async function gmailGet(fetch, token, url, { sleep, backoff }, allow404 = false) {
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } });
     const data = await readJson(res);
     if (res.ok) return data || {};
     const reasons = googleReasons(data);
-    if (res.status === 429 || GMAIL_TRANSIENT.includes(res.status) || (res.status === 403 && reasons.some((r) => RATE_REASONS.includes(r)))) {
+    const server = GMAIL_TRANSIENT.includes(res.status);
+    if (server || res.status === 429 || (res.status === 403 && reasons.some((r) => RATE_REASONS.includes(r)))) {
       if (attempt === 0) {
         await sleep(backoff);
         continue;
       }
-      throw new RateLimited('rate limited');
+      throw server ? new GmailServerError('server error') : new RateLimited('rate limited');
     }
     if (res.status === 404 && allow404) return null;
     if (scopeInsufficient(res.status, data, reasons)) throw new HttpError(409, GMAIL_RECONNECT);
@@ -1962,12 +1973,16 @@ function knownContext(known, addresses) {
 
 // One claimed mailbox: what to read (a first read of the last 90 days of sent mail, Gmail's history since the last run,
 // or a restart when that history is gone), then the queued threads newest first, saved every `saveEvery` threads with the
-// rest of the queue as the cursor. → { status: 'synced' | 'failed' | 'skipped', more, pending }
+// rest of the queue as the cursor. Stopped by its deadline with more to read: the last save releases the claim and more
+// is true (call again now). Stopped by a rate limit: the claim is held (due again after its gap) and more is false, so a
+// Sync now chain doesn't hammer a limited Gmail. A thread Gmail answers with a server error twice is skipped (as a 404).
+// → { status: 'synced' | 'failed' | 'skipped', more, pending }
 async function gmailMailbox(id, run) {
   const { cfg, fetch, db, lim, now, sleep, until } = run;
   let started = new Date(run.claimedAt + START_MARGIN).toISOString();
   let pending = [];
   let queue = 0; // the queue as last saved (or as the job read it): what a failed run leaves pending
+  let skipped = 0; // threads skipped after a Gmail server error (logged as a count)
   let refresh = '';
   let token = '';
   let step = 'job';
@@ -2044,6 +2059,7 @@ async function gmailMailbox(id, run) {
     const cold = batch.length ? await stored(batch) : new Set();
     const done = new Set();
     let stop = false; // the deadline, or a rate limit
+    let limited = false; // a rate limit: hold the claim, no more this chain
     for (let i = 0; ; i += lim.saveEvery) {
       const chunk = batch.slice(i, i + lim.saveEvery);
       const rows = new Array(chunk.length).fill(null);
@@ -2062,14 +2078,20 @@ async function gmailMailbox(id, run) {
           }
           done.add(tid); // read (or gone from Gmail: 404)
         } catch (e) {
+          if (e instanceof GmailServerError) {
+            done.add(tid); // skipped, as a 404: it never holds up the queue
+            skipped++;
+            return;
+          }
           if (!(e instanceof RateLimited)) throw e;
           stop = true;
+          limited = true;
         }
       });
       if (failure) throw failure;
       const remaining = pending.filter((t) => !done.has(t));
       const last = stop || i + lim.saveEvery >= batch.length;
-      const more = last && (remaining.length > 0 || historyMore);
+      const more = last && !limited && (remaining.length > 0 || historyMore);
       const kept = rows.filter(Boolean);
       step = 'save';
       const saved = await save({
@@ -2090,24 +2112,41 @@ async function gmailMailbox(id, run) {
       // logged by rest(); the mailbox counts as failed either way
     }
     return { status: 'failed', more: false, pending: queue };
+  } finally {
+    if (skipped) console.error('google/outreach-gmail-sync: skipped', skipped, 'thread(s) after a Gmail server error');
   }
 }
 
-// Claims the connected mailboxes whose turn it is (not read in the last 10 minutes, or 1 minute when forced; at most
-// three) and reads them one at a time, each with its own Google account and its share of the run's time. One mailbox's
-// failure (saved as its error, with reconnect when its connection needs it) never stops the others. more: the client may
-// call again straight away (a Sync now chain passes force on each call), because a mailbox has more to read and its
-// claim was released, or the claim was full (p_limit mailboxes), so others may be due; a call that claims nothing
-// answers more false.
+// p_gap (seconds) for rpc outreach_gmail_claim: 600, or 60 when forced. A forced call later in a Sync now chain (one that
+// passes back the chain's `since`) uses the time since the chain started plus 5 s instead (60 to 600), so a mailbox
+// already claimed in this chain isn't due again in it (each run can last the whole deadline), while a released one
+// (claimed_at null) or one last claimed over a minute before the chain still is.
+function claimGap(force, since, nowMs) {
+  if (!force) return 600;
+  if (since === null) return 60;
+  return Math.min(600, Math.max(60, Math.ceil((nowMs - since) / 1000) + 5));
+}
+
+// Claims the connected mailboxes whose turn it is (not read in the last 10 minutes, or 1 minute when forced, or since
+// the chain started: claimGap(); at most three) and reads them one at a time, each with its own Google account and its
+// share of the run's time. One mailbox's failure (saved as its error, with reconnect when its connection needs it) never
+// stops the others. more: the client may call again straight away (a Sync now chain passes force and the first answer's
+// since on each call), because a mailbox stopped by its deadline has more to read and its claim was released, or the
+// claim was full (p_limit mailboxes), so others may be due; a call that claims nothing answers more false, and a mailbox
+// stopped by a rate limit adds no more. since: body.since when it is a valid time not in the future, else now (the
+// chain's first call).
 async function gmailSync(body, cfg, fetch, { limits = {}, now = Date.now, sleep = pause } = {}) {
   const lim = { ...GMAIL_LIMITS, ...limits };
-  const end = now() + lim.deadline;
+  const start = now();
+  const end = start + lim.deadline;
+  const given = validTime(body.since) && Date.parse(body.since) <= start ? Date.parse(body.since) : null;
   const db = (path, init, fail) => rest(cfg, fetch, 'outreach-gmail-sync', path, init, fail);
   const claimed = claimedIds(await db('rpc/outreach_gmail_claim', {
-    method: 'POST', body: { p_gap: body.force === true ? 60 : 600, p_limit: lim.mailboxes },
+    method: 'POST', body: { p_gap: claimGap(body.force === true, given, start), p_limit: lim.mailboxes },
   }, 'Could not start the Gmail sync.'));
   const claimedAt = now();
-  const result = { ok: true, claimed: claimed.length, synced: 0, failed: 0, more: false, pending: 0 };
+  const since = new Date(given ?? start).toISOString();
+  const result = { ok: true, claimed: claimed.length, synced: 0, failed: 0, more: false, pending: 0, since };
   if (!claimed.length) return result;
   let known = null;
   try {

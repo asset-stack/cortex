@@ -7,8 +7,9 @@
 // calendar (a staff member's calendar connect and callback, which alone opts in with calendar_share; calendar-sync:
 // claim, events.list, the rows calendar_save gets, reconnects and per-person failures) and Outreach from Gmail (a
 // mailbox connect and its callback; outreach-gmail-sync: claim, first read, history, restart, the headers-only thread
-// read, the cold rule and message kinds, caps, deadline, rate limits, the save bodies, per-mailbox failures; never a
-// token, body, snippet or reply subject saved, and no address or subject logged). Exits non-zero when any check fails.
+// read, the cold rule and message kinds, caps, deadline, rate limits and server errors, a chain's since and claim gap,
+// the save bodies, per-mailbox failures; never a token, body, snippet or reply subject saved, and no address or subject
+// logged). Exits non-zero when any check fails.
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
 
@@ -2302,6 +2303,7 @@ const outreachPage = (result, mailbox = MB1) => `${ORIGIN}/#/settings?tab=outrea
 const params = (c) => new URL(c.url).searchParams;
 const pick = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]));
 const iso = (ms) => new Date(ms).toISOString();
+const GSTART = iso(GNOW); // since on a chain's first call, by the fixed clock
 
 // Gmail messages and threads as threads.get?format=metadata returns them.
 const gHeaders = (o) => Object.entries(o).filter(([, v]) => v !== undefined).map(([name, value]) => ({ name, value }));
@@ -2864,7 +2866,7 @@ await check('gmail sync: rpc outreach_gmail_claim with the secret key, p_gap 600
   for (const [body, gap] of [[{}, 600], [{ force: false }, 600], [{ force: 'yes' }, 600], [{ force: 1 }, 600], [{ force: true }, 60]]) {
     const r = await gSync({ body, claim: [] });
     assert.equal(r.status, 200, JSON.stringify(body));
-    assert.deepEqual(r.data, { ok: true, claimed: 0, synced: 0, failed: 0, more: false, pending: 0 });
+    assert.deepEqual(r.data, { ok: true, claimed: 0, synced: 0, failed: 0, more: false, pending: 0, since: GSTART });
     const [claim, ...more] = r.to(`${RPC}/outreach_gmail_claim`);
     assert.ok(claim && !more.length);
     assert.equal(claim.method, 'POST');
@@ -2872,7 +2874,7 @@ await check('gmail sync: rpc outreach_gmail_claim with the secret key, p_gap 600
     assert.deepEqual(claim.json(), { p_gap: gap, p_limit: 3 }, JSON.stringify(body));
     assert.equal(r.to(`${RPC}/outreach_gmail_known`).length + r.to(`${RPC}/outreach_gmail_job`).length + r.to(TOKEN_URL).length + r.gmail.length + r.saves.length, 0);
   }
-  assert.deepEqual((await gSync({ claim: null })).data, { ok: true, claimed: 0, synced: 0, failed: 0, more: false, pending: 0 });
+  assert.deepEqual((await gSync({ claim: null })).data, { ok: true, claimed: 0, synced: 0, failed: 0, more: false, pending: 0, since: GSTART });
   const objects = await gSync({ claim: [{ outreach_gmail_claim: MB1 }, MB1, '', null], jobs: { [MB1]: gJob(MB1, { history_id: '8000' }) } });
   assert.deepEqual([objects.data.claimed, objects.to(`${RPC}/outreach_gmail_job`).map((c) => c.json())], [1, [{ p_mailbox: MB1 }]], 'each mailbox once');
   const down = await gSync({ routes: { [`${RPC}/outreach_gmail_claim`]: () => reply(500, { code: 'XX000', message: 'boom' }) } });
@@ -2884,7 +2886,7 @@ await check('gmail sync: rpc outreach_gmail_claim with the secret key, p_gap 600
 await check('gmail sync: a first read — profile check, 90 days of sent mail (paged), threads newest first, the cold ones saved with the cursor', async () => {
   const r = await gSync();
   assert.equal(r.status, 200);
-  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0 });
+  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0, since: GSTART });
   const [known] = r.to(`${RPC}/outreach_gmail_known`);
   assert.deepEqual([known.method, known.headers.get('apikey'), known.body], ['POST', 'sb_secret_test', '{}']);
   const [job] = r.to(`${RPC}/outreach_gmail_job`);
@@ -2929,7 +2931,7 @@ await check('gmail sync: a first read — profile check, 90 days of sent mail (p
 
 await check('gmail sync: a first read signed in as another account → reconnect, nothing listed; the list is capped at listPages', async () => {
   const r = await gSync({ profile: () => reply(200, { emailAddress: 'someone@assetstackai.com', historyId: '1' }) });
-  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 0, failed: 1, more: false, pending: 0 });
+  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 0, failed: 1, more: false, pending: 0, since: GSTART });
   assert.deepEqual(r.saved, [{
     p_mailbox: MB1, p_started: iso(GNOW + 5000), p_threads: [], p_messages: [], p_cursor: {}, p_release: false, p_error: 'Signed in as another account.', p_reconnect: true,
   }]);
@@ -2984,7 +2986,7 @@ await check('gmail sync: incremental — history since the last run; SENT queues
     p_mailbox: MB1, p_started: iso(GNOW + 5000), p_threads: [ROW_C, ROW_B, ROW_A], p_messages: [...MSGS_C, ...MSGS_B, ...MSGS_A],
     p_cursor: { history_id: '8010', pending: [] }, p_release: false, p_error: '', p_reconnect: false,
   }]);
-  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0 });
+  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0, since: GSTART });
   // A stored cold thread whose rules would now say no (the prospect became a client) is still refreshed.
   const client = await gSync({
     jobs: { [MB1]: gJob(MB1, { history_id: '8000' }) }, stored: ['tA'], known: { ...KNOWN, emails: ['alex@example.org'] },
@@ -3056,14 +3058,14 @@ await check('gmail sync: caps — threadsPerRun and saveEvery split the work; on
   ]);
   assert.deepEqual(r.saved[0].p_cursor, { history_id: '9100', scan_from: iso(GNOW - 90 * DAY), pending: LISTED.slice(2) }, 'the first save carries the new cursor');
   assert.deepEqual([r.saved[1].p_cursor, r.saved[2].p_cursor], [{ pending: LISTED.slice(4) }, { pending: LISTED.slice(5) }], 'later saves only the queue');
-  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: true, pending: LISTED.length - 5 });
+  assert.deepEqual(r.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: true, pending: LISTED.length - 5, since: GSTART });
   assert.ok(r.saved.every((b) => b.p_started === r.saved[0].p_started), 'one start for the run');
   // History beyond historyPages: stop at the last record read, more (released) even with nothing queued.
   const capped = await gSync({ jobs: { [MB1]: gJob(MB1, { history_id: '8000' }) }, limits: { historyPages: 1 }, history: historyPages(), stored: [] });
   assert.equal(capped.to(`${GMAIL_API}/history?`).length, 1);
   assert.deepEqual(capped.saved.map((b) => [b.p_cursor, b.p_release]), [[{ history_id: '8003', pending: [] }, true]], 'the last record read, released');
   assert.deepEqual(fetched(capped), ['tA']);
-  assert.deepEqual(capped.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: true, pending: 0 });
+  assert.deepEqual(capped.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: true, pending: 0, since: GSTART });
 });
 
 await check('gmail sync: the deadline stops reading (more, claim released); claimed mailboxes share the run’s time', async () => {
@@ -3092,7 +3094,7 @@ await check('gmail sync: the deadline stops reading (more, claim released); clai
   assert.deepEqual(late.saved.map((b) => [b.p_threads.length, b.p_cursor.pending.length, b.p_release]), [[0, LISTED.length, true]]);
 });
 
-await check('gmail sync: Gmail rate limits — one short back-off, then stop with more (no error); during the listing → error, try later', async () => {
+await check('gmail sync: Gmail rate limits — one short back-off, then stop with the claim held and more false (no error); during the listing → error, try later', async () => {
   const limited = (status, body) => () => reply(status, body);
   const rate403 = { error: { code: 403, message: 'User-rate limit exceeded', errors: [{ reason: 'userRateLimitExceeded' }] } };
   for (const [label, answer] of [['429', limited(429, { error: { code: 429, message: 'Too many requests' } })], ['403', limited(403, rate403)]]) {
@@ -3103,8 +3105,11 @@ await check('gmail sync: Gmail rate limits — one short back-off, then stop wit
     assert.deepEqual([once.saved[0].p_threads.map((x) => x.thread_id), once.data.more], [['tA', 'tB', 'tC', 'tDraftFirst'], false]);
     const always = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? answer() : THREADS[id]) });
     assert.deepEqual(always.sleeps, [2000], `${label}: the default back-off, once`);
-    assert.deepEqual(always.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending[0], b.p_release, b.p_error]), [[['tA', 'tB'], 'tC', true, '']]);
-    assert.deepEqual(pick(always.data, ['synced', 'failed', 'more', 'pending']), { synced: 1, failed: 0, more: true, pending: LISTED.length - 2 });
+    assert.deepEqual(fetched(always), ['tA', 'tB', 'tC', 'tC'], `${label}: nothing read after it`);
+    assert.deepEqual(always.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending[0], b.p_release, b.p_error]), [[['tA', 'tB'], 'tC', false, '']],
+      `${label}: the chunk saved, the claim held (due again after its gap)`);
+    assert.deepEqual(pick(always.data, ['synced', 'failed', 'more', 'pending']), { synced: 1, failed: 0, more: false, pending: LISTED.length - 2 }, `${label}: the chain ends`);
+    assert.deepEqual(always.logs, []);
   }
   const listing = await gSync({ list: limited(429, {}) });
   assert.deepEqual(listing.saved.map((b) => [b.p_error, b.p_reconnect, b.p_release, b.p_cursor]), [[GMAIL_BUSY, false, false, {}]]);
@@ -3112,7 +3117,7 @@ await check('gmail sync: Gmail rate limits — one short back-off, then stop wit
   assert.equal(listing.sleeps.length, 1);
 });
 
-await check('gmail sync: a Gmail 500, 502, 503 or 504 is a rate limit — one back-off, then stop with more (no error); profile, listing or history → busy; others not retried', async () => {
+await check('gmail sync: a Gmail 500, 502, 503 or 504 — one back-off and retry; a thread’s twice is skipped (as a 404, counted in the log) and the run goes on; profile, listing or history → busy; others not retried', async () => {
   for (const status of [500, 502, 503, 504]) {
     const answer = () => reply(status, { error: { code: status, message: 'Backend Error' } });
     let n = 0;
@@ -3120,13 +3125,14 @@ await check('gmail sync: a Gmail 500, 502, 503 or 504 is a rate limit — one ba
     assert.deepEqual(once.sleeps, [1234], `${status}: waited once`);
     assert.deepEqual(fetched(once).filter((x) => x === 'tB'), ['tB', 'tB'], `${status}: tried again`);
     assert.deepEqual(once.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_error, b.p_release]), [[['tA', 'tB', 'tC', 'tDraftFirst'], '', false]], `${status}: read normally`);
-    assert.deepEqual(once.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0 });
+    assert.deepEqual(once.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0, since: GSTART });
     const twice = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? answer() : THREADS[id]) });
     assert.deepEqual([twice.sleeps, fetched(twice).filter((x) => x === 'tC')], [[2000], ['tC', 'tC']], `${status}: one back-off, one retry`);
-    assert.deepEqual(twice.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending[0], b.p_release, b.p_error]), [[['tA', 'tB'], 'tC', true, '']],
-      `${status}: the chunk saved with the claim released, no error`);
-    assert.deepEqual(twice.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: true, pending: LISTED.length - 2 });
-    assert.deepEqual(twice.logs, []);
+    assert.deepEqual(fetched(twice).filter((x) => x !== 'tC'), LISTED.filter((x) => x !== 'tC'), `${status}: every other thread still read`);
+    assert.deepEqual(twice.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending, b.p_release, b.p_error]), [[['tA', 'tB', 'tDraftFirst'], [], false, '']],
+      `${status}: skipped, never left at the front of the queue; no error`);
+    assert.deepEqual(twice.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0, since: GSTART });
+    assert.deepEqual(twice.logs, ['google/outreach-gmail-sync: skipped 1 thread(s) after a Gmail server error'], `${status}: a count, nothing else`);
     for (const [step, opts] of [['profile', { profile: answer }], ['list', { list: answer }], ['history', { jobs: { [MB1]: gJob(MB1, { history_id: '8000' }) }, history: answer }]]) {
       const busy = await gSync(opts);
       assert.deepEqual(busy.saved.map((b) => [b.p_error, b.p_reconnect, b.p_release]), [[GMAIL_BUSY, false, false]], `${status} at ${step}`);
@@ -3134,11 +3140,79 @@ await check('gmail sync: a Gmail 500, 502, 503 or 504 is a rate limit — one ba
       assert.deepEqual(busy.logs, [`google/outreach-gmail-sync: mailbox failed at ${step} rate limited`]);
     }
   }
+  // Six at a time, two threads failing: both skipped, one log line counting them.
+  const server = () => reply(503, { error: { code: 503, message: 'Backend Error' } });
+  const two = await gSync({ threads: (id) => (id === 'tA' || id === 'tC' ? server() : THREADS[id]) });
+  assert.deepEqual(two.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending, b.p_release]), [[['tB', 'tDraftFirst'], [], false]]);
+  assert.deepEqual([two.sleeps, two.logs], [[2000, 2000], ['google/outreach-gmail-sync: skipped 2 thread(s) after a Gmail server error']]);
+  gNoTokens(two);
+  // The prior-inbound check of a cold candidate failing the same way skips that thread too.
+  const prior = await gSync({ limits: { parallel: 1 }, prior: (c, q) => (q.includes('dee@example.org') ? server() : reply(200, q.includes('sam@example.org') ? { messages: [{ id: 'older-1' }] } : {})) });
+  assert.deepEqual(prior.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending]), [[['tA', 'tB', 'tDraftFirst'], []]]);
+  assert.deepEqual(prior.logs, ['google/outreach-gmail-sync: skipped 1 thread(s) after a Gmail server error']);
+  // The second answer decides: a rate limit then a server error skips the thread; a server error then a rate limit stops.
+  let k = 0;
+  const thenServer = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? (k++ === 0 ? reply(429, {}) : server()) : THREADS[id]) });
+  assert.deepEqual(thenServer.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending, b.p_release]), [[['tA', 'tB', 'tDraftFirst'], [], false]]);
+  let j = 0;
+  const thenLimit = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? (j++ === 0 ? server() : reply(429, {})) : THREADS[id]) });
+  assert.deepEqual(thenLimit.saved.map((b) => [b.p_threads.map((x) => x.thread_id), b.p_cursor.pending[0], b.p_release]), [[['tA', 'tB'], 'tC', false]]);
+  assert.deepEqual([thenLimit.data.more, thenLimit.logs], [false, []]);
   for (const status of [400, 501]) {
     const r = await gSync({ limits: { parallel: 1 }, threads: (id) => (id === 'tC' ? reply(status, { error: { code: status } }) : THREADS[id]) });
     assert.deepEqual([r.sleeps, fetched(r).filter((x) => x === 'tC')], [[], ['tC']], `${status}: not retried`);
     assert.deepEqual(r.saved.map((b) => [b.p_error, b.p_release]), [[`Gmail returned ${status}.`, false]]);
   }
+});
+
+await check('gmail sync: a rate limit holds only that mailbox — the next one is still read; more false even with history or a queue left', async () => {
+  const limited = () => reply(429, { error: { code: 429, message: 'Too many requests' } });
+  const jobs = { [MB1]: gJob(MB1), [MB2]: gJob(MB2) };
+  const r = await gSync({ body: { force: true }, claim: [MB1, MB2], jobs, limits: { parallel: 1 }, threads: (id, c) => (boxOf(c) === MB1 && id === 'tB' ? limited() : THREADS[id]) });
+  assert.deepEqual(r.saved.map((b) => [b.p_mailbox, b.p_threads.map((x) => x.thread_id), b.p_cursor.pending.length, b.p_release, b.p_error]), [
+    [MB1, ['tA'], LISTED.length - 1, false, ''], [MB2, ['tA', 'tB', 'tC', 'tDraftFirst'], 0, false, ''],
+  ]);
+  assert.deepEqual(r.data, { ok: true, claimed: 2, synced: 2, failed: 0, more: false, pending: LISTED.length - 1, since: GSTART });
+  // Stopped by a rate limit with history still to read: the claim held, more false (the deadline would release, more).
+  const history = { jobs: { [MB1]: gJob(MB1, { history_id: '8000' }) }, limits: { historyPages: 1 }, history: historyPages(), stored: [] };
+  const held = await gSync({ ...history, threads: (id) => (id === 'tA' ? limited() : THREADS[id]) });
+  assert.deepEqual(held.saved.map((b) => [b.p_cursor, b.p_release]), [[{ history_id: '8003', pending: ['tA'] }, false]]);
+  assert.deepEqual(pick(held.data, ['synced', 'more', 'pending']), { synced: 1, more: false, pending: 1 });
+  let t = GNOW;
+  const late = await gSync({ ...history, now: () => (t += 1000), limits: { ...history.limits, deadline: 1000 } });
+  assert.deepEqual(late.saved.map((b) => [b.p_cursor, b.p_release]), [[{ history_id: '8003', pending: ['tA'] }, true]]);
+  assert.equal(late.data.more, true);
+});
+
+await check('gmail sync: since — the chain’s start, made on its first call and passed back; a later forced call’s p_gap is the time since plus 5 s (60 to 600)', async () => {
+  const ago = (ms) => iso(GNOW - ms);
+  for (const [body, gap, since] of [
+    [{}, 600, GSTART], [{ force: true }, 60, GSTART],
+    [{ force: true, since: ago(100000) }, 105, ago(100000)], [{ force: true, since: ago(100400) }, 106, ago(100400)],
+    [{ force: true, since: ago(56000) }, 61, ago(56000)], [{ force: true, since: ago(30000) }, 60, ago(30000)], [{ force: true, since: GSTART }, 60, GSTART],
+    [{ force: true, since: ago(3600000) }, 600, ago(3600000)],
+    [{ force: true, since: '2026-10-20T23:58:20+00:00' }, 105, ago(100000)],
+    [{ since: ago(100000) }, 600, ago(100000)], [{ force: 'yes', since: ago(100000) }, 600, ago(100000)],
+    // Not a time, or in the future: a new chain, starting now.
+    [{ force: true, since: 'yesterday' }, 60, GSTART], [{ force: true, since: '' }, 60, GSTART], [{ force: true, since: null }, 60, GSTART],
+    [{ force: true, since: GNOW - 100000 }, 60, GSTART], [{ force: true, since: iso(GNOW + 1000) }, 60, GSTART], [{ since: iso(GNOW + 1000) }, 600, GSTART],
+  ]) {
+    const r = await gSync({ body, claim: [] });
+    assert.deepEqual([r.to(`${RPC}/outreach_gmail_claim`).map((c) => c.json()), r.data], [[{ p_gap: gap, p_limit: 3 }], {
+      ok: true, claimed: 0, synced: 0, failed: 0, more: false, pending: 0, since,
+    }], JSON.stringify(body));
+  }
+  // 70 s into a chain: a mailbox claimed at its start (MB1) or during it (MB4) isn't due again; a released one (MB2) and
+  // one last claimed over a minute before the chain (MB3) are. Without since, MB1 would be due again (p_gap 60).
+  const claimedAt = { [MB1]: GNOW, [MB2]: null, [MB3]: GNOW - 61000, [MB4]: GNOW + 30000 };
+  const at = GNOW + 70000;
+  const due = (gap) => Object.keys(claimedAt).filter((mb) => claimedAt[mb] === null || claimedAt[mb] < at - gap * 1000);
+  const routes = { [`${RPC}/outreach_gmail_claim`]: (c) => reply(200, due(c.json().p_gap)) };
+  const jobs = { [MB1]: gJob(MB1), [MB2]: gJob(MB2), [MB3]: gJob(MB3), [MB4]: gJob(MB4) };
+  const later = await gSync({ body: { force: true, since: GSTART }, now: () => at, routes, jobs });
+  assert.deepEqual([later.to(`${RPC}/outreach_gmail_claim`)[0].json().p_gap, later.saved.map((b) => b.p_mailbox), later.data.since], [75, [MB2, MB3], GSTART]);
+  const fresh = await gSync({ body: { force: true }, now: () => at, routes, jobs });
+  assert.deepEqual([fresh.saved.map((b) => b.p_mailbox), fresh.data.since], [[MB1, MB2, MB3], iso(at)], 'a new chain');
 });
 
 await check('gmail sync: a full claim (p_limit mailboxes) answers more, so Sync now reaches a 4th due mailbox; fewer claimed and none with more → more false', async () => {
@@ -3148,14 +3222,14 @@ await check('gmail sync: a full claim (p_limit mailboxes) answers more, so Sync 
   const routes = { [`${RPC}/outreach_gmail_claim`]: (c) => reply(200, due.splice(0, c.json().p_limit)) };
   const first = await gSync({ body: { force: true }, jobs, routes });
   assert.deepEqual(first.to(`${RPC}/outreach_gmail_claim`).map((c) => c.json()), [{ p_gap: 60, p_limit: 3 }]);
-  assert.deepEqual(first.data, { ok: true, claimed: 3, synced: 3, failed: 0, more: true, pending: 0 }, 'others may be due');
+  assert.deepEqual(first.data, { ok: true, claimed: 3, synced: 3, failed: 0, more: true, pending: 0, since: GSTART }, 'others may be due');
   assert.deepEqual(first.saved.map((b) => [b.p_mailbox, b.p_release]), [[MB1, false], [MB2, false], [MB3, false]], 'none of the three has more');
   const second = await gSync({ body: { force: true }, jobs, routes });
-  assert.deepEqual(second.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0 });
+  assert.deepEqual(second.data, { ok: true, claimed: 1, synced: 1, failed: 0, more: false, pending: 0, since: GSTART });
   assert.deepEqual(second.saved.map((b) => b.p_mailbox), [MB4]);
-  assert.deepEqual((await gSync({ body: { force: true }, jobs, routes })).data, { ok: true, claimed: 0, synced: 0, failed: 0, more: false, pending: 0 });
+  assert.deepEqual((await gSync({ body: { force: true }, jobs, routes })).data, { ok: true, claimed: 0, synced: 0, failed: 0, more: false, pending: 0, since: GSTART });
   // Two claimed of three, neither with more: done. Two of two: more.
-  assert.deepEqual((await gSync({ claim: [MB1, MB2], jobs })).data, { ok: true, claimed: 2, synced: 2, failed: 0, more: false, pending: 0 });
+  assert.deepEqual((await gSync({ claim: [MB1, MB2], jobs })).data, { ok: true, claimed: 2, synced: 2, failed: 0, more: false, pending: 0, since: GSTART });
   const full = await gSync({ claim: [MB1, MB2], jobs, limits: { mailboxes: 2 } });
   assert.deepEqual([full.to(`${RPC}/outreach_gmail_claim`)[0].json().p_limit, full.data.more], [2, true]);
   gNoTokens(first);
@@ -3197,7 +3271,7 @@ await check('gmail sync: one mailbox’s failure never stops the others; reconne
     profile: (mb) => (mb === MB2 ? reply(400, { error: { code: 400, message: `Bad request for ${BOXES[MB2]}` } }) : reply(200, { emailAddress: BOXES[mb], historyId: '1' })),
   });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.data, { ok: true, claimed: 3, synced: 1, failed: 2, more: true, pending: 0 }, 'a full claim: more');
+  assert.deepEqual(r.data, { ok: true, claimed: 3, synced: 1, failed: 2, more: true, pending: 0, since: GSTART }, 'a full claim: more');
   assert.deepEqual(r.saved.map((b) => [b.p_mailbox, b.p_error, b.p_reconnect, b.p_threads.length]), [
     [MB1, GMAIL_RECONNECT, true, 0], [MB2, 'Gmail returned 400.', false, 0], [MB3, '', false, 4],
   ]);
@@ -3225,7 +3299,7 @@ await check('gmail sync: one mailbox’s failure never stops the others; reconne
 await check('gmail sync: no connection, a mailbox gone mid-run, a failed save or a failed known read — counted, never fatal', async () => {
   // No connection (job null): skipped, nothing saved, the next one still syncs.
   const none = await gSync({ claim: [MB1, MB2], jobs: { [MB2]: gJob(MB2) } });
-  assert.deepEqual(none.data, { ok: true, claimed: 2, synced: 1, failed: 0, more: false, pending: 0 });
+  assert.deepEqual(none.data, { ok: true, claimed: 2, synced: 1, failed: 0, more: false, pending: 0, since: GSTART });
   assert.deepEqual(none.saved.map((b) => b.p_mailbox), [MB2]);
   // outreach_gmail_save → false (disconnected or inactive meanwhile): stop that mailbox, neither synced nor failed.
   const gone = await gSync({ limits: { saveEvery: 2 }, save: () => reply(200, false) });
@@ -3236,13 +3310,13 @@ await check('gmail sync: no connection, a mailbox gone mid-run, a failed save or
     claim: [MB1, MB2], jobs: { [MB1]: gJob(MB1), [MB2]: gJob(MB2) },
     save: (c) => (c.json().p_mailbox === MB1 ? reply(500, { code: 'XX000', message: 'boom' }) : reply(200, true)),
   });
-  assert.deepEqual(failing.data, { ok: true, claimed: 2, synced: 1, failed: 1, more: false, pending: 0 });
+  assert.deepEqual(failing.data, { ok: true, claimed: 2, synced: 1, failed: 1, more: false, pending: 0, since: GSTART });
   assert.deepEqual(failing.saved.map((b) => [b.p_mailbox, b.p_error]), [[MB1, ''], [MB1, 'Could not save the Gmail sync.'], [MB2, '']]);
   assert.ok(failing.logs.some((l) => l.startsWith('google/outreach-gmail-sync: POST rpc/outreach_gmail_save → 500')));
   gNoTokens(failing);
   // rpc outreach_gmail_known failing: every claimed mailbox gets the error, without reading its connection or Gmail.
   const blind = await gSync({ claim: [MB1, MB2], jobs: { [MB1]: gJob(MB1), [MB2]: gJob(MB2) }, known: () => reply(500, { message: 'boom' }) });
-  assert.deepEqual(blind.data, { ok: true, claimed: 2, synced: 0, failed: 2, more: false, pending: 0 });
+  assert.deepEqual(blind.data, { ok: true, claimed: 2, synced: 0, failed: 2, more: false, pending: 0, since: GSTART });
   assert.deepEqual(blind.saved.map((b) => [b.p_mailbox, b.p_error, b.p_reconnect, b.p_release]), [[MB1, 'Could not read Cortex’s contacts.', false, false], [MB2, 'Could not read Cortex’s contacts.', false, false]]);
   assert.equal(blind.to(`${RPC}/outreach_gmail_job`).length + blind.gmail.length + blind.to(TOKEN_URL).length, 0);
   // An errored mailbox's queue still counts as pending.
