@@ -91,8 +91,9 @@ export default function Board({ board, embedded = false }) {
       (!person || (it.values.people || []).includes(person)) &&
       (!status || it.values.status === status))),
   })), [board.groups, q, person, status, added]);
-  // Sort (editors): every group's tasks in a new saved order, for everyone; dragging carries on from there.
-  const sorts = editable ? [dated && { id: 'due', label: 'Due date', icon: CalendarClock }, prioritised && { id: 'priority', label: 'Priority', icon: Flag }].filter(Boolean) : [];
+  // Sort (editors, in the Table view, where the order shows as set): every group's tasks in a new saved order, for
+  // everyone; dragging carries on from there.
+  const sorts = editable && view === 'table' ? [dated && { id: 'due', label: 'Due date', icon: CalendarClock }, prioritised && { id: 'priority', label: 'Priority', icon: Flag }].filter(Boolean) : [];
 
   const add = (groupId, name) => {
     const id = actions.addItem(board.id, groupId, name);

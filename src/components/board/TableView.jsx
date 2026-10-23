@@ -160,7 +160,10 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
       if (!ours(e)) return;
       e.preventDefault();
       e.stopPropagation();
-      if (it.id === drag) { land(null, null); return; } // onto itself: stays
+      // Onto itself, or the edge it already sits against in the rows shown: it stays (with a filter on, placing it
+      // would move it past hidden tasks with nothing changing on screen).
+      const k = g.items.findIndex((i) => i.id === it.id);
+      if (it.id === drag || (half(e) === 'before' ? g.items[k - 1] : g.items[k + 1])?.id === drag) { land(null, null); return; }
       if (half(e) === 'before') { land(g.id, it.id); return; }
       const rest = others(g.id);
       land(g.id, rest[rest.findIndex((i) => i.id === it.id) + 1]?.id ?? null);
@@ -168,7 +171,13 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
   });
   const onTop = (g) => (readOnly ? {} : {
     onDragOver: (e) => { if (ours(e)) hover(e, { group: g.id, top: true }); },
-    onDrop: (e) => { if (!ours(e)) return; e.preventDefault(); e.stopPropagation(); land(g.id, others(g.id)[0]?.id ?? null); },
+    onDrop: (e) => {
+      if (!ours(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (g.items[0]?.id === drag) { land(null, null); return; } // already the first shown: stays
+      land(g.id, others(g.id)[0]?.id ?? null);
+    },
   });
   const onEnd = (g) => (readOnly ? {} : {
     onDragOver: (e) => { if (ours(e)) hover(e, { group: g.id }); },
@@ -188,8 +197,10 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
         const at = all.findIndex((x) => x.id === g.id);
         const total = at >= 0 ? all[at].items.length : g.items.length;
         const gKey = `g:${g.id}`;
+        // Over a part of the group that takes no drop (its open heading, the gaps, the status bar): no drop line.
         return (
-          <section key={g.id} className="mt-8" onDragLeave={drag ? leave : undefined}>
+          <section key={g.id} className="mt-8" onDragLeave={drag ? leave : undefined}
+            onDragOver={drag ? () => setOver((o) => (o ? null : o)) : undefined}>
             {/* A collapsed group takes a drop on its heading (to its end); an open one on its table. */}
             <div {...(collapsed[g.id] ? onEnd(g) : {})} className={cn('rounded-[14px]', collapsed[g.id] && endHere(g) && 'drag-over')}>
             <GroupHead group={g} count={g.items.length} first={at <= 0} last={at < 0 || at === all.length - 1}
@@ -231,6 +242,9 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                                     e.dataTransfer.effectAllowed = 'move';
                                     const row = e.currentTarget.closest('tr');
                                     if (row) e.dataTransfer.setDragImage(row, 24, row.offsetHeight / 2);
+                                    // React misses dragend when the row is gone by then (moved or hidden by someone
+                                    // else mid-drag); the handle itself still gets it.
+                                    e.currentTarget.addEventListener('dragend', () => { setDrag(null); setOver(null); }, { once: true });
                                     setDrag(it.id);
                                   }}
                                   onDragEnd={() => { setDrag(null); setOver(null); }}

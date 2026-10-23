@@ -449,9 +449,11 @@ version that uses it.
   edited and deleted in place, and a task moves to another group or board from its drawer. In the Table view (desktop)
   a task is dragged by its handle up or down its group or into another group of the board (onto a row: before or after
   it; the column headings: the group's top; the rest of a group, or a collapsed group's heading: its end), placed by
-  "before this task" so search and filters don't upset the full order. **Sort** in the top bar (Due date: the soonest
-  first, no date last; Priority: High first; ties keep their order) rewrites every group's saved order for everyone,
-  and dragging carries on from there; every view shows that saved order. Both need edit on the board; the order syncs
+  "before this task" so search and filters don't upset the full order (a drop where the task already sits among the
+  rows shown changes nothing). **Sort** in the top bar of the Table view (Due date: the soonest first, no date last,
+  then by priority; Priority: High first, then by due date; tasks equal on both keep their order) rewrites every
+  group's saved order for everyone, and dragging carries on from there. The Table view shows that saved order; Kanban's
+  columns list each group's tasks one group after another. Both need edit on the board; the order syncs
   as `items.position` (no migration). Deleting a board, a group
   or a task asks first; a subtask or an update goes at once. A read-only board shows none of this. My Work → On boards
   lists open tasks from every board you can see, with the board's name.
