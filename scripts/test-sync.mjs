@@ -784,6 +784,26 @@ await check('diff: moving a task to another board writes that task with its new 
   assert.deepEqual(['board_id', 'group_id', 'position'].map((k) => within[0].row[k]), ['b-web', 'g-2', 0]);
 });
 
+await check('diff: dragging a task (withItemPlaced) writes only the tasks whose place changed; Sort on a sorted group writes nothing', async () => {
+  const { withItemPlaced, sortedItems } = await import('../src/lib/boards.js');
+  const place = (itemId, groupId, beforeId) => opsAfter((s) => {
+    const b = boardOf(s, 'b-web');
+    b.groups = withItemPlaced(b.groups, itemId, groupId, beforeId);
+  });
+  const up = place('it-2', 'g-1', 'it-1');
+  assert.deepEqual(labels(up), ['upsert items it-1', 'upsert items it-2']);
+  assert.deepEqual(up.map((o) => [o.key, o.row.position]).sort(), [['it-1', 1], ['it-2', 0]]);
+  // Into another group, between two tasks: it and the task after it; the group it left had nothing after it.
+  const across = place('it-3', 'g-1', 'it-2');
+  assert.deepEqual(labels(across), ['upsert items it-2', 'upsert items it-3']);
+  assert.deepEqual(across.map((o) => [o.key, o.row.group_id, o.row.position]).sort(), [['it-2', 'g-1', 2], ['it-3', 'g-1', 1]]);
+  assert.deepEqual(across.find((o) => o.key === 'it-3').row.board_id, 'b-web');
+  const sorted = opsAfter((s) => {
+    boardOf(s, 'b-web').groups.forEach((g) => { g.items = sortedItems(g.items, 'due', { priorities: ['High', 'Medium', 'Low'] }); });
+  });
+  assert.deepEqual(sorted, []);
+});
+
 await check('diff: a new outreach note, an edited note or mailbox, a moved mailbox or a new sheet link writes only that row (0007)', () => {
   const note = { id: 'on-new', mailbox: 'mb-1', pinned: false, body: 'Short subject lines', author: U1, createdAt: '2026-10-09T00:00:00.000Z' };
   const added = opsAfter((s) => { s.outreachNotes.unshift(note); });
@@ -1651,6 +1671,51 @@ await check('boards: a task or group moves only within its audience (sameAudienc
     [lp, tp], [lp, lp], [ownPage('stu'), ownPage('stu')], // team ⇄ team, one board, one person's page
     [lp, ownPage('stu')], [ownPage('stu'), lp], [ownPage('stu'), ownPage('sam')], [lp, mk], [lp, null], [null, lp],
   ].map(([a, b]) => sameAudience(a, b)), [true, true, true, false, false, false, false, false, false]);
+});
+
+await check('boards: withItemPlaced puts a task before another (or at a group’s end), in its group or another; null when nothing changes', () => {
+  const { withItemPlaced } = boardsLib;
+  const t = (id) => ({ id, name: id, values: {} });
+  const groups = () => [{ id: 'a', items: [t('1'), t('2'), t('3')] }, { id: 'b', items: [t('4')] }, { id: 'c', items: [] }];
+  const ids = (gs) => gs && gs.map((g) => `${g.id}:${g.items.map((i) => i.id).join('')}`).join(' ');
+  assert.equal(ids(withItemPlaced(groups(), '3', 'a', '1')), 'a:312 b:4 c:', 'up');
+  assert.equal(ids(withItemPlaced(groups(), '1', 'a', '3')), 'a:213 b:4 c:', 'down, before the last');
+  assert.equal(ids(withItemPlaced(groups(), '1', 'a', null)), 'a:231 b:4 c:', 'to the end');
+  assert.equal(ids(withItemPlaced(groups(), '2', 'b', '4')), 'a:13 b:24 c:', 'into another group, before a task');
+  assert.equal(ids(withItemPlaced(groups(), '2', 'c', null)), 'a:13 b:4 c:2', 'into an empty group');
+  assert.equal(ids(withItemPlaced(groups(), '2', 'b', 'gone')), 'a:13 b:42 c:', 'a before-task not in that group: its end');
+  // With a filter hiding task 2, a drop below task 1 names the next task in the full order (2): 3 lands between them.
+  assert.equal(ids(withItemPlaced(groups(), '3', 'a', '2')), 'a:132 b:4 c:');
+  for (const [item, group, before] of [['1', 'a', '2'], ['3', 'a', null], ['1', 'a', '1'], ['x', 'a', null], ['1', 'zz', null]]) {
+    assert.equal(withItemPlaced(groups(), item, group, before), null, `${item} → ${group} before ${before}`);
+  }
+  const g = groups();
+  const out = withItemPlaced(g, '3', 'a', '1');
+  assert.equal(out[0].items[0], g[0].items[2], 'the task object itself moves');
+  assert.equal(ids(g), 'a:123 b:4 c:', 'the groups passed in are left as they were');
+  assert.equal(out[1], g[1], 'a group not involved is the same object');
+  assert.equal(withItemPlaced(null, '1', 'a', null), null);
+});
+
+await check('boards: sortedItems — Sort by due date (soonest first, no date last, ties by priority) or by priority (High first, ties '
+  + 'by due); tasks that tie keep their order', () => {
+  const { sortedItems } = boardsLib;
+  const P = ['High', 'Medium', 'Low'];
+  const t = (id, due, priority) => ({ id, values: { due, priority } });
+  const list = [t('a', '', 'Low'), t('b', '2026-11-02', ''), t('c', '2026-10-30', 'High'), t('d', '2026-10-30', 'Medium'),
+    t('e', '', 'High'), t('f', 'not a date', ''), t('g', '2026-10-30T00:00:00Z', 'Medium')];
+  const ids = (l) => l.map((i) => i.id).join('');
+  const before = ids(list);
+  assert.equal(ids(sortedItems(list, 'due', { priorities: P })), 'cdgbeaf');
+  assert.equal(ids(sortedItems(list, 'priority', { priorities: P })), 'cedgabf');
+  assert.equal(ids(list), before, 'the list passed in is left as it was');
+  assert.equal(ids(sortedItems([t('x', '', 'Urgent'), t('y', '', ''), t('z', '', 'Low')], 'priority', { priorities: P })), 'zxy',
+    'a value that isn’t one of the priorities sorts as none');
+  assert.equal(ids(sortedItems(list, 'priority')), ids(sortedItems(list, 'due')), 'no priorities: by due alone');
+  const same = [t('p', '2026-10-30', 'High'), t('q', '2026-10-30', 'High'), t('r', '2026-10-30', 'High')];
+  assert.equal(ids(sortedItems(same, 'due', { priorities: P })), 'pqr');
+  assert.equal(ids(sortedItems([{ id: 'm', values: { when: '2026-12-01' } }, { id: 'n', values: { when: '2026-11-01' } }], 'due', { dateKey: 'when' })), 'nm');
+  assert.deepEqual([sortedItems(null, 'due'), sortedItems([], 'priority')], [[], []]);
 });
 
 await check('boards: lookups (findBoard, personalBoard, teamBoards, boardOfItem, boardItems)', () => {

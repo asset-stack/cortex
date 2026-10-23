@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronDown, MessageCircle, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, GripVertical, MessageCircle, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { findBoard } from '@/lib/boards';
 import { itemWord } from '@/data/boards';
@@ -12,6 +12,10 @@ const ICON = 'grid h-8 w-8 shrink-0 place-items-center rounded-full dimmer hover
 const ROW_ACTION = 'md:opacity-0 md:group-hover/row:opacity-100 md:group-focus-within/row:opacity-100 focus-visible:opacity-100';
 const MENU_ITEM = 'flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent';
 const taskName = (it) => it.name.trim() || 'Untitled task';
+// Dragging a task (desktop): its id under this type only, so nothing else (text fields, other boards' tabs) takes it.
+const DRAG_TYPE = 'application/x-cortex-task';
+const LINE_ABOVE = 'shadow-[inset_0_2px_0_0_#5fd4ff]';
+const LINE_BELOW = 'shadow-[inset_0_-2px_0_0_#5fd4ff]';
 const tasksGo = (n) => (n ? `Its ${n} ${n === 1 ? 'task is' : 'tasks are'} deleted too.` : null);
 
 function StatusBar({ items }) {
@@ -108,6 +112,12 @@ function GroupHead({ group, count, first, last, collapsed, renaming, readOnly, t
   );
 }
 
+/**
+ * The board's groups as tables. Editors drag a task by its handle (desktop) up or down its group or into another group
+ * of this board: onto a row (its upper half: before it; lower half: after it), the column headings (the group's top),
+ * or the rest of the group, or a collapsed group's heading (the group's end). `groups` may be filtered by search or the filters: a drop
+ * is placed against the board's full order (actions.placeItem: before a given task).
+ */
 export default function TableView({ boardId, schema, groups, onOpen, onAdd, readOnly = false }) {
   const { state, actions } = useStore();
   const all = findBoard(state, boardId)?.groups || []; // `groups` may be filtered; counts and ends come from the board
@@ -125,6 +135,48 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
   const keep = (key) => (el) => { if (el) focusable.current[key] = el; else delete focusable.current[key]; };
   const renamed = (key) => (byKey) => { setRenaming(null); if (byKey) setRefocus(key); };
 
+  // Dragging: the task being dragged, and where it would land ({ group, row, place: 'before' | 'after' } on a row,
+  // { group, top: true } on the headings, { group } for the group's end).
+  const [drag, setDrag] = useState(null);
+  const [over, setOver] = useState(null);
+  const ours = (e) => Boolean(drag) && Array.from(e.dataTransfer?.types || []).includes(DRAG_TYPE);
+  const others = (groupId) => (all.find((x) => x.id === groupId)?.items || []).filter((i) => i.id !== drag);
+  const land = (groupId, beforeId) => {
+    const id = drag;
+    setDrag(null);
+    setOver(null);
+    if (id && groupId) actions.placeItem(boardId, id, groupId, beforeId);
+  };
+  const half = (e) => { const r = e.currentTarget.getBoundingClientRect(); return e.clientY < r.top + r.height / 2 ? 'before' : 'after'; };
+  const hover = (e, next) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    setOver((o) => (o && o.group === next.group && o.row === next.row && o.place === next.place && o.top === next.top ? o : next));
+  };
+  const onRow = (g, it) => (readOnly ? {} : {
+    onDragOver: (e) => { if (ours(e)) hover(e, { group: g.id, row: it.id, place: half(e) }); },
+    onDrop: (e) => {
+      if (!ours(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (it.id === drag) { land(null, null); return; } // onto itself: stays
+      if (half(e) === 'before') { land(g.id, it.id); return; }
+      const rest = others(g.id);
+      land(g.id, rest[rest.findIndex((i) => i.id === it.id) + 1]?.id ?? null);
+    },
+  });
+  const onTop = (g) => (readOnly ? {} : {
+    onDragOver: (e) => { if (ours(e)) hover(e, { group: g.id, top: true }); },
+    onDrop: (e) => { if (!ours(e)) return; e.preventDefault(); e.stopPropagation(); land(g.id, others(g.id)[0]?.id ?? null); },
+  });
+  const onEnd = (g) => (readOnly ? {} : {
+    onDragOver: (e) => { if (ours(e)) hover(e, { group: g.id }); },
+    onDrop: (e) => { if (!ours(e)) return; e.preventDefault(); e.stopPropagation(); land(g.id, null); },
+  });
+  const leave = (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(null); };
+  const endHere = (g) => over && over.group === g.id && !over.row && !over.top;
+
   const addGroup = () => {
     const id = actions.addGroup(boardId, 'New group');
     if (id) setRenaming(`g:${id}`); // type its name straight away
@@ -137,7 +189,9 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
         const total = at >= 0 ? all[at].items.length : g.items.length;
         const gKey = `g:${g.id}`;
         return (
-          <section key={g.id} className="mt-8">
+          <section key={g.id} className="mt-8" onDragLeave={drag ? leave : undefined}>
+            {/* A collapsed group takes a drop on its heading (to its end); an open one on its table. */}
+            <div {...(collapsed[g.id] ? onEnd(g) : {})} className={cn('rounded-[14px]', collapsed[g.id] && endHere(g) && 'drag-over')}>
             <GroupHead group={g} count={g.items.length} first={at <= 0} last={at < 0 || at === all.length - 1}
               collapsed={collapsed[g.id]} renaming={renaming === gKey} readOnly={readOnly} toggleRef={keep(gKey)}
               onToggle={() => setCollapsed((c) => ({ ...c, [g.id]: !c[g.id] }))}
@@ -145,13 +199,14 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
               onRenamed={renamed(gKey)}
               onMove={(dir) => actions.moveGroup(boardId, g.id, dir)}
               onDelete={() => setConfirm({ title: `Delete ${g.name}?`, body: tasksGo(total), run: () => actions.removeGroup(boardId, g.id) })} />
+            </div>
             {!collapsed[g.id] && (
               <>
-                <div className="mt-3 overflow-x-auto scroll-thin rounded-[24px] glass">
+                <div {...onEnd(g)} className={cn('mt-3 overflow-x-auto scroll-thin rounded-[24px] glass', endHere(g) && 'drag-over')}>
                   <table className="w-full min-w-[820px] border-collapse text-[13.5px]">
                     <thead>
-                      <tr className="text-[12px] dimmer">
-                        <th className="w-12 p-3"><span className="sr-only">Done</span></th>
+                      <tr {...onTop(g)} className={cn('text-[12px] dimmer', over?.group === g.id && over.top && LINE_BELOW)}>
+                        <th className={cn('w-12 p-3', !readOnly && 'md:w-16')}><span className="sr-only">Done</span></th>
                         <th className="text-left p-3 font-medium">{itemWord(schema)}</th>
                         <th className="w-10"><span className="sr-only">Updates</span></th>
                         {schema.columns.map((c) => (
@@ -165,8 +220,24 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                         const tKey = `t:${it.id}`;
                         const name = taskName(it);
                         return (
-                          <tr key={it.id} className="group/row border-t rowline hover:bg-white/5">
-                            <td className="p-3 text-center">
+                          <tr key={it.id} {...onRow(g, it)}
+                            className={cn('group/row border-t rowline hover:bg-white/5', drag === it.id && 'opacity-50',
+                              over?.row === it.id && (over.place === 'before' ? LINE_ABOVE : LINE_BELOW))}>
+                            <td className="relative p-3 text-center">
+                              {!readOnly && renaming !== tKey && (
+                                <span draggable aria-hidden="true" title="Drag to move"
+                                  onDragStart={(e) => {
+                                    e.dataTransfer.setData(DRAG_TYPE, it.id);
+                                    e.dataTransfer.effectAllowed = 'move';
+                                    const row = e.currentTarget.closest('tr');
+                                    if (row) e.dataTransfer.setDragImage(row, 24, row.offsetHeight / 2);
+                                    setDrag(it.id);
+                                  }}
+                                  onDragEnd={() => { setDrag(null); setOver(null); }}
+                                  className={cn('absolute left-1 top-1/2 hidden -translate-y-1/2 cursor-grab rounded-md p-0.5 dimmer hover:text-white active:cursor-grabbing md:block', ROW_ACTION)}>
+                                  <GripVertical className="h-4 w-4" />
+                                </span>
+                              )}
                               <input type="checkbox" checked={it.done} aria-label={`Mark ${it.name} done`} disabled={readOnly}
                                 onChange={() => actions.updateItem(boardId, it.id, { done: !it.done, values: { status: it.done ? 'Not started' : 'Done' } })}
                                 className="h-4 w-4 accent-[#5fd4ff] disabled:opacity-60" />

@@ -11,7 +11,7 @@ import { TABLES, assemble, diff, flatten, normalizeRow, stable } from '@/data/ba
 import { createSync } from '@/data/backend/sync';
 import { GateScreen, Spinner } from '@/components/auth/AuthGate';
 import { LEVELS, MODULES, ROLES, STAFF_DEFAULTS, canEdit, canEditBoard, canView, isAdmin, isSuperadmin } from '@/lib/access';
-import { BOARD_MODULES, FIRST_GROUP, FIRST_GROUP_COLOR, GROUP_COLORS, findBoard, sameAudience } from '@/lib/boards';
+import { BOARD_MODULES, FIRST_GROUP, FIRST_GROUP_COLOR, GROUP_COLORS, findBoard, sameAudience, sortedItems, withItemPlaced } from '@/lib/boards';
 import {
   PLAN_MONTHS, addDays, addMonths, clientCreatedLocal, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isPlanDate,
   isYmd, makeTodo, mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
@@ -417,6 +417,29 @@ function createActions(mutate, mode) {
       group.items = group.items.filter((i) => i !== item);
       g.items.push(item);
       return true;
+    }),
+    // Within the board: to group `toGroupId`, just before task `beforeId` (null: the group's end). Dragging in the Table
+    // view (src/components/board/TableView.jsx).
+    placeItem: (boardId, itemId, toGroupId, beforeId = null) => onBoard(boardId, (d, b) => {
+      const next = withItemPlaced(b.groups, itemId, toGroupId, beforeId);
+      if (!next) return false;
+      b.groups = next;
+      return true;
+    }),
+    // Sort in the board's top bar: every group's tasks in a new saved order, 'due' (the soonest due first) or 'priority'
+    // (High first); people drag them about from there. Only on boards with that column.
+    sortItems: (boardId, by) => onBoard(boardId, (d, b) => {
+      const cols = BOARD_SCHEMAS[b.module]?.columns || [];
+      const date = cols.find((c) => c.type === 'date');
+      const priority = cols.find((c) => c.key === 'priority');
+      if (!(by === 'due' ? date : by === 'priority' ? priority : null)) return false;
+      const opts = { dateKey: date?.key, priorities: Object.keys(priority?.options || {}) };
+      let changed = false;
+      b.groups.forEach((g) => {
+        const next = sortedItems(g.items, by, opts);
+        if (next.some((it, n) => it !== g.items[n])) { g.items = next; changed = true; }
+      });
+      return changed;
     }),
 
     // Groups (Active, Backlog …) on a board. → id

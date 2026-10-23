@@ -5,12 +5,11 @@ import { AvatarStack } from '@/components/ui';
 import { shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
-export default function KanbanView({ boardId, groups, sortDue, onOpen, readOnly = false }) {
+export default function KanbanView({ boardId, groups, onOpen, readOnly = false }) {
   const { actions } = useStore();
   const [over, setOver] = useState(null);
-  // Board sorts within each group; columns mix groups, so sort the combined list too.
+  // Columns mix groups: their tasks in board order (each group's saved order, the groups in theirs).
   const all = groups.flatMap((g) => g.items);
-  if (sortDue) all.sort((a, b) => (a.values.due || '9999').localeCompare(b.values.due || '9999'));
   // View access: cards still open the task, but nothing can be dragged or dropped.
   const drop = readOnly ? () => ({}) : (s) => ({
     onDragOver: (e) => { e.preventDefault(); setOver(s); },

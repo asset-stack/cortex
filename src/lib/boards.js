@@ -42,6 +42,40 @@ export const boardItems = (board) => (board?.groups || []).flatMap((g) => g.item
  *  boards, or within one person's page), so who can see it never changes. same_audience() in 0006. */
 export const sameAudience = (a, b) => Boolean(a && b) && a.module === b.module && (a.owner || '') === (b.owner || '');
 
+/**
+ * A board's groups with task `itemId` placed in group `toGroupId` just before task `beforeId` (null, or a task that isn't
+ * in that group: at its end). Working from "before this task" rather than an index keeps a drop right while search or
+ * filters hide rows. → the new groups (the task itself unchanged), or null when the task or group isn't on the board or
+ * nothing would change.
+ */
+export function withItemPlaced(groups, itemId, toGroupId, beforeId = null) {
+  const list = groups || [];
+  const from = list.find((g) => g.items.some((i) => i.id === itemId));
+  const to = list.find((g) => g.id === toGroupId);
+  if (!from || !to || beforeId === itemId) return null;
+  const item = from.items.find((i) => i.id === itemId);
+  const out = list.map((g) => (g === from || g === to ? { ...g, items: g.items.filter((i) => i.id !== itemId) } : g));
+  const target = out[list.indexOf(to)];
+  const at = beforeId ? target.items.findIndex((i) => i.id === beforeId) : -1;
+  target.items.splice(at < 0 ? target.items.length : at, 0, item);
+  const ids = (g) => g.items.map((i) => i.id).join('\u0000');
+  return from === to && ids(target) === ids(from) ? null : out;
+}
+
+/**
+ * A group's tasks in Sort's order. `by`: 'due' (the soonest due first, no date last; ties by priority) or 'priority'
+ * (in `priorities`' order, e.g. High, Medium, Low, then none; ties by the soonest due). Stable: tasks that tie keep their
+ * order. `dateKey`: the board's date column.
+ */
+export function sortedItems(items, by, { priorities = [], dateKey = 'due' } = {}) {
+  const day = (i) => { const v = String(i.values?.[dateKey] ?? ''); return /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : ''; };
+  const due = (a, b) => { const x = day(a); const y = day(b); return x === y ? 0 : !x ? 1 : !y ? -1 : x < y ? -1 : 1; };
+  const rank = (i) => { const k = priorities.indexOf(i.values?.priority); return k < 0 ? priorities.length : k; };
+  const pri = (a, b) => rank(a) - rank(b);
+  const cmp = by === 'priority' ? (a, b) => pri(a, b) || due(a, b) : (a, b) => due(a, b) || pri(a, b);
+  return (items || []).map((it, n) => [it, n]).sort(([a, x], [b, y]) => cmp(a, b) || x - y).map(([it]) => it);
+}
+
 export const firstName = (name) => String(name ?? '').trim().split(/\s+/)[0] || 'Someone';
 
 /** "Landing Page", or "Shem’s Projects" for a personal board. */

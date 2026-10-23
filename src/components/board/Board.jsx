@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowDown, ArrowUp, ArrowUpDown, Calendar, CalendarDays, CalendarOff, Columns3, ListFilter, MoreHorizontal, Pencil, Plus, Table2, Trash2, User,
+  ArrowDown, ArrowUp, ArrowUpDown, Calendar, CalendarClock, CalendarDays, CalendarOff, Columns3, Flag, ListFilter, MoreHorizontal, Pencil, Plus,
+  Table2, Trash2, User,
 } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { useAccess } from '@/lib/access';
@@ -55,17 +56,18 @@ export default function Board({ board, embedded = false }) {
   const schema = BOARD_SCHEMAS[board.module];
   const title = boardTitle(state, board);
   const dated = hasDates(schema); // no dates: no calendar, no sort by due
+  const prioritised = (schema?.columns || []).some((c) => c.key === 'priority');
   const word = itemWord(schema);
   const views = dated ? VIEWS : VIEWS.filter((v) => v.id !== 'calendar');
   const [view, setView] = useState('table');
   const [q, setQ] = useState('');
   const [person, setPerson] = useState('');
   const [status, setStatus] = useState('');
-  const [sortDue, setSortDue] = useState(false);
   const [openId, setOpenId] = useState(() => hashParam('item')); // My Work links to #/<module>/<board>?item=<id>
   const [added, setAdded] = useState([]); // created under the current filters; shown even if they don't match
   const [personAnchor, setPersonAnchor] = useState(null);
   const [statusAnchor, setStatusAnchor] = useState(null);
+  const [sortAnchor, setSortAnchor] = useState(null);
   const [optionsAnchor, setOptionsAnchor] = useState(null);
   const [popover, setPopover] = useState(null);
   const [renaming, setRenaming] = useState(false);
@@ -81,14 +83,16 @@ export default function Board({ board, embedded = false }) {
     if (!document.activeElement || document.activeElement === document.body) heading.current?.focus({ preventScroll: true });
   }, [embedded]);
 
-  const groups = useMemo(() => (board.groups || []).map((g) => {
-    let items = g.items.filter((it) => added.includes(it.id) || (
+  // Tasks show in their saved order (dragged, or set by Sort); search and the filters only hide some.
+  const groups = useMemo(() => (board.groups || []).map((g) => ({
+    ...g,
+    items: g.items.filter((it) => added.includes(it.id) || (
       (!q || it.name.toLowerCase().includes(q.toLowerCase())) &&
       (!person || (it.values.people || []).includes(person)) &&
-      (!status || it.values.status === status)));
-    if (sortDue) items = [...items].sort((a, b) => (a.values.due || '9999').localeCompare(b.values.due || '9999'));
-    return { ...g, items };
-  }), [board.groups, q, person, status, sortDue, added]);
+      (!status || it.values.status === status))),
+  })), [board.groups, q, person, status, added]);
+  // Sort (editors): every group's tasks in a new saved order, for everyone; dragging carries on from there.
+  const sorts = editable ? [dated && { id: 'due', label: 'Due date', icon: CalendarClock }, prioritised && { id: 'priority', label: 'Priority', icon: Flag }].filter(Boolean) : [];
 
   const add = (groupId, name) => {
     const id = actions.addItem(board.id, groupId, name);
@@ -158,7 +162,11 @@ export default function Board({ board, embedded = false }) {
         <span ref={setStatusAnchor}>
           <IconButton icon={ListFilter} label={status ? `Status: ${status}` : 'Filter by status'} active={!!status} onClick={() => setPopover(popover === 'status' ? null : 'status')} />
         </span>
-        {dated && <IconButton icon={ArrowUpDown} label={sortDue ? 'Sorted by due date' : 'Sort by due date'} active={sortDue} onClick={() => setSortDue((s) => !s)} />}
+        {sorts.length > 0 && (
+          <span ref={setSortAnchor}>
+            <IconButton icon={ArrowUpDown} label="Sort" active={popover === 'sort'} onClick={() => setPopover(popover === 'sort' ? null : 'sort')} />
+          </span>
+        )}
       </div>
 
       <Popover anchor={personAnchor} open={popover === 'person'} onClose={() => setPopover(null)} width={190} align="right">
@@ -177,6 +185,17 @@ export default function Board({ board, embedded = false }) {
           <button type="button" aria-pressed={!status} className="pill pill-empty" onClick={() => { setStatus(''); setPopover(null); }}>All statuses</button>
         </div>
       </Popover>
+      {sorts.length > 0 && (
+        <Popover anchor={sortAnchor} open={popover === 'sort'} onClose={() => setPopover(null)} width={170} align="right">
+          <div className="flex flex-col">
+            {sorts.map(({ id, label, icon: Icon }) => (
+              <button key={id} type="button" className={MENU_ITEM} onClick={() => { setPopover(null); actions.sortItems(board.id, id); }}>
+                <Icon className="h-4 w-4 dim" aria-hidden="true" />{label}
+              </button>
+            ))}
+          </div>
+        </Popover>
+      )}
       {options && (
         <Popover anchor={optionsAnchor} open={popover === 'options'} onClose={() => setPopover(null)} width={190} align="right">
           <div className="flex flex-col">
@@ -205,7 +224,7 @@ export default function Board({ board, embedded = false }) {
 
       {board.calendar && !board.owner && dated && view !== 'calendar' && <BoardCalendar groups={groups} onOpen={setOpenId} />}
       {view === 'table' && <TableView boardId={board.id} schema={schema} groups={groups} onOpen={setOpenId} onAdd={add} readOnly={!editable} />}
-      {view === 'kanban' && <KanbanView boardId={board.id} groups={groups} sortDue={sortDue} onOpen={setOpenId} readOnly={!editable} />}
+      {view === 'kanban' && <KanbanView boardId={board.id} groups={groups} onOpen={setOpenId} readOnly={!editable} />}
       {view === 'calendar' && <CalendarView groups={groups} onOpen={setOpenId} />}
 
       {/* Keyed by task so its local drafts (name, update) never carry over to another task. */}

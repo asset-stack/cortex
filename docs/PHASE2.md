@@ -426,10 +426,13 @@ version that uses it.
 - **App**: `state.boards` is an array (`docs/BACKEND.md` §1): Projects, Marketing, then (0007, §13) Outreach and
   Clients; personal boards first (by owner's name), then team boards in order. Sync: `boards` → `board_groups` → `items`; team board positions count
   within their module, personal boards are 0. Pure helpers in `src/lib/boards.js` (`findBoard`, `personalBoard`,
-  `teamBoards`, `boardTitle`, `boardHref`, `resolveBoard`). Store actions take a **board id** (was the module key):
+  `teamBoards`, `boardTitle`, `boardHref`, `resolveBoard`, `withItemPlaced`, `sortedItems`). Store actions take a
+  **board id** (was the module key):
   `addBoard(module, name) → id` (with one group), `renameBoard`, `moveBoard(id, ±1)`, `removeBoard` (admins, team
   boards); `addItem(boardId, groupId, name) → id`, `updateItem`, `deleteItem`,
-  `moveItem(boardId, itemId, { board, group })`; `addGroup → id`, `renameGroup`, `moveGroup(boardId, groupId, ±1)`,
+  `moveItem(boardId, itemId, { board, group })` (to the end of another group or board),
+  `placeItem(boardId, itemId, groupId, beforeId)` (within the board, just before a task; null: the group's end),
+  `sortItems(boardId, 'due' | 'priority')`; `addGroup → id`, `renameGroup`, `moveGroup(boardId, groupId, ±1)`,
   `removeGroup`; `addUpdate`, `editUpdate`, `removeUpdate`; `addSubtask`, `toggleSubtask`, `renameSubtask`,
   `removeSubtask`; `importRecords('tasks', records, { board: boardId, groupId, groupName })`. Demo `migrate()`
   converts a saved `{ projects: { groups }, marketing: { groups } }` the way 0006 does and gives every user missing one
@@ -443,7 +446,13 @@ version that uses it.
   may read depends on whether their owners are staff.
 - **Screens**: the sidebar lists each module's boards under it. Admins add team boards, and rename, move and delete
   them; on any board you can edit, groups, tasks, subtasks and updates (yours, or anyone's for admins) are renamed or
-  edited and deleted in place, and a task moves to another group or board from its drawer. Deleting a board, a group
+  edited and deleted in place, and a task moves to another group or board from its drawer. In the Table view (desktop)
+  a task is dragged by its handle up or down its group or into another group of the board (onto a row: before or after
+  it; the column headings: the group's top; the rest of a group, or a collapsed group's heading: its end), placed by
+  "before this task" so search and filters don't upset the full order. **Sort** in the top bar (Due date: the soonest
+  first, no date last; Priority: High first; ties keep their order) rewrites every group's saved order for everyone,
+  and dragging carries on from there; every view shows that saved order. Both need edit on the board; the order syncs
+  as `items.position` (no migration). Deleting a board, a group
   or a task asks first; a subtask or an update goes at once. A read-only board shows none of this. My Work → On boards
   lists open tasks from every board you can see, with the board's name.
 - **Tests**: `scripts/test-db.mjs` phase 6 (starting boards and where the groups went, personal boards for existing
