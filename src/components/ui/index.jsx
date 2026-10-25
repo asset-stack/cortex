@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Check, Plus, Search, User, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useStore, useUsers } from '@/data/store';
+import { canEditBoard } from '@/lib/access';
 
 export function Avatar({ userId, size = 28, ring = true, className }) {
   const users = useUsers();
@@ -245,8 +246,10 @@ export function PeoplePicker({ value, onChange, size = 28, max = 3, label = 'Peo
 }
 
 /** A board task's Owner (the owner column): one person, kept as `values.people` = [id]. A task that still has several
- *  people shows the first and +N until someone picks one. `onChange(id)` ('' for Unassigned). */
-export function OwnerPicker({ value, onChange, size = 28, label = 'Owner', readOnly = false }) {
+ *  people shows the first and +N until someone picks one. Only active people who can edit `board` are offered: an owner
+ *  must be able to update their task (a task handed to someone who can't would be in nobody's Priorities); its current
+ *  owner stays listed. `onChange(id)` ('' for Unassigned). */
+export function OwnerPicker({ value, onChange, board, size = 28, label = 'Owner', readOnly = false }) {
   const { state } = useStore();
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
@@ -254,7 +257,7 @@ export function OwnerPicker({ value, onChange, size = 28, label = 'Owner', readO
   if (readOnly) return <AvatarStack userIds={ids} size={size} max={1} label={label} />;
   const names = ids.map((id) => state.users.find((u) => u.id === id)?.name).filter(Boolean).join(', ');
   const owner = ids.length === 1 ? ids[0] : ''; // with several people, nobody is ticked: picking one makes them the owner
-  const people = state.users.filter((u) => u.active !== false || ids.includes(u.id)); // deactivated staff can't be picked
+  const people = state.users.filter((u) => u.id === owner || (u.active !== false && (!board || canEditBoard(state, board, u.id))));
   return (
     <>
       <button type="button" ref={setAnchor} onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}

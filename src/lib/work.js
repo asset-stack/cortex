@@ -1,7 +1,7 @@
 // Who owns a board task and what comes first (docs/PHASE2.md §17): a task's owner, handing it over, My Work →
 // Priorities, the admins' Needs attention list, @mentions in task updates and a client's linked tasks. Pure, with
 // relative imports, so scripts/test-sync.mjs runs it in Node.
-import { canViewBoard } from './access.js';
+import { canEditBoard, canViewBoard } from './access.js';
 import { mentionedUserIds } from './mentionText.js';
 import { BOARD_SCHEMAS, PRIORITY, withPeople } from '../data/boards.js';
 
@@ -90,8 +90,9 @@ export function workload(rows) {
 
 /**
  * Needs attention (admins, My Work): open tasks on the team boards with an owner column (Projects, Marketing, Outreach,
- * Clients) that are overdue (due before `today`), Stuck, have no owner or several people, or no priority. The ones with
- * the most pressing reason first, then board order. Each row: { item, board, reasons (in ATTENTION's order), client }.
+ * Clients) that are overdue (due before `today`), Stuck, have no owner (nobody, or only people who can't edit the board:
+ * deactivated, or without access, so nobody can take it on) or several people, or no priority. The ones with the
+ * most pressing reason first, then board order. Each row: { item, board, reasons (in ATTENTION's order), client }.
  */
 export function needsAttention(state, { today = '', viewer = state?.me } = {}) {
   const rows = (state?.boards || []).filter((b) => !b.owner && hasOwner(b) && canViewBoard(state, b, viewer)).flatMap((board) => board.groups
@@ -102,7 +103,7 @@ export function needsAttention(state, { today = '', viewer = state?.me } = {}) {
       const reasons = [
         due && today && due < today && 'Overdue',
         v.status === 'Stuck' && 'Stuck',
-        !people.length && 'No owner',
+        !people.some((id) => canEditBoard(state, board, id)) && 'No owner',
         people.length > 1 && 'Several people',
         hasPriority(board) && !PRIORITIES.includes(v.priority) && 'No priority',
       ].filter(Boolean);

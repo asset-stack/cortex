@@ -120,7 +120,8 @@ function GroupHead({ group, count, first, last, collapsed, renaming, readOnly, t
  */
 export default function TableView({ boardId, schema, groups, onOpen, onAdd, readOnly = false }) {
   const { state, actions } = useStore();
-  const all = findBoard(state, boardId)?.groups || []; // `groups` may be filtered; counts and ends come from the board
+  const board = findBoard(state, boardId);
+  const all = board?.groups || []; // `groups` may be filtered; counts and ends come from the board
   const [collapsed, setCollapsed] = useState({});
   const [renaming, setRenaming] = useState(null); // 'g:<group id>' | 't:<task id>'
   const [confirm, setConfirm] = useState(null); // { title, body, run }
@@ -278,7 +279,7 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                               if (c.type === 'owner') {
                                 return (
                                   <td key={c.key} className="text-center">
-                                    <OwnerPicker value={it.values.people || []} label={`${c.label} for ${it.name}`} readOnly={readOnly}
+                                    <OwnerPicker value={it.values.people || []} board={board} label={`${c.label} for ${it.name}`} readOnly={readOnly}
                                       onChange={(v) => actions.updateItem(boardId, it.id, { values: { owner: v } })} />
                                   </td>
                                 );

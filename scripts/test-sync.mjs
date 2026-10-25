@@ -1747,7 +1747,7 @@ await check('boards: resolveBoard — the addressed board, else the one holding 
   const visible = all.filter((x) => x.id !== 'stus');
   assert.equal(at(visible, 'projects', 'stus'), 'web', 'a sub you cannot see falls back');
   assert.equal(at(visible, 'projects', '', 'it-stu'), 'web', 'so does a task on a board you cannot see');
-  assert.equal(at(all.filter((x) => x.owner), 'projects'), 'own', 'no team board you can see: your own page');
+  assert.equal(at([all[1], all[0]], 'projects'), 'own', 'no team board you can see: your own page, wherever it sits');
   assert.equal(at(all.filter((x) => x.id !== 'own'), 'projects'), 'web', 'no own page: the first team board');
   assert.equal(at([all[1]], 'projects'), 'stus', "only someone else's page: that one");
   assert.equal(at([], 'projects'), null);
@@ -1830,6 +1830,8 @@ const taskState = () => {
     boards: [
       bd('p-stu', 'projects', [it('own-1', { people: ['stu'], priority: 'Low', status: 'In progress' })], 'stu'),
       bd('p-sue', 'projects', [it('sue-1', { people: ['sue'] })], 'sue'),
+      bd('p-ann', 'projects', [it('ann-own', { people: ['ann'], priority: 'High' },
+        { updates: [{ id: 'u5', user: 'sue', text: '@ann see this', ts: '2026-10-24T14:00:00Z' }] })], 'ann'),
       bd('web', 'projects', [
         it('w-none', { people: ['stu'], due: '2026-10-20' }),
         it('w-high-late', { people: ['stu'], priority: 'High', due: '2026-10-30', status: 'In progress' }),
@@ -1845,7 +1847,8 @@ const taskState = () => {
       bd('sales', 'outreach', [it('o-1', { people: ['stu'], priority: 'Urgent' }, { updates: [{ id: 'u4', user: 'ann', text: '@stu call them', ts: '2026-10-25T00:00:00Z' }] })]),
       bd('demos', 'clients', [it('d-1', { people: ['stu'], priority: 'Urgent', client: 'c-1', status: 'In progress' }), it('d-2', { people: ['ann'], client: 'c-1', status: 'Done' }),
         it('d-3', { people: ['ann'], client: 'gone', priority: 'Low' })]),
-      bd('wip', 'pipeline', [it('wip-1', { people: ['stu'], status: 'In progress' })]),
+      bd('wip', 'pipeline', [it('wip-1', { people: ['stu'], status: 'In progress' }),
+        it('wip-2', { people: ['ann', 'stu'], assignedBy: 'sue', assignedAt: '2026-10-24T12:00:00Z' })]),
     ],
   };
 };
@@ -1856,41 +1859,55 @@ await check('priorities: My Work → Priorities is the open tasks someone is on,
   const now = Date.parse('2026-10-25T00:00:00Z');
   // Stu: Outreach is none for staff, so Sales Tasks isn't there; Work in Progress is (its Contact).
   const stu = work.prioritiesFor(st, 'stu', { today: '2026-10-25', now, viewer: 'stu' });
-  assert.equal(names(stu), 'w-urgent d-1 w-high-soon w-high-late own-1 w-none m-1 wip-1');
+  assert.equal(names(stu), 'w-urgent d-1 w-high-soon w-high-late own-1 w-none m-1 wip-1 wip-2');
   const by = Object.fromEntries(stu.map((r) => [r.item.id, r]));
   assert.deepEqual([by['w-urgent'].isNew, by['w-urgent'].from, by['d-1'].isNew, by['d-1'].from], [true, 'ann', false, '']);
   assert.deepEqual([by['w-none'].overdue, by['w-high-soon'].overdue, by['w-none'].priority, by['d-1'].priority], [true, false, '', 'Urgent']);
   assert.equal(by['d-1'].client?.name, 'Example Council');
   assert.equal(by['w-high-late'].client, null);
   assert.deepEqual(work.workload(stu), { urgent: 2, inProgress: 5 }, "Work in Progress' row isn't a task");
-  // New lasts two days, and only for its owner.
+  // New lasts two days, and only for its owner (Stu is second on wip-2, handed to Ann by Sue).
   assert.equal(work.prioritiesFor(st, 'stu', { today: '2026-10-27', now: now + 2 * 864e5, viewer: 'stu' })[0].isNew, false);
+  assert.equal(by['wip-2'].isNew, false);
+  const annWip = work.prioritiesFor(st, 'ann', { today: '2026-10-25', now }).find((r) => r.item.id === 'wip-2');
+  assert.deepEqual([annWip.isNew, annWip.from], [true, 'sue']);
   // Ann (admin) looking at Stu's: what Stu sees, so still no Sales Tasks; her own includes Outreach.
   assert.equal(names(work.prioritiesFor(st, 'stu', { today: '2026-10-25', now, viewer: 'ann' })), names(stu));
-  assert.equal(names(work.prioritiesFor(st, 'ann', { today: '2026-10-25', now })), 'w-high-soon w-ann d-3');
-  // Stu looking at Ann's (the screen never offers it): only boards both see.
-  assert.equal(names(work.prioritiesFor(st, 'ann', { viewer: 'stu' })), 'w-high-soon w-ann d-3');
+  assert.equal(names(work.prioritiesFor(st, 'ann', { today: '2026-10-25', now })), 'w-high-soon ann-own w-ann d-3 wip-2', 'High: the dated one first');
+  // Stu looking at Ann's (the screen never offers it, but an admin may look at the SuperAdmin's): only boards both see,
+  // so not Ann's own page.
+  assert.equal(names(work.prioritiesFor(st, 'ann', { viewer: 'stu' })), 'w-high-soon w-ann d-3 wip-2');
   assert.deepEqual([work.prioritiesFor(st, '', {}), work.prioritiesFor({}, 'stu', {})], [[], []]);
   assert.deepEqual(work.workload([]), { urgent: 0, inProgress: 0 });
   assert.deepEqual([work.MAX_URGENT, work.MAX_IN_PROGRESS], [1, 2]);
 });
 
-await check('priorities: Needs attention lists open team-board tasks that are overdue, Stuck, have no owner or several people, or no priority', () => {
+await check('priorities: Needs attention lists open team-board tasks that are overdue, Stuck, have no owner (or only people who can’t edit the board) or several people, or no priority', () => {
   const st = taskState();
   const rows = work.needsAttention(st, { today: '2026-10-25' });
   assert.deepEqual(rows.map((r) => [r.item.id, r.reasons.join('+')]), [
     ['w-none', 'Overdue+No priority'],
     ['w-high-soon', 'Stuck+Several people'],
     ['w-nobody', 'No owner'],
+    ['o-1', 'No owner'], // Stu can't open Outreach (staff default none)
+    ['d-1', 'No owner'], // … and only views Clients (staff default view), so can't update it either
     ['m-1', 'No priority'],
-  ], "personal pages, done tasks, Work in Progress and tasks with a priority and one owner aren't listed");
-  // Board access: as Stu (staff), the same rows (Outreach's Sales Tasks has none here); with Projects none, only Marketing's.
+  ], "personal pages, done tasks, Work in Progress and tasks with a priority and an owner who can edit aren't listed");
+  // Board access: as Stu (staff), the boards Stu sees (not Sales Tasks); with Projects none, Marketing's and Clients'.
   const asStu = { ...st, me: 'stu' };
-  assert.deepEqual(work.needsAttention(asStu, { today: '2026-10-25' }).map((r) => r.item.id), ['w-none', 'w-high-soon', 'w-nobody', 'm-1']);
+  assert.deepEqual(work.needsAttention(asStu, { today: '2026-10-25' }).map((r) => r.item.id), ['w-none', 'w-high-soon', 'w-nobody', 'd-1', 'm-1']);
   const hidden = { ...asStu, moduleAccess: [{ userId: 'stu', module: 'projects', level: 'none' }] };
-  assert.deepEqual(work.needsAttention(hidden, { today: '2026-10-25' }).map((r) => r.item.id), ['m-1']);
+  assert.deepEqual(work.needsAttention(hidden, { today: '2026-10-25' }).map((r) => r.item.id), ['d-1', 'm-1']);
+  // Clients edit for Stu: d-1 has an owner again.
+  const clientsEdit = { ...st, moduleAccess: [{ userId: 'stu', module: 'clients', level: 'edit' }] };
+  assert.equal(work.needsAttention(clientsEdit, { today: '2026-10-25' }).some((r) => r.item.id === 'd-1'), false);
+  // A deactivated owner is no owner.
+  const gone = { ...st, users: st.users.map((u) => (u.id === 'ann' ? { ...u, active: false } : u)), me: 'sue' };
+  assert.deepEqual(work.needsAttention(gone, { today: '2026-10-25' }).filter((r) => ['w-ann', 'd-3'].includes(r.item.id)).map((r) => r.reasons.join('+')),
+    ['No owner', 'No owner']);
   // No date to compare with: nothing is overdue. A client that's gone is no client.
-  assert.deepEqual(work.needsAttention(st).map((r) => r.reasons.join('+')), ['Stuck+Several people', 'No owner', 'No priority', 'No priority']);
+  assert.deepEqual(work.needsAttention(st).map((r) => r.reasons.join('+')),
+    ['Stuck+Several people', 'No owner', 'No owner', 'No owner', 'No priority', 'No priority']);
   const d3 = { ...st, boards: st.boards.map((b) => (b.id === 'demos' ? { ...b, groups: [{ ...b.groups[0], items: [{ ...b.groups[0].items[2], values: { client: 'gone', people: [] } }] }] } : b)) };
   assert.equal(work.needsAttention(d3).find((r) => r.item.id === 'd-3').client, null);
   assert.deepEqual(work.ATTENTION, ['Overdue', 'Stuck', 'No owner', 'Several people', 'No priority']);
@@ -1903,7 +1920,8 @@ await check('priorities: task updates that @name someone are their mentions (new
   assert.deepEqual(work.taskMentions(st, stu, { viewer: 'stu' }).map((m) => [m.id, m.user, m.item.id, m.board.id, m.kind]),
     [['task:u1', 'ann', 'w-urgent', 'web', 'task'], ['task:u3', 'sue', 'm-1', 'post', 'task']], "Sales Tasks' update isn't on a board Stu sees");
   assert.deepEqual(work.taskMentions(st, stu, { viewer: 'ann' }).map((m) => m.id), ['task:u1', 'task:u3'], 'an admin looking: the same');
-  assert.deepEqual(work.taskMentions(st, st.users[0]).map((m) => m.id), ['task:u2']);
+  assert.deepEqual(work.taskMentions(st, st.users[0]).map((m) => m.id), ['task:u5', 'task:u2'], 'newest first');
+  assert.deepEqual(work.taskMentions(st, st.users[0], { viewer: 'stu' }).map((m) => m.id), ['task:u2'], 'not from a board the viewer can’t see');
   assert.deepEqual(work.taskMentions(st, st.users.find((u) => u.id === 'off')), [], 'an inactive person is never named');
   assert.deepEqual([work.taskMentions(st, null), work.taskMentions(st, {})], [[], []]);
 });

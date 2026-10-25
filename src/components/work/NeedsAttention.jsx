@@ -20,7 +20,7 @@ export default function NeedsAttention() {
   const shown = all ? rows : rows.slice(0, SHOWN);
 
   return (
-    <section aria-label="Needs attention" className="glass self-start rounded-[24px] p-5">
+    <section aria-label="Needs attention" className="glass rounded-[24px] p-5">
       <h2>
         <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
           className="flex w-full items-center gap-2 text-left font-extrabold text-[16px]">

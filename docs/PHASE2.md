@@ -359,7 +359,7 @@ version that uses it.
 
 - **Owner's decisions**: Projects and Marketing get sub-menus in the sidebar. Marketing: Daily Automation, Posting
   schedule, Campaigns, Events. Projects: first each person's own page (*David’s Projects*), then the team boards
-  (Landing Page, Tender Portal, …). The SuperAdmin sees everyone's page, an admin their own and staff's, staff only
+  (Landing Page, Tender Portal, …; team boards first since §17). The SuperAdmin sees everyone's page, an admin their own and staff's, staff only
   their own. Boards, groups, tasks, subtasks and updates can be renamed or edited and deleted by whoever may edit them.
   Staff edit the team Projects boards too (0003 had made Projects view-only for staff; 0006 redefines `module_level()`
   with the Projects default back to `edit`, and `STAFF_DEFAULTS` to match; per-person overrides still win). Tasks
@@ -440,7 +440,8 @@ version that uses it.
   `removeSubtask`; `importRecords('tasks', records, { board: boardId, groupId, groupName })`. Demo `migrate()`
   converts a saved `{ projects: { groups }, marketing: { groups } }` the way 0006 does and gives every user missing one
   a personal page; the demo seed has David's, Josh's and Hello's pages and the starting team boards.
-- **Routes**: `#/projects` opens your own page (else the first team board), `#/marketing` the first Marketing board;
+- **Routes**: `#/projects` opens your own page (else the first team board; since §17 the first team board you can see,
+  else your own page), `#/marketing` the first Marketing board;
   `#/projects/<board id>` / `#/marketing/<board id>` a board, and `?item=<id>` opens a task on it (`boardHref()`).
   Old `#/projects?item=<id>` and `#/admin?item=<id>` links open the board that holds the task. A board you can't see
   falls back to the module's default (`resolveBoard()`). The address is then replaced with the board on screen, so
@@ -925,8 +926,10 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   two days. An amber note when they have more than one Urgent task or more than two In progress (`workload()`;
   Work in Progress rows don't count): a team rule, not a block.
 - **Needs attention** (admins, My Work, `NeedsAttention.jsx`): open tasks on the team boards with an owner column that
-  are **Overdue**, **Stuck**, have **No owner** or **Several people**, or **No priority** (`needsAttention()`, by the
-  board access rules), the most pressing first; six shown, then *Show all*. Each opens the task to fix it.
+  are **Overdue**, **Stuck**, have **No owner** (nobody, or only people who can't edit the board: deactivated or
+  without access) or **Several people**, or **No priority** (`needsAttention()`, by the board access rules), the most
+  pressing first; six shown, then *Show all*. Each opens the task to fix it. The Owner picker offers only active people
+  who can edit the board, so the owner can always update their task and it lands in their Priorities.
 - **Mentions**: `mentionsOf()` adds task updates that `@name` the person (by name; `@here` names no one) on the boards
   they see (`taskMentions()`), newest first with the chat ones; each opens its task.
 - **Client work**: Clients boards (Demos, Previews …) have a **Client** column first (type `client`, `values.client` = a

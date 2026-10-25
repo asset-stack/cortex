@@ -9,8 +9,8 @@ import Board from './Board';
 import NewBoardModal from './NewBoard';
 
 /**
- * A module's board: the one #/<module>/<sub> names, else the module's default (your own page for Projects, the first
- * team board for Marketing). Outreach and Clients have none: #/<module> is their own page (MODULE_HOMES), where a board
+ * A module's board: the one #/<module>/<sub> names, else the module's default (its first team board; for Projects with
+ * none you can see, your own page). Outreach and Clients have none: #/<module> is their own page (MODULE_HOMES), where a board
  * of theirs that's gone leads back.
  */
 export default function BoardPage({ module, sub }) {

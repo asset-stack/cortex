@@ -7,8 +7,9 @@ import { MAX_IN_PROGRESS, MAX_URGENT, prioritiesFor, workload } from '@/lib/work
 import { localYmd, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
-/** The open tasks `personId` owns on every board they see, Urgent first (src/lib/work.js prioritiesFor): what to work
- *  on next. New marks a task someone else handed them in the last two days. */
+/** The open tasks `personId` is on (their own, and any still shared until one owner is picked) on every board they see,
+ *  Urgent first (src/lib/work.js prioritiesFor): what to work on next. New marks a task someone else handed them in the
+ *  last two days. */
 export default function Priorities({ personId }) {
   const { state } = useStore();
   const users = useUsers();

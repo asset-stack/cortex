@@ -20,9 +20,10 @@ Anyone can set the owner and the priority. If two things feel Urgent, ask an adm
 
 ## Start the day in My Work
 1. **Today**: your to-dos for the day.
-2. **Priorities**: every open task you own, Urgent first. Work from the top.
+2. **Priorities**: every open task you own (and any still shared, until one owner is picked), Urgent first. Work from
+   the top.
 3. Keep at most **2 tasks In progress**. Finish or pause one before starting another.
-4. Stuck? Set the status to **Stuck** and say why in an update. An admin sees it in Needs attention.
+4. Stuck? Set the status to **Stuck** and say why in an update. On a team board, an admin sees it in Needs attention.
 
 ## Where work goes
 - **Projects**: business-as-usual work on the team boards. Your own page is for personal notes.

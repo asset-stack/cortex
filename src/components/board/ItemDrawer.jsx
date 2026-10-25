@@ -81,7 +81,7 @@ export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly 
                 <span className="text-[12px] dimmer">{c.label}</span>
                 {c.type === 'owner' && (
                   <div>
-                    <OwnerPicker value={item.values.people || []} label={c.label} size={32} readOnly={readOnly}
+                    <OwnerPicker value={item.values.people || []} board={board} label={c.label} size={32} readOnly={readOnly}
                       onChange={(v) => actions.updateItem(boardId, item.id, { values: { owner: v } })} />
                   </div>
                 )}
