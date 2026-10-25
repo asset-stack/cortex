@@ -4,7 +4,7 @@ import { CATEGORIES } from '@/data/boards';
 import { LabelPicker } from '@/components/ui';
 import { useAccess } from '@/lib/access';
 import { boardHref } from '@/lib/boards';
-import { itemOfTodo } from '@/lib/work';
+import { itemOfTodo, todoItemId } from '@/lib/work';
 import { formatMinutes } from '@/lib/timesheet';
 import { shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
@@ -30,9 +30,10 @@ function TodoRow({ todo: t, showDay, moveTo }) {
   const { isAdmin } = useAccess();
   const mine = t.assignee === state.me || isAdmin; // tick, recategorise, move (the store checks the same)
   const removable = isAdmin || t.createdBy === state.me;
-  // Not onto a day that already has this routine's (or this automation's) to-do: the database keeps one.
+  // Not onto a day that already has this routine's (or this automation's, or this task's) to-do: one each a day.
   const movable = moveTo && mine && !state.todos.some((x) => x.id !== t.id && x.assignee === t.assignee && x.day === moveTo.day
-    && ((t.routineId && x.routineId === t.routineId) || (t.source === 'automation' && x.source === 'automation' && x.ref === t.ref)));
+    && ((t.routineId && x.routineId === t.routineId) || (t.source === 'automation' && x.source === 'automation' && x.ref === t.ref)
+      || (todoItemId(t) && todoItemId(x) === todoItemId(t))));
   const title = t.title.trim() || 'Untitled';
   const task = itemOfTodo(state, t); // Do today: the board task it's for, while you can see it (gone or moved: none)
   return (

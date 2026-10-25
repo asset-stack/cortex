@@ -52,7 +52,7 @@ export default function MyTasks({ rows, personId, waiting = false, act = false, 
                   <span className="sr-only">Priority: </span>{priority || 'None'}
                 </span>
                 <div className="min-w-0 flex-1 basis-[calc(100%-80px)] sm:basis-auto">
-                  <a href={boardHref(board, item.id)} className="break-words font-semibold hover:underline">{name}</a>
+                  <a id={`task-${item.id}`} href={boardHref(board, item.id)} className="break-words font-semibold hover:underline">{name}</a>
                   <div className="mt-0.5 truncate text-[12.5px] dimmer" title={where}>
                     {waiting && from && <span className="text-amber-200">From {firstName(users[from]?.name)} · {ago(item.values.assignedAt)} · </span>}
                     {where}
@@ -65,18 +65,21 @@ export default function MyTasks({ rows, personId, waiting = false, act = false, 
                   {shortDate(due)}{overdue && <span className="sr-only"> (overdue)</span>}
                 </span>
                 {canAccept && (
-                  <button type="button" onClick={() => actions.acceptItem(board.id, item.id)} aria-label={`Accept ${name}`} className={cn(ACTION, 'btn-primary')}>
+                  // Accepted, it moves to My tasks: focus follows it there rather than falling to the page.
+                  <button type="button" aria-label={`Accept ${name}`} className={cn(ACTION, 'btn-primary')}
+                    onClick={() => { if (actions.acceptItem(board.id, item.id)) requestAnimationFrame(() => document.getElementById(`task-${item.id}`)?.focus()); }}>
                     <Check className="h-3.5 w-3.5" aria-hidden="true" />Accept
                   </button>
                 )}
-                {canPlan && (onToday ? (
-                  <span className={cn(ACTION, 'chip dimmer')}><Check className="h-3.5 w-3.5" aria-hidden="true" />On today</span>
-                ) : (
-                  <button type="button" onClick={() => actions.addTodoForItem(board.id, item.id, { assignee: personId })}
-                    aria-label={`Do ${name} today`} className={cn(ACTION, 'chip hover:bg-white/15')}>
-                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />Do today
+                {canPlan && (
+                  // One button either way, so focus stays on it once the task is on today.
+                  <button type="button" aria-disabled={onToday ? 'true' : undefined} aria-label={onToday ? `${name} is on today` : `Do ${name} today`}
+                    onClick={() => { if (!onToday) actions.addTodoForItem(board.id, item.id, { assignee: personId }); }}
+                    className={cn(ACTION, 'chip', onToday ? 'cursor-default dimmer' : 'hover:bg-white/15')}>
+                    {onToday ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Plus className="h-3.5 w-3.5" aria-hidden="true" />}
+                    {onToday ? 'On today' : 'Do today'}
                   </button>
-                ))}
+                )}
               </li>
             );
           })}

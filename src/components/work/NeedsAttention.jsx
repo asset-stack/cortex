@@ -17,7 +17,8 @@ const TINT = {
 export default function NeedsAttention() {
   const { state } = useStore();
   const today = localYmd();
-  const rows = useMemo(() => needsAttention(state, { today }), [state, today]);
+  const now = Math.floor(Date.now() / 6e4) * 6e4; // to the minute (the page re-renders every minute), for Not accepted
+  const rows = useMemo(() => needsAttention(state, { today, now }), [state, today, now]);
   const [open, setOpen] = useState(true);
   const [all, setAll] = useState(false);
   const shown = all ? rows : rows.slice(0, SHOWN);

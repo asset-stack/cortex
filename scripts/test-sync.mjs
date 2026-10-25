@@ -1931,10 +1931,15 @@ await check('priorities: the Dashboard’s tasks are the open tasks someone is o
   assert.equal(by['d-1'].client?.name, 'Example Council');
   assert.equal(by['w-high-late'].client, null);
   assert.deepEqual(work.workload(stu), { waiting: 1, urgent: 2, inProgress: 5, overdue: 1, open: 7 }, "Work in Progress' rows aren't tasks");
-  // Waiting only for its owner (Stu is second on wip-2, handed to Ann by Sue).
+  // Waiting only for its owner, and only on a board with an owner column: wip-2 (Work in Progress, handed to Ann by Sue,
+  // Stu second) waits on nobody, so it stays in their lists.
   assert.equal(by['wip-2'].waiting, false);
   const annWip = work.prioritiesFor(st, 'ann', { today: '2026-10-25' }).find((r) => r.item.id === 'wip-2');
-  assert.deepEqual([annWip.waiting, annWip.from], [true, 'sue']);
+  assert.deepEqual([annWip.waiting, annWip.from], [false, '']);
+  const annTask = { ...st, boards: st.boards.map((b) => (b.id === 'web' ? { ...b, groups: [{ ...b.groups[0], items: [...b.groups[0].items,
+    { id: 'w-handed', name: 'w-handed', values: { people: ['ann'], assignedBy: 'sue', assignedAt: '2026-10-24T12:00:00Z' }, done: false }] }] } : b)) };
+  const handedRow = work.prioritiesFor(annTask, 'ann', { today: '2026-10-25' }).find((r) => r.item.id === 'w-handed');
+  assert.deepEqual([handedRow.waiting, handedRow.from], [true, 'sue']);
   // Ann (admin) looking at Stu's: what Stu sees, so still no Sales Tasks; her own includes Outreach.
   assert.equal(names(work.prioritiesFor(st, 'stu', { today: '2026-10-25', viewer: 'ann' })), names(stu));
   assert.equal(names(work.prioritiesFor(st, 'ann', { today: '2026-10-25' })), 'w-high-soon ann-own w-ann d-3 wip-2', 'High: the dated one first');

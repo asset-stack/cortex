@@ -961,8 +961,12 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   never copies. A task's category is where it lives, shown as a breadcrumb (`Clients › Previews › Northside Diocese`,
   `Operations › BAU`; `whereOf()`); there is no separate Department field that could disagree with the board.
 - **Owner's decisions**: ship §17 first (done), then this. General business work lives in **Operations** (Projects
-  renamed) with boards. **Everyone** opens the Team pages; personal notes stay private. New work is **accepted** by its
-  owner. No migration: everything is in `items.values` (jsonb) and `todos` as they are.
+  renamed) with boards. **Everyone** opens the Team pages; personal notes stay off them. New work is **accepted** by its
+  owner. Tasks and to-dos need no schema change (`items.values` is jsonb; `todos` as they are). One read rule changes:
+  `0011_team_access_read.sql` lets every active teammate read everyone's `module_access` levels (it was each person's
+  own, and admins all), because the Team pages, the Owner picker and New task work out what *another* person can see and
+  edit (`canViewBoard` / `canEditBoard` for them); without it, to staff every other staff member looked like the staff
+  defaults. Levels aren't secret; only the SuperAdmin still changes them. `scripts/test-db.mjs` phase 11.
 - **Dashboard** (`#/dashboard`, `src/pages/Dashboard.jsx`; `#/work` redirects there): **Waiting on you** (tasks handed to
   you, not yet accepted: *From David · 2h*, **Accept**), **Today** (the day's to-dos, carried-over ones above), **My
   tasks** (`src/components/work/MyTasks.jsx`: every open task you're on, Urgent first, with its breadcrumb, status, due
@@ -972,12 +976,14 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Accept** (`src/lib/work.js`): a task handed to someone (`assignedBy`, §17) waits on them (`isWaiting()`) until they
   accept it (`acceptItem` → `acceptedValues()`, `values.acceptedAt`) or change its status (`nextValues()`: starting it
   accepts it). A new owner waits again; taking it yourself or clearing it removes all three keys; a patch can't set
-  them. Only the owner accepts, and only people who can edit the board can be owner (§17), so they always can. Needs
-  attention adds **Not accepted** (`ACCEPT_WITHIN`, a day after `assignedAt`). The New tag of §17 is gone.
+  them. Only the owner accepts, and only people who can edit the board can be picked as owner (§17); one who later
+  loses edit shows as No owner in Needs attention. Only boards with an Owner column wait: a Work in Progress row (a
+  Contact list) never does. Needs attention adds **Not accepted** (`ACCEPT_WITHIN`, a day after `assignedAt`). The New
+  tag of §17 is gone.
 - **Do today**: `addTodoForItem(boardId, itemId, { day, assignee })` makes a to-do with `source: 'manual'` and
   `ref: 'item:<id>'` (no migration: the `source` check allows manual, `ref` is free text), titled after the task and
   filed under its board's category (`BOARD_CATEGORY`), once per task, person and day (`todoForItem()`, checked in the
-  app). Yours, or an admin's for anyone, on a board both see. The to-do shows a link to its task (`itemOfTodo()`;
+  app; moving a to-do onto a day that already has one for its task is refused, as for routines). Yours, or an admin's for anyone, on a board both see. The to-do shows a link to its task (`itemOfTodo()`;
   none once the task is gone or out of sight). Ticking the to-do ticks only the to-do; the task is done on the task.
 - **Team** (`#/team`, `#/team/<id>`, `src/pages/Team.jsx`; no module key, like the Calendar): a card per active person
   (Waiting, Urgent, In progress, Overdue, Open: `workload()`; their top three tasks) and each person's page (what waits
@@ -1001,7 +1007,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Demo seed**: Josh has *New video from the Northside preview* (Previews, Northside, High) waiting on him from David,
   and an accepted hand-over (Coastal Rail preview); Hello's *Council landing page* waits on her; David's Today has his
   Urgent Northside walkthrough via Do today.
-- **For the owner, in the app**: give staff **Edit** on Clients (so they can own and accept client work); rename
+- **For the owner**: run `0011_team_access_read.sql` in the SQL editor before this goes live (DEPLOY.md section 2).
+  In the app: give staff **Edit** on Clients (so they can own and accept client work); rename
   General → **BAU**; add **Finance** and **Development** boards under Operations (move Landing Page and Tender Portal
   work into Development, or keep them as boards); merge Campaigns and Events; move Daily Automation into Routines. Send
   staff `docs/HOW-WE-WORK.md`.

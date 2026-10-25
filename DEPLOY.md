@@ -77,9 +77,10 @@ Outreach and Clients, `docs/PHASE2.md` §13), then `0008_pipeline_stages.sql` (P
 Contacted → First meetings → Demos, and Work in Progress under the deals; `docs/PHASE2.md` §14), then
 `0009_calendar.sql` (the team Calendar and the boards' 3-month calendar; Google meetings need section 13;
 `docs/PHASE2.md` §15), then `0010_outreach_gmail.sql` (Outreach counted from each mailbox's Gmail; section 14;
-`docs/PHASE2.md` §16).
+`docs/PHASE2.md` §16), then `0011_team_access_read.sql` (everyone reads everyone's access levels, for the Team pages;
+`docs/PHASE2.md` §18).
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0011_…`). Run each new file
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0012_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one.
 
 **0003 on a database that already has 0002**: **SQL Editor** → **+** → **Create a new snippet**, paste
@@ -161,6 +162,12 @@ until merged, take it from its branch on GitHub). It adds each outreach mailbox'
 app), the cold threads and messages read from Gmail (only the `google` function writes them) and the functions Outreach
 reads them through. Run it **before** the new app goes live (the app that's live now works with it). Nobody needs to
 close Cortex, and it is safe to run again.
+
+**0011 on an existing database**: run it after `0010`, the same way (`supabase/migrations/0011_team_access_read.sql`;
+until merged, take it from its branch on GitHub). It changes one read rule: every active teammate can read everyone's
+module access levels (None / View / Edit), so the Team pages, the Owner picker and New task judge a teammate's access
+the same way for staff as for admins. Only the SuperAdmin still changes them. Run it **before** the new app goes live
+(the app that's live now works with it). Nobody needs to close Cortex, and it is safe to run again.
 
 ### Upgrading an existing project
 
@@ -627,10 +634,11 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
 | "Couldn't load your workspace … client_contacts" after an update | `0004_clients_google.sql` hasn't run yet (section 2). |
 | "Couldn't load your workspace … work_tools" after an update | `0005_work_tools.sql` hasn't run yet (section 2). |
 | "Couldn't load your workspace … boards", Projects shows nothing, or "Not saved" mentions `board_id` | `0006_boards.sql` hasn't run yet (section 2). |
-| A staff member can edit their own Projects page but not **Landing Page** or another team board | Their Projects level is **View** in **Settings** → **Team** (an override; the default after 0006 is Edit). The SuperAdmin sets it back to **Edit**. |
+| A staff member can edit their own notes but not **Landing Page** or another team board | Their **Operations** (Projects) level is **View** in **Settings** → **Team** (an override; the default after 0006 is Edit). The SuperAdmin sets it back to **Edit**. |
 | A task's drawer on someone's own page offers no **Board** to move it to | By design: tasks move between team boards, or between groups of one page, never onto or off a personal page. |
-| An admin can't see another admin's Projects page | By design: admins see their own and staff's pages; only the SuperAdmin sees everyone's. |
-| No rename or delete on someone's Projects page | Personal pages come and go with their person. Only team boards are renamed or deleted (by admins). |
+| An admin can't see another admin's notes (*Name’s notes*, once called *Name’s Projects*) | By design: admins see their own and staff's pages; only the SuperAdmin sees everyone's. |
+| No rename or delete on someone's notes page | Personal pages come and go with their person. Only team boards are renamed or deleted (by admins). |
+| On **Team**, a staff member sees fewer of a teammate's tasks than an admin does, or **New task** says a teammate can't edit a board they can | `0011_team_access_read.sql` hasn't run yet (section 2): until then staff read only their own access levels. |
 | **Projects** / **Marketing** look empty after running 0006, or it showed an error | The run stopped part-way, so tasks aren't linked to a board yet (nothing is deleted). Run the current `0006_boards.sql` again; it links them to **General** / **Posting schedule** and finishes the rest. |
 | A new group turned up on **General** or **Posting schedule** after the 0006 update | An old open tab (the app from before 0006) added it. Move its tasks where they belong, delete it, and reload that tab. |
 | A task added just after the 0006 update isn't on **General** / **Posting schedule** | An old open tab added it to another board's starting group (another team board, or someone's own page). Find it in **Dashboard** → **My tasks** (or **Team**) for the people on it, or as the SuperAdmin on each page, and move it to a team board from its drawer (or re-create it there if it is on someone's page). |

@@ -17,7 +17,7 @@ import {
   isYmd, makeTodo, mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
 } from '@/lib/automations';
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
-import { acceptedValues, itemRef, newTaskValues, nextValues, todoForItem } from '@/lib/work';
+import { acceptedValues, itemRef, newTaskValues, nextValues, todoForItem, todoItemId } from '@/lib/work';
 import { BOARD_CATEGORY } from '@/lib/timesheet';
 import { cleanTool } from '@/lib/tools';
 import { cleanCalendarEvent } from '@/lib/calendar';
@@ -245,9 +245,11 @@ function createActions(mutate, mode) {
   // Calendar events (0009): any active teammate adds one; the one who added it, or an admin, edits and deletes it.
   const meActive = (d) => d.users.some((u) => u.id === d.me && u.active !== false);
   const mayEvent = (d, x) => Boolean(x) && meActive(d) && (x.createdBy === d.me || isAdmin(d));
-  // The database keeps one to-do per routine, person and day, and one automation to-do per ref, person and day.
+  // The database keeps one to-do per routine, person and day, and one automation to-do per ref, person and day; the app
+  // keeps one Do today to-do per task, person and day (src/lib/work.js).
   const clashes = (d, t, day, assignee) => d.todos.some((x) => x.id !== t.id && x.assignee === assignee && x.day === day
-    && ((t.routineId && x.routineId === t.routineId) || (t.source === 'automation' && x.source === 'automation' && x.ref === t.ref)));
+    && ((t.routineId && x.routineId === t.routineId) || (t.source === 'automation' && x.source === 'automation' && x.ref === t.ref)
+      || (todoItemId(t) && todoItemId(x) === todoItemId(t))));
 
   const actions = {
     reset: mode.reset,

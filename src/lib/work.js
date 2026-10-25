@@ -97,7 +97,7 @@ export function prioritiesFor(state, personId, { today = '', viewer = state?.me,
     .map((item) => {
       const v = item.values || {};
       const due = ymd(v[dateKey(board)]);
-      const waiting = isWaiting(item) && ownerOf(item) === personId;
+      const waiting = hasOwner(board) && isWaiting(item) && ownerOf(item) === personId; // Work in Progress' rows aren't tasks
       return {
         item, board, priority: PRIORITIES.includes(v.priority) ? v.priority : '', due, overdue: Boolean(due && today && due < today),
         client: clientOf(state, item), waiting, from: waiting ? v.assignedBy : '',

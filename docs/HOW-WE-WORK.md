@@ -32,7 +32,8 @@ Anyone can set the owner and the priority. If two things feel Urgent, ask an adm
 3. **My tasks**: every open task you own, Urgent first. Work from the top.
 4. Keep at most **2 tasks In progress**. Finish or pause one before starting another.
 5. Stuck? Set the status to **Stuck** and say why in an update. On a team board, an admin sees it in Needs attention.
-6. **My notes**, at the bottom, is yours alone.
+6. **My notes**, at the bottom, is your own page. It never shows on the Team page, but admins can open staff notes (and
+   the SuperAdmin everyone's).
 
 ## Where work goes
 - **Operations**: running the business: BAU, finance, development and internal projects.

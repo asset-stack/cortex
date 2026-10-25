@@ -41,9 +41,9 @@ function PersonCard({ user }) {
       </a>
       <dl className="mt-4 grid grid-cols-5 gap-1 text-center">
         {COUNTS.map((c) => (
-          <div key={c.key} className="rounded-xl bg-white/5 px-1 py-2">
-            <dd className={cn('text-[20px] font-black leading-none tnum', load[c.key] > 0 ? c.tint : 'dimmer')}>{load[c.key]}</dd>
+          <div key={c.key} className="flex flex-col-reverse rounded-xl bg-white/5 px-1 py-2">
             <dt className="mt-1 truncate text-[11px] dimmer">{c.label}</dt>
+            <dd className={cn('text-[20px] font-black leading-none tnum', load[c.key] > 0 ? c.tint : 'dimmer')}>{load[c.key]}</dd>
           </div>
         ))}
       </dl>

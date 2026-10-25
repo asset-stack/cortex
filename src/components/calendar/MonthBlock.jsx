@@ -46,7 +46,7 @@ export default function MonthBlock({ month, days, count, open, onToggle, today, 
       {open && (
         <>
           <div className="mt-3 hidden overflow-x-auto scroll-thin md:block">
-            <div className={cn('min-w-[760px] overflow-hidden rounded-[24px] glass', current && 'ring-2 ring-sky-300/40')}>
+            <div className={cn('min-w-[760px] overflow-hidden rounded-[24px] glass', current && 'outline outline-2 -outline-offset-2 outline-sky-300/40')}>
             <table className="w-full table-fixed text-[13px]">
               <thead>
                 <tr className="text-[12px] dimmer">

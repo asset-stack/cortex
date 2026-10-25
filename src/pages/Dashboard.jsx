@@ -117,7 +117,7 @@ export default function Dashboard() {
           </TodoList>
           <MyTasks rows={rows.filter((r) => !r.waiting)} personId={personId} act load={load} title={self ? 'My tasks' : `${person?.name}’s tasks`}
             empty={self ? 'Nothing assigned to you.' : 'Nothing assigned.'} />
-          {showNotes && <section aria-label="My notes" className="mt-4"><Board key={notes.id} board={notes} embedded title={self ? 'My notes' : `${person?.name}’s notes`} /></section>}
+          {showNotes && <section aria-label={self ? 'My notes' : `${person?.name}’s notes`} className="mt-4"><Board key={notes.id} board={notes} embedded title={self ? 'My notes' : `${person?.name}’s notes`} /></section>}
         </div>
         <div className="flex min-w-0 flex-col gap-6">
           {access.isAdmin && <NeedsAttention />}

@@ -11,7 +11,8 @@
 // stages, Work in Progress); then 0009_calendar.sql (the team's calendar events, each person's Google meetings and the
 // calendar sync's RPCs, a calendar on boards); then 0010_outreach_gmail.sql (each outreach mailbox's Gmail connection,
 // the Gmail sync's RPCs, cold threads and their messages, the forgetting, and the dashboard RPCs, which must give the same
-// numbers and lists as src/lib/outreach.js). Last, the sync engine's writes of every synced table (flatten() rows as
+// numbers and lists as src/lib/outreach.js); then 0011_team_access_read.sql (every active teammate reads everyone's module
+// access levels, for the Team pages). Last, the sync engine's writes of every synced table (flatten() rows as
 // PostgREST upserts), personal pages, Outreach and calendar events included.
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
@@ -32,6 +33,7 @@ const migration7 = await readFile(new URL('supabase/migrations/0007_outreach.sql
 const migration8 = await readFile(new URL('supabase/migrations/0008_pipeline_stages.sql', root), 'utf8');
 const migration9 = await readFile(new URL('supabase/migrations/0009_calendar.sql', root), 'utf8');
 const migration10 = await readFile(new URL('supabase/migrations/0010_outreach_gmail.sql', root), 'utf8');
+const migration11 = await readFile(new URL('supabase/migrations/0011_team_access_read.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -5445,6 +5447,49 @@ function splitSql(sql) {
   return out.filter((st) => code(st) && !/^(begin|commit)$/i.test(code(st)));
 }
 
+// ── 0011: everyone reads module access levels ─────────────────────────────────────────────────────────────────────
+
+async function phase11(ctx) {
+  const { alice, boss, david, hello, carol } = ctx;
+  const all = async (who) => { await as(who); return (await rows('select user_id, module, level from module_access order by user_id, module')).map((r) => `${r.user_id}:${r.module}:${r.level}`); };
+  const before = { staff: await all(alice), admin: await all(boss) };
+
+  // 94. Runs on top of 0010, whole, again, and statement by statement.
+  await as(null);
+  const first = await db.exec(migration11).then(() => null, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const second = await db.exec(migration11).then(() => null, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  await as(null);
+  const splitErrors = await runSplit(db, migration11, { continueOnError: true });
+  const body = migration11.replace(/--.*$/gm, '').trim();
+  check('94. 0011 runs on top of 0010, re-runs whole and statement by statement, and never mentions module_level',
+    first === null && second === null && !splitErrors.length && /^begin;/i.test(body) && /commit;$/i.test(body) && !migration11.includes('module_level'),
+    { first, second, splitErrors });
+  if (first) return null;
+
+  // 95. Staff now read every level, as admins do; inactive people read none; only the SuperAdmin changes them.
+  const staffNow = await all(alice);
+  const helloNow = await all(hello);
+  const adminNow = await all(boss);
+  const inactive = await all(carol);
+  check('95. staff read everyone’s module access levels (before: only their own), the same rows admins read; an inactive profile reads none',
+    before.staff.length < before.admin.length && staffNow.join() === adminNow.join() && helloNow.join() === adminNow.join()
+      && adminNow.length === before.admin.length && adminNow.length > 0 && inactive.length === 0,
+    { before, staffNow: staffNow.length, adminNow: adminNow.length, inactive });
+  await as(alice);
+  const staffInsert = await error("insert into module_access (user_id, module, level) values ($1, 'clients', 'edit')", [hello]);
+  const staffUpdate = await affected("update module_access set level = 'edit' where user_id <> $1", [alice]);
+  const staffDelete = await affected('delete from module_access');
+  await as(boss);
+  const adminUpdate = await affected("update module_access set level = 'none'");
+  await as(david);
+  const superUpdate = await affected("update module_access set level = level where user_id = $1", [alice]);
+  check('95. …but staff and admins still can’t add, change or remove them; the SuperAdmin can',
+    staffInsert !== null && staffUpdate === 0 && staffDelete === 0 && adminUpdate === 0 && superUpdate > 0,
+    { staffInsert, staffUpdate, staffDelete, adminUpdate, superUpdate });
+  await as(null);
+  return ctx;
+}
+
 async function runSplit(dbx, sql, { continueOnError = false, skip = () => false } = {}) {
   const errors = [];
   for (const st of splitSql(sql)) {
@@ -5560,7 +5605,8 @@ try {
   const ctx8 = ctx7 && await phase8(ctx7);
   const ctx9 = ctx8 && await phase9(ctx8);
   const ctx10 = ctx9 && await phase10(ctx9);
-  if (ctx10) await syncWriteCheck(ctx10);
+  const ctx11 = ctx10 && await phase11(ctx10);
+  if (ctx11) await syncWriteCheck(ctx11);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);
