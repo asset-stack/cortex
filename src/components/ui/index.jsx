@@ -90,15 +90,17 @@ export function Popover({ anchor, open, onClose, children, width = 200, align = 
   );
 }
 
-/** Monday-style coloured cell; click to pick a value. `label` names the field for screen readers.
- *  `readOnly` shows the same pill without the picker (view access). */
-export function LabelPicker({ value, options, onChange, className, allowEmpty = true, label, readOnly = false }) {
+/** Monday-style coloured cell; click to pick a value. `label` names the field for screen readers. `hints`: what each
+ *  option means (Priority's), shown under it in the list and as the cell's tooltip. `readOnly` shows the same pill
+ *  without the picker (view access). */
+export function LabelPicker({ value, options, onChange, className, allowEmpty = true, label, hints, readOnly = false }) {
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
   const color = value ? options[value] : null;
+  const hint = (value && hints?.[value]) || undefined;
   if (readOnly) {
     return (
-      <span className={cn('pill w-full', !value && 'pill-empty', className)} style={color ? { backgroundColor: color } : undefined}>
+      <span className={cn('pill w-full', !value && 'pill-empty', className)} style={color ? { backgroundColor: color } : undefined} title={hint}>
         {label && <span className="sr-only">{label}: </span>}{value || <span className="sr-only">Not set</span>}
       </span>
     );
@@ -114,16 +116,23 @@ export function LabelPicker({ value, options, onChange, className, allowEmpty = 
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={label ? `${label}: ${value || 'Not set'}` : (value || 'Not set')}
+        title={hint}
       >
         {value || ' '}
       </button>
-      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={180}>
+      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={hints ? 220 : 180}>
         <div role="listbox" aria-label={label} className="flex flex-col gap-1.5">
-          {Object.entries(options).map(([opt, c]) => (
+          {Object.entries(options).map(([opt, c]) => (hints?.[opt] ? (
+            <button key={opt} type="button" role="option" aria-selected={opt === value} onClick={() => { onChange(opt); setOpen(false); }}
+              className={cn('flex flex-col gap-1 rounded-[14px] p-1 text-left hover:bg-white/10', opt === value && 'bg-white/15')}>
+              <span className="pill w-full" style={{ backgroundColor: c }}>{opt}</span>
+              <span className="px-1.5 text-[11.5px] leading-snug dim">{hints[opt]}</span>
+            </button>
+          ) : (
             <button key={opt} type="button" role="option" aria-selected={opt === value} className="pill" style={{ backgroundColor: c }} onClick={() => { onChange(opt); setOpen(false); }}>
               {opt}
             </button>
-          ))}
+          )))}
           {allowEmpty && (
             <button type="button" role="option" aria-selected={false} className="pill pill-empty dim" onClick={() => { onChange(''); setOpen(false); }}>Clear</button>
           )}
@@ -232,6 +241,58 @@ export function PeoplePicker({ value, onChange, size = 28, max = 3, label = 'Peo
         </div>
       </Popover>
     </>
+  );
+}
+
+/** A board task's Owner (the owner column): one person, kept as `values.people` = [id]. A task that still has several
+ *  people shows the first and +N until someone picks one. `onChange(id)` ('' for Unassigned). */
+export function OwnerPicker({ value, onChange, size = 28, label = 'Owner', readOnly = false }) {
+  const { state } = useStore();
+  const [anchor, setAnchor] = useState(null);
+  const [open, setOpen] = useState(false);
+  const ids = Array.isArray(value) ? value : [];
+  if (readOnly) return <AvatarStack userIds={ids} size={size} max={1} label={label} />;
+  const names = ids.map((id) => state.users.find((u) => u.id === id)?.name).filter(Boolean).join(', ');
+  const owner = ids.length === 1 ? ids[0] : ''; // with several people, nobody is ticked: picking one makes them the owner
+  const people = state.users.filter((u) => u.active !== false || ids.includes(u.id)); // deactivated staff can't be picked
+  return (
+    <>
+      <button type="button" ref={setAnchor} onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        aria-label={`${label}: ${names || 'Unassigned'}. Change owner`} aria-haspopup="true" aria-expanded={open} className="rounded-full">
+        <AvatarStack userIds={ids} size={size} max={1} />
+      </button>
+      <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={200}>
+        <div role="group" aria-label={label} className="flex flex-col">
+          {people.map((u) => (
+            <button key={u.id} type="button" aria-pressed={owner === u.id} onClick={() => { onChange(u.id); setOpen(false); }}
+              className={cn('flex items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-white/10', owner === u.id && 'bg-white/15')}>
+              <Avatar userId={u.id} size={24} ring={false} />
+              <span className={cn('min-w-0 flex-1 truncate', u.active === false && 'dimmer')}>{u.name}</span>
+              {u.active === false && <span className="text-[11px] dimmer">Inactive</span>}
+            </button>
+          ))}
+          <button type="button" aria-pressed={!ids.length} onClick={() => { onChange(''); setOpen(false); }} className="rounded-xl px-2 py-1.5 text-left dimmer hover:bg-white/10">Unassigned</button>
+        </div>
+      </Popover>
+    </>
+  );
+}
+
+/** Which client a task is for (Clients boards' Client column): a list of the clients by name. `readOnly` shows the
+ *  name. A client that has been deleted shows as none. */
+export function ClientPicker({ value, onChange, label = 'Client', className, readOnly = false }) {
+  const { state } = useStore();
+  const clients = [...(state.clients || [])].sort((a, b) => a.name.localeCompare(b.name));
+  const current = clients.find((c) => c.id === value);
+  if (readOnly) {
+    return <span className={cn('block truncate py-1.5', !current && 'dimmer', className)}><span className="sr-only">{label}: </span>{current?.name || '—'}</span>;
+  }
+  return (
+    <select value={current ? value : ''} aria-label={label} onChange={(e) => onChange(e.target.value)} onClick={(e) => e.stopPropagation()}
+      className={cn('field !py-1.5 truncate', className)}>
+      <option value="">No client</option>
+      {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+    </select>
   );
 }
 

@@ -32,7 +32,7 @@ export function useNav() {
 }
 
 /**
- * What's listed under the board modules (Projects: your own page, then the team boards; Marketing: its team boards;
+ * What's listed under the board modules (Projects: the team boards, then your own page; Marketing: its team boards;
  * Outreach and Clients: their own page, then their team boards), only the boards you can open, and the id of the entry
  * on screen (`current`: a board's id, a MODULE_HOMES id on #/outreach or #/clients, '' elsewhere).
  */
@@ -44,8 +44,8 @@ function useBoardNav(route, sub) {
   const lists = Object.fromEntries(MENU_BOARD_MODULES.map((m) => [m, [
     ...(MODULE_HOMES[m] ? [MODULE_HOMES[m]] : []),
     ...[
-      ...(m === 'projects' && own && visible.includes(own) ? [own] : []),
       ...visible.filter((b) => b.module === m && !b.owner),
+      ...(m === 'projects' && own && visible.includes(own) ? [own] : []),
     ].map((b) => ({ id: b.id, href: boardHref(b), title: boardTitle(state, b) })),
   ]]));
   const home = !sub && MODULE_HOMES[route];

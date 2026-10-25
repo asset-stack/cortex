@@ -1,17 +1,20 @@
-import { AtSign, Hash } from 'lucide-react';
+import { AtSign, Hash, SquareCheckBig } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { Avatar } from '@/components/ui';
 import { openChat } from '@/components/chat/ChatDock';
 import { useAccess } from '@/lib/access';
+import { boardHref } from '@/lib/boards';
 import { MessageText, mentionsUser } from '@/lib/mentions';
+import { taskMentions } from '@/lib/work';
 import { ago, invoiceTotals } from '@/lib/format';
 
-// Chat messages that @mention `person` (or @here) in channels they're in, newest first.
+// Chat messages that @mention `person` (or @here) in channels they're in, and task updates that @name them on the boards
+// they see (src/lib/work.js), newest first.
 export function mentionsOf(state, person) {
   if (!person?.name) return [];
-  return state.messages
-    .filter((m) => m.user !== person.id && mentionsUser(m.text, person) && state.channels.find((c) => c.id === m.channel)?.members.includes(person.id))
-    .sort((a, b) => b.ts.localeCompare(a.ts));
+  const chat = state.messages
+    .filter((m) => m.user !== person.id && mentionsUser(m.text, person) && state.channels.find((c) => c.id === m.channel)?.members.includes(person.id));
+  return [...chat, ...taskMentions(state, person)].sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
 }
 
 /** The latest five mentions (the KPI counts them all), and overdue invoices for those who can see Clients. */
@@ -28,15 +31,31 @@ export default function Mentions({ mentions, person }) {
       {latest.length === 0 && <p className="mt-3 dimmer">No one has tagged {person?.id === state.me ? 'you' : person?.name} yet.</p>}
       <ol className="mt-3 flex flex-col gap-2">
         {latest.map((m) => {
+          const body = (where) => (
+            <>
+              <Avatar userId={m.user} size={30} ring={false} />
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-1.5 text-[12.5px] dimmer">
+                  <span className="shrink-0 font-semibold text-white">{users[m.user]?.name}</span>{where}<span className="shrink-0">· {ago(m.ts)}</span>
+                </div>
+                <p className="line-clamp-2"><MessageText text={m.text} users={state.users} me={person} /></p>
+              </div>
+            </>
+          );
+          if (m.kind === 'task') {
+            return (
+              <li key={m.id}>
+                <a href={boardHref(m.board, m.item.id)} className="flex w-full gap-3 rounded-2xl p-2 text-left hover:bg-white/10">
+                  {body(<><SquareCheckBig className="h-3 w-3 shrink-0" aria-hidden="true" /><span className="truncate">{m.item.name.trim() || 'Untitled task'}</span></>)}
+                </a>
+              </li>
+            );
+          }
           const ch = state.channels.find((c) => c.id === m.channel);
           return (
             <li key={m.id}>
               <button type="button" onClick={() => openChat(m.channel)} className="flex w-full gap-3 rounded-2xl p-2 text-left hover:bg-white/10">
-                <Avatar userId={m.user} size={30} ring={false} />
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-[12.5px] dimmer"><span className="font-semibold text-white">{users[m.user]?.name}</span><Hash className="h-3 w-3" />{ch?.name} · {ago(m.ts)}</div>
-                  <p className="line-clamp-2"><MessageText text={m.text} users={state.users} me={person} /></p>
-                </div>
+                {body(<><Hash className="h-3 w-3 shrink-0" /><span className="truncate">{ch?.name}</span></>)}
               </button>
             </li>
           );

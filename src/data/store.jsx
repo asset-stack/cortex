@@ -17,7 +17,7 @@ import {
   isYmd, makeTodo, mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
 } from '@/lib/automations';
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
-import { mentionedUserIds } from '@/lib/mentions';
+import { nextValues } from '@/lib/work';
 import { cleanTool } from '@/lib/tools';
 import { cleanCalendarEvent } from '@/lib/calendar';
 import {
@@ -391,10 +391,7 @@ function createActions(mutate, mode) {
       if ('name' in rest && !textOf(rest.name).trim()) delete rest.name; // a task always has a name
       Object.assign(item, rest);
       if (values) {
-        const next = { ...values };
-        if ('owner' in next && !('people' in next)) next.people = next.owner ? [next.owner] : []; // a single-person picker
-        delete next.owner;
-        item.values = withPeople({ ...item.values, ...next });
+        item.values = nextValues(item.values, values, { me: d.me, now: nowIso() }); // handing it over records who and when
         if ('status' in values) item.done = item.values.status === 'Done'; // done always follows status
       }
       return true;
@@ -427,7 +424,7 @@ function createActions(mutate, mode) {
       return true;
     }),
     // Sort in the board's top bar: every group's tasks in a new saved order, 'due' (the soonest due first) or 'priority'
-    // (High first); people drag them about from there. Only on boards with that column.
+    // (Urgent first); people drag them about from there. Only on boards with that column.
     sortItems: (boardId, by) => onBoard(boardId, (d, b) => {
       const cols = BOARD_SCHEMAS[b.module]?.columns || [];
       const date = cols.find((c) => c.type === 'date');
@@ -464,12 +461,11 @@ function createActions(mutate, mode) {
       return true;
     }),
 
-    // Everyone @mentioned in an update is added to the item's people.
+    // Someone @named in an update sees it in My Work → Mentions (src/lib/work.js); the task's owner stays as it is.
     addUpdate: (boardId, itemId, text) => onBoard(boardId, (d) => {
       const { item } = findItem(d, boardId, itemId);
       if (!item || !textOf(text).trim()) return false;
       item.updates.unshift({ id: uid(), user: d.me, text: textOf(text).trim(), ts: nowIso() });
-      item.values = withPeople({ ...item.values, people: [...(item.values.people || []), ...mentionedUserIds(text, d.users)] });
       return true;
     }),
     // Your own updates, or anyone's for admins (as the database allows).

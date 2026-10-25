@@ -6,7 +6,8 @@ import DayNav from '@/components/work/DayNav';
 import PersonSwitch from '@/components/work/PersonSwitch';
 import TodoList from '@/components/work/TodoList';
 import AddTodo from '@/components/work/AddTodo';
-import OnBoards from '@/components/work/OnBoards';
+import Priorities from '@/components/work/Priorities';
+import NeedsAttention from '@/components/work/NeedsAttention';
 import Mentions, { mentionsOf } from '@/components/work/Mentions';
 import Tools from '@/components/work/Tools';
 import TimesheetModal from '@/components/timesheet/TimesheetModal';
@@ -93,9 +94,10 @@ export default function MyWork() {
           <TodoList title={title} icon={CalendarCheck} todos={dayTodos} empty="Nothing planned." rim>
             <AddTodo assignee={personId} day={day} />
           </TodoList>
-          <OnBoards personId={personId} />
+          <Priorities personId={personId} />
         </div>
         <div className="flex min-w-0 flex-col gap-6">
+          {access.isAdmin && <NeedsAttention />}
           <Mentions mentions={mentions} person={person} />
           <Tools key={personId} person={person} />
         </div>

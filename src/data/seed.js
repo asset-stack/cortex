@@ -43,11 +43,12 @@ const board = (module, name, groups, owner = '') => ({
 });
 const group = (name, color, items) => ({ id: id('g'), name, color, items });
 
-function boards() {
+// `clientId(name)`: a seed client's id, for the Clients boards' Client column.
+function boards(clientId = () => '') {
   return [
     board('projects', '', [
       group('Active', '#c9ffe6', [
-        item('Investor update', { people: ['david'], status: 'In progress', priority: 'High', due: '2026-10-28' }),
+        item('Investor update', { people: ['david'], status: 'Not started', priority: 'High', due: '2026-10-28' }),
         item('AssetStack Academy outline', { people: ['david'], status: 'Not started', priority: 'Low', due: '' }),
       ]),
     ], 'david'),
@@ -58,13 +59,13 @@ function boards() {
     ], 'josh'),
     board('projects', '', [
       group('Active', '#c9ffe6', [
-        item('Order merchandise samples', { people: ['hello'], status: 'In progress', priority: 'Low', due: '2026-10-21' }),
+        item('Order merchandise samples', { people: ['hello'], status: 'Not started', priority: 'Low', due: '2026-10-21' }),
         item('Tidy the shared drive', { people: ['hello'], status: 'Not started', priority: 'Low', due: '' }),
       ]),
     ], 'hello'),
     board('projects', 'Landing Page', [
       group('Active', '#c9ffe6', [
-        item('Hero copy refresh', { people: ['hello', 'david'], status: 'In progress', priority: 'High', due: '2026-10-23' },
+        item('Hero copy refresh', { people: ['hello'], status: 'In progress', priority: 'High', due: '2026-10-23' },
           { updates: [{ id: id('u'), user: 'hello', text: 'First draft is in the doc. @David can you check the headline?', ts: hoursAgo(8) }] }),
         item('Council case study section', { people: ['david'], status: 'Not started', priority: 'Medium', due: '2026-11-06' }),
         item('Page speed audit', { people: ['josh'], status: 'Not started', priority: 'Low', due: '2026-11-13' }),
@@ -75,7 +76,7 @@ function boards() {
     ]),
     board('projects', 'Tender Portal', [
       group('Active', '#c9ffe6', [
-        item('Free Tender Portal', { people: ['david', 'hello'], status: 'In progress', priority: 'High', due: '2026-11-15' },
+        item('Free Tender Portal', { people: ['david'], status: 'In progress', priority: 'High', due: '2026-11-15' },
           { subtasks: [{ id: id('s'), text: 'Supplier sign-up flow', done: true }, { id: id('s'), text: 'Tender alert emails', done: false }] }),
         item('Tender alert emails', { people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-11-20' }),
       ]),
@@ -90,7 +91,7 @@ function boards() {
       ]),
       // The former Admin board.
       group('Admin', '#ffe6b0', [
-        item('Merchandise', { people: ['hello'], status: 'In progress', priority: 'Low', due: '2026-10-18' }),
+        item('Merchandise', { people: ['hello'], status: 'Not started', priority: 'Low', due: '2026-10-18' }),
         item('Trademark', { people: ['josh'], status: 'Stuck', priority: 'High', due: '2026-10-22' },
           { updates: [{ id: id('u'), user: 'josh', text: 'Waiting on the examiner response.', ts: hoursAgo(30) }] }),
         item('Insurance renewal', { people: ['josh', 'hello'], status: 'In progress', priority: 'High', due: '2026-10-31' }),
@@ -100,47 +101,50 @@ function boards() {
     ]),
     board('marketing', 'Daily Automation', [
       group('Every day', '#bfe9ff', [
-        item('Morning LinkedIn post', { people: ['hello'], status: 'In progress', type: 'Industry', channel: 'LinkedIn', approval: 'Yes', due: '' }),
-        item('Engage with 10 council posts', { people: ['hello'], status: 'In progress', type: 'Industry', channel: 'LinkedIn', approval: '', due: '' }),
-        item('Answer new reviews', { people: ['david'], status: 'Not started', type: 'Industry', channel: 'Reviews', approval: '', due: '' }),
+        item('Morning LinkedIn post', { people: ['hello'], status: 'Not started', priority: 'Medium', type: 'Industry', channel: 'LinkedIn', approval: 'Yes', due: '' }),
+        item('Engage with 10 council posts', { people: ['hello'], status: 'Not started', priority: 'Low', type: 'Industry', channel: 'LinkedIn', approval: '', due: '' }),
+        item('Answer new reviews', { people: ['david'], status: 'Not started', priority: 'Low', type: 'Industry', channel: 'Reviews', approval: '', due: '' }),
       ]),
     ]),
     board('marketing', 'Posting schedule', [
       group('October', '#bfe9ff', [
-        item('LinkedIn weekly engagement', { people: ['hello'], status: 'In progress', type: 'Industry', channel: 'LinkedIn', approval: '', due: '2026-10-31' }),
-        item('Golf Day promotion', { people: [], status: 'In progress', type: 'Sponsorship', channel: 'LinkedIn', approval: '', due: '2026-10-12' }),
-        item('Team on site', { people: ['david'], status: 'In progress', type: 'Industry', channel: 'LinkedIn', approval: 'No', due: '2026-10-15' }),
-        item('Golf Day content', { people: ['hello'], status: 'In progress', type: 'Industry', channel: 'Content', approval: '', due: '2026-10-16' }),
+        item('LinkedIn weekly engagement', { people: ['hello'], status: 'Not started', priority: 'Medium', type: 'Industry', channel: 'LinkedIn', approval: '', due: '2026-10-31' }),
+        item('Golf Day promotion', { people: [], status: 'In progress', priority: 'High', type: 'Sponsorship', channel: 'LinkedIn', approval: '', due: '2026-10-12' }),
+        item('Team on site', { people: ['david'], status: 'Done', priority: 'Medium', type: 'Industry', channel: 'LinkedIn', approval: 'No', due: '2026-10-15' }),
+        item('Golf Day content', { people: ['hello'], status: 'Done', priority: 'High', type: 'Industry', channel: 'Content', approval: '', due: '2026-10-16' }),
         item('Bridge project spotlight', { people: ['david'], status: 'Not started', type: 'Projects', channel: 'Website', approval: '', due: '2026-10-20' }),
-        item('Monthly award', { people: ['josh'], status: 'Stuck', type: 'Staff internal', channel: 'LinkedIn', approval: 'No', due: '2026-10-28' }),
-        item('Sponsorship announcement', { people: ['david', 'hello'], status: 'In progress', type: 'Sponsorship', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-24' }),
+        item('Monthly award', { people: ['josh'], status: 'Stuck', priority: 'Low', type: 'Staff internal', channel: 'LinkedIn', approval: 'No', due: '2026-10-28' }),
+        item('Sponsorship announcement', { people: ['david'], status: 'Not started', priority: 'High', type: 'Sponsorship', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-24' }),
       ]),
       group('November', '#ead9ff', [
-        item('LinkedIn weekly engagement', { people: [], status: 'Not started', type: 'Projects', channel: 'LinkedIn', approval: '', due: '2026-11-30' }),
-        item('Westbay case study', { people: ['hello', 'david'], status: 'Not started', type: 'Projects', channel: 'Website', approval: 'Pending', due: '2026-11-14' },
+        item('LinkedIn weekly engagement', { people: [], status: 'Not started', priority: 'Medium', type: 'Projects', channel: 'LinkedIn', approval: '', due: '2026-11-30' }),
+        item('Westbay case study', { people: ['hello'], status: 'Not started', priority: 'High', type: 'Projects', channel: 'Website', approval: 'Pending', due: '2026-11-14' },
           { updates: [{ id: id('u'), user: 'david', text: '@Hello can you add the October usage numbers?', ts: hoursAgo(5) }] }),
-        item('G2 + Google reviews', { people: ['david'], status: 'Not started', type: 'Industry', channel: 'Reviews', approval: '', due: '2026-11-21' }),
-        item('Council landing page', { people: ['hello'], status: 'Not started', type: 'Projects', channel: 'Content', approval: '', due: '2026-11-25' }),
+        item('G2 + Google reviews', { people: ['david'], status: 'Not started', priority: 'Low', type: 'Industry', channel: 'Reviews', approval: '', due: '2026-11-21' }),
+        item('Council landing page', {
+          people: ['hello'], status: 'Not started', priority: 'Medium', type: 'Projects', channel: 'Content', approval: '', due: '2026-11-25',
+          assignedBy: 'david', assignedAt: hoursAgo(4),
+        }),
       ]),
     ]),
     board('marketing', 'Campaigns', [
       group('This quarter', '#ead9ff', [
-        item('Council digital twin campaign', { people: ['david', 'hello'], status: 'In progress', type: 'Projects', channel: 'LinkedIn', approval: 'Pending', due: '2026-11-28' }),
-        item('Utilities email campaign', { people: ['josh'], status: 'Not started', type: 'Industry', channel: 'Content', approval: '', due: '2026-12-05' }),
+        item('Council digital twin campaign', { people: ['david'], status: 'Not started', priority: 'High', type: 'Projects', channel: 'LinkedIn', approval: 'Pending', due: '2026-11-28' }),
+        item('Utilities email campaign', { people: ['josh'], status: 'Not started', priority: 'Medium', type: 'Industry', channel: 'Content', approval: '', due: '2026-12-05' }),
       ]),
     ]),
     board('marketing', 'Events', [
       group('Upcoming', '#ffe6b0', [
-        item('Golf Day', { people: ['hello', 'josh'], status: 'In progress', type: 'Sponsorship', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-12' }),
-        item('Local government conference stand', { people: ['david'], status: 'Not started', type: 'Industry', channel: 'Website', approval: '', due: '2026-11-19' }),
+        item('Golf Day', { people: ['hello'], status: 'Done', priority: 'High', type: 'Sponsorship', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-12' }),
+        item('Local government conference stand', { people: ['david'], status: 'Not started', priority: 'Medium', type: 'Industry', channel: 'Website', approval: '', due: '2026-11-19' }),
       ]),
     ]),
     board('outreach', 'Sales Tasks', [
       group('To do', '#c9ffe6', [
-        item('Follow up the Riverbend Water referral', { people: ['david'], status: 'In progress', priority: 'High', due: '2026-10-22' }),
-        item('Book a demo with Eastvale City Council', { people: ['josh'], status: 'Not started', priority: 'High', due: '2026-10-24' }),
+        item('Follow up the Riverbend Water referral', { people: ['david'], status: 'Not started', priority: 'High', due: '2026-10-22' }),
+        item('Book a demo with Eastvale City Council', { people: ['josh'], status: 'Not started', priority: 'Urgent', due: '2026-10-24' }),
         item('Send pricing to Pinecrest Regional Council', { people: ['david'], status: 'Not started', priority: 'Medium', due: '2026-10-27' }),
-        item('Prepare the Harbourside Ports proposal', { people: ['josh', 'david'], status: 'Stuck', priority: 'Medium', due: '2026-10-30' }),
+        item('Prepare the Harbourside Ports proposal', { people: ['josh'], status: 'Stuck', priority: 'Medium', due: '2026-10-30' }),
         item('Call back Northbrook Shire Council', { people: ['josh'], status: 'Not started', priority: 'Low', due: '' }),
       ]),
       group('Done', '#bfe9ff', [
@@ -149,18 +153,18 @@ function boards() {
     ]),
     board('clients', 'Demos', [
       group('To do', '#c9ffe6', [
-        item('Northside Diocese: asset register walkthrough', { people: ['david'], status: 'In progress', priority: 'High', due: '2026-10-23' }),
-        item('Coastal Rail: condition data demo', { people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-10-29' }),
-        item('Harbour Construction: digital twin demo', { people: ['david', 'josh'], status: 'Not started', priority: 'Low', due: '' }),
+        item('Northside Diocese: asset register walkthrough', { client: clientId('Northside Diocese'), people: ['david'], status: 'In progress', priority: 'Urgent', due: '2026-10-27' }),
+        item('Coastal Rail: condition data demo', { client: clientId('Coastal Rail'), people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-10-29' }),
+        item('Harbour Construction: digital twin demo', { client: clientId('Harbour Construction'), people: ['david'], status: 'Not started', priority: 'Low', due: '' }),
       ]),
       group('Done', '#bfe9ff', [
-        item('Westbay Council: onboarding demo', { people: ['josh'], status: 'Done', priority: 'High', due: '2026-10-14' }),
+        item('Westbay Council: onboarding demo', { client: clientId('Westbay Council'), people: ['josh'], status: 'Done', priority: 'High', due: '2026-10-14' }),
       ]),
     ]),
     board('clients', 'Previews', [
       group('To do', '#c9ffe6', [
-        item('Northside Diocese preview site', { people: ['josh'], status: 'In progress', priority: 'High', due: '2026-10-22' }),
-        item('Coastal Rail preview with sample assets', { people: ['josh', 'david'], status: 'Not started', priority: 'Medium', due: '2026-10-28' }),
+        item('Northside Diocese preview site', { client: clientId('Northside Diocese'), people: ['josh'], status: 'In progress', priority: 'Urgent', due: '2026-10-28' }),
+        item('Coastal Rail preview with sample assets', { client: clientId('Coastal Rail'), people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-11-04' }),
       ]),
     ]),
     board('pipeline', 'Work in Progress', [
@@ -582,7 +586,7 @@ export function createSeed() {
     // switches modules on per person in Settings → Team.
     moduleAccess: [],
     org: { ...ORG },
-    boards: boards(),
+    boards: boards((name) => seedClients.find((c) => c.name === name)?.id || ''),
     deals,
     clients: seedClients,
     contacts,

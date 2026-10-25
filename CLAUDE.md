@@ -35,6 +35,10 @@ setup steps are in `DEPLOY.md`.
   Clients and Pipeline (`BOARD_MODULES`); Outreach's and Clients' menus start with their own page (`MODULE_HOMES`), and
   Pipeline's boards (Work in Progress) sit on its page under the deals, not in the menu (`PAGE_BOARD_MODULES`). Admins add
   new team boards in the app; personal pages come and go with their person.
+- **Board tasks have one Owner** (`docs/PHASE2.md` §17): the owner column keeps `values.people` as `[id]`, priority is
+  `PRIORITY` (Urgent → Low, with `PRIORITY_HINTS`), and the rules for handing over, My Work → Priorities, Needs attention,
+  task mentions and a client's tasks live in `src/lib/work.js` (only `nextValues()` sets `assignedBy` / `assignedAt`).
+  An `@Name` in an update never changes who is on a task.
 - **A new module gets a module key**: add it to `MODULES` and `STAFF_DEFAULTS` in `src/lib/access.js`, to the
   `module_access.module` check and the defaults in `public.module_level()` (in a new migration), give its tables
   `can_view` / `can_edit` policies on that key, and set `module` on its `NAV` entry in `Sidebar.jsx`.

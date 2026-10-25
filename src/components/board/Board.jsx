@@ -225,7 +225,7 @@ export default function Board({ board, embedded = false }) {
 
       {board.calendar && !board.owner && dated && view !== 'calendar' && <BoardCalendar groups={groups} onOpen={setOpenId} />}
       {view === 'table' && <TableView boardId={board.id} schema={schema} groups={groups} onOpen={setOpenId} onAdd={add} readOnly={!editable} />}
-      {view === 'kanban' && <KanbanView boardId={board.id} groups={groups} onOpen={setOpenId} readOnly={!editable} />}
+      {view === 'kanban' && <KanbanView boardId={board.id} schema={schema} groups={groups} onOpen={setOpenId} readOnly={!editable} />}
       {view === 'calendar' && <CalendarView groups={groups} onOpen={setOpenId} />}
 
       {/* Keyed by task so its local drafts (name, update) never carry over to another task. */}

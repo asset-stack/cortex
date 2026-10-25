@@ -6,12 +6,14 @@ import {
   Upload, UserRound,
 } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
-import { CLIENT_GROUPS, CLIENT_STATUSES, PLAN_FREQUENCIES } from '@/data/boards';
+import { CLIENT_GROUPS, CLIENT_STATUSES, PLAN_FREQUENCIES, PRIORITY } from '@/data/boards';
+import { boardHref, boardTitle } from '@/lib/boards';
+import { clientTasks } from '@/lib/work';
 import { useAccess } from '@/lib/access';
 import { PLAN_MONTHS, addMonths, isPlanDate } from '@/lib/automations';
 import { CONTRACT_STATUS } from '@/lib/contract';
 import { billingContacts } from '@/lib/taxInvoice';
-import { Avatar, Drawer, KpiRow, LabelPicker, Modal, PersonPicker, QuickAdd, SearchField, Segmented } from '@/components/ui';
+import { Avatar, AvatarStack, Drawer, KpiRow, LabelPicker, Modal, PersonPicker, QuickAdd, SearchField, Segmented } from '@/components/ui';
 import { ago, compactMoney, count, fullDate, invoiceTotals, localYmd, money, money2, monthLabel, monthStart, parseAmount, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import ClientContacts from './ClientContacts';
@@ -106,6 +108,37 @@ function LinkField({ label, value, readOnly, onChange, placeholder }) {
   );
 }
 
+// Open tasks on the Clients boards (Demos, Previews …) with this client in their Client column, each opening its task.
+function BoardTasks({ c }) {
+  const { state } = useStore();
+  const rows = clientTasks(state, c.id);
+  return (
+    <section>
+      <h3 className="font-bold">Board tasks</h3>
+      {rows.length === 0 ? <p className="mt-1 dimmer">None open.</p> : (
+        <ul className="mt-2 flex flex-col gap-1">
+          {rows.map(({ item, board }) => (
+            <li key={item.id}>
+              <a href={boardHref(board, item.id)} className="flex items-center gap-2.5 rounded-xl px-2 py-1.5 hover:bg-white/5">
+                <AvatarStack userIds={item.values.people} size={24} max={1} label="Owner" />
+                <span className="min-w-0 flex-1">
+                  <span className="block break-words font-semibold">{item.name.trim() || 'Untitled task'}</span>
+                  <span className="block truncate text-[12.5px] dimmer">{boardTitle(state, board)}{item.values.due ? ` · ${shortDate(item.values.due)}` : ''}</span>
+                </span>
+                {PRIORITY[item.values.priority] && (
+                  <span className="pill !h-[22px] shrink-0 !px-2 !text-[11px]" style={{ backgroundColor: PRIORITY[item.values.priority] }}>
+                    <span className="sr-only">Priority: </span>{item.values.priority}
+                  </span>
+                )}
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function Overview({ c, editable }) {
   const { actions } = useStore();
   const users = useUsers();
@@ -138,6 +171,7 @@ function Overview({ c, editable }) {
         </label>
       </div>
       <ClientContacts c={c} editable={editable} />
+      <BoardTasks c={c} />
       <section>
         <h3 className="font-bold">Tasks</h3>
         <ul className="mt-2 flex flex-col gap-1">

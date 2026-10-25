@@ -4,7 +4,7 @@ import { useStore, useUsers } from '@/data/store';
 import { useAccess } from '@/lib/access';
 import { boardHref, boardTitle, findBoard, sameAudience } from '@/lib/boards';
 import { itemWord } from '@/data/boards';
-import { Avatar, ConfirmModal, Drawer, InlineRename, LabelPicker, PeoplePicker, QuickAdd } from '@/components/ui';
+import { Avatar, ClientPicker, ConfirmModal, Drawer, InlineRename, LabelPicker, OwnerPicker, PeoplePicker, QuickAdd } from '@/components/ui';
 import { MessageText } from '@/lib/mentions';
 import { ago, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
@@ -79,11 +79,21 @@ export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly 
             {schema.columns.map((c) => (
               <div key={c.key} className={cn('flex flex-col gap-1.5', c.type === 'text' && 'col-span-2')}>
                 <span className="text-[12px] dimmer">{c.label}</span>
+                {c.type === 'owner' && (
+                  <div>
+                    <OwnerPicker value={item.values.people || []} label={c.label} size={32} readOnly={readOnly}
+                      onChange={(v) => actions.updateItem(boardId, item.id, { values: { owner: v } })} />
+                  </div>
+                )}
                 {c.type === 'people' && (
                   <div>
                     <PeoplePicker value={item.values.people || []} label={c.label} size={32} max={5} readOnly={readOnly}
                       onChange={(v) => actions.updateItem(boardId, item.id, { values: { people: v } })} />
                   </div>
+                )}
+                {c.type === 'client' && (
+                  <ClientPicker value={item.values[c.key] || ''} label={c.label} readOnly={readOnly}
+                    onChange={(v) => actions.updateItem(boardId, item.id, { values: { [c.key]: v } })} />
                 )}
                 {c.type === 'text' && (readOnly
                   ? <span className="py-1.5">{item.values[c.key] || '—'}</span>
@@ -94,7 +104,7 @@ export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly 
                   : <input type="date" value={item.values[c.key] || ''} className="field !py-1.5" aria-label={c.label}
                       onChange={(e) => actions.updateItem(boardId, item.id, { values: { [c.key]: e.target.value } })} />)}
                 {(c.type === 'status' || c.type === 'label') && (
-                  <LabelPicker label={c.label} value={item.values[c.key] || ''} options={c.options} allowEmpty={c.type !== 'status'} readOnly={readOnly}
+                  <LabelPicker label={c.label} value={item.values[c.key] || ''} options={c.options} hints={c.hints} allowEmpty={c.type !== 'status'} readOnly={readOnly}
                     onChange={(v) => actions.updateItem(boardId, item.id, { values: { [c.key]: v }, ...(c.key === 'status' ? { done: v === 'Done' } : {}) })} />
                 )}
               </div>
@@ -153,7 +163,7 @@ export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly 
 
           <section>
             <h3 className="font-bold">Updates</h3>
-            {/* An @Name in an update adds that person to the task (the store does it). */}
+            {/* An @Name in an update shows in that person's My Work → Mentions; the owner stays as it is. */}
             {!readOnly && (
               <form className="mt-2 flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); if (update.trim()) { actions.addUpdate(boardId, item.id, update.trim()); setUpdate(''); } }}>
                 <textarea value={update} onChange={(e) => setUpdate(e.target.value)} rows={3} placeholder="Write an update" aria-label="Write an update" className="field resize-none" />

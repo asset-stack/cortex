@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { useStore } from '@/data/store';
-import { STATUS } from '@/data/boards';
+import { PRIORITY, STATUS } from '@/data/boards';
 import { AvatarStack } from '@/components/ui';
 import { shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
-export default function KanbanView({ boardId, groups, onOpen, readOnly = false }) {
+export default function KanbanView({ boardId, schema, groups, onOpen, readOnly = false }) {
   const { actions } = useStore();
   const [over, setOver] = useState(null);
+  const who = schema?.columns.find((c) => c.key === 'people'); // Owner (one person) or People
+  const prioritised = schema?.columns.some((c) => c.key === 'priority');
   // Columns mix groups: their tasks in board order (each group's saved order, the groups in theirs).
   const all = groups.flatMap((g) => g.items);
   // View access: cards still open the task, but nothing can be dragged or dropped.
@@ -39,9 +41,14 @@ export default function KanbanView({ boardId, groups, onOpen, readOnly = false }
                     onClick={() => onOpen(i.id)}
                     className={cn('float rounded-[18px] chip p-3 text-left', readOnly ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing')}>
                     <div className="font-semibold">{i.name}</div>
-                    <div className="mt-2 flex items-center justify-between">
-                      <AvatarStack userIds={i.values.people} size={26} label="People" />
-                      <span className="text-[12px] dim tnum">{shortDate(i.values.due)}</span>
+                    <div className="mt-2 flex items-center gap-2">
+                      <AvatarStack userIds={i.values.people} size={26} max={who?.type === 'owner' ? 1 : 3} label={who?.label || 'People'} />
+                      {prioritised && PRIORITY[i.values.priority] && (
+                        <span className="pill !h-[22px] !px-2 !text-[11px]" style={{ backgroundColor: PRIORITY[i.values.priority] }}>
+                          <span className="sr-only">Priority: </span>{i.values.priority}
+                        </span>
+                      )}
+                      <span className="ml-auto text-[12px] dim tnum">{shortDate(i.values.due)}</span>
                     </div>
                   </button>
                 ))}

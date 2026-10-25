@@ -1,5 +1,7 @@
 // Board schemas: column definitions and label colours for the Monday-style boards, plus the other label sets.
-// Column types: people | status | label | date | text
+// Column types: owner (one person) | people | client | status | label | date | text. `owner` and `people` are both
+// kept in `values.people` (user ids): an owner column holds one, so a task has one person answerable for it
+// (docs/PHASE2.md §17). `client` holds a client id in `values.client`.
 
 export const STATUS = {
   'Not started': '#9aa3b5',
@@ -8,7 +10,12 @@ export const STATUS = {
   Done: '#00c875',
 };
 
-export const PRIORITY = { High: '#e2445c', Medium: '#fdab3d', Low: '#579bfc' };
+// Task priority, most pressing first (Sort and My Work → Priorities follow this order), and what each one means: the
+// label picker shows the meaning under each option.
+export const PRIORITY = { Urgent: '#e2445c', High: '#fdab3d', Medium: '#579bfc', Low: '#7d8fa3' };
+export const PRIORITY_HINTS = { Urgent: 'Today: drop other work. One at a time.', High: 'This week', Medium: 'This month', Low: 'When free' };
+const OWNER = { key: 'people', label: 'Owner', type: 'owner' };
+const PRIORITY_COLUMN = { key: 'priority', label: 'Priority', type: 'label', options: PRIORITY, hints: PRIORITY_HINTS };
 
 // The board modules' columns (BOARD_MODULES): Projects (with the former Admin board merged in), Marketing, Outreach and
 // Clients. All are modules in src/lib/access.js.
@@ -17,9 +24,9 @@ export const BOARD_SCHEMAS = {
     title: 'Projects',
     icon: 'FolderKanban',
     columns: [
-      { key: 'people', label: 'People', type: 'people' },
+      OWNER,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },
-      { key: 'priority', label: 'Priority', type: 'label', options: PRIORITY },
+      PRIORITY_COLUMN,
       { key: 'due', label: 'Due', type: 'date' },
     ],
   },
@@ -27,8 +34,9 @@ export const BOARD_SCHEMAS = {
     title: 'Marketing',
     icon: 'Megaphone',
     columns: [
-      { key: 'people', label: 'People', type: 'people' },
+      OWNER,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },
+      PRIORITY_COLUMN,
       {
         key: 'type', label: 'Type', type: 'label',
         options: { Industry: '#d9a800', Sponsorship: '#21b8b0', Projects: '#7d8fa3', 'Staff internal': '#ff5ac4' },
@@ -41,14 +49,15 @@ export const BOARD_SCHEMAS = {
       { key: 'due', label: 'Due', type: 'date' },
     ],
   },
-  // Outreach's boards (Sales Tasks …) and Clients' (Demos, Previews …) have the standard task columns, as Projects.
+  // Outreach's boards (Sales Tasks …) have the standard task columns, as Projects; Clients' (Demos, Previews …) also say
+  // which client a task is for.
   outreach: {
     title: 'Outreach',
     icon: 'Mail',
     columns: [
-      { key: 'people', label: 'People', type: 'people' },
+      OWNER,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },
-      { key: 'priority', label: 'Priority', type: 'label', options: PRIORITY },
+      PRIORITY_COLUMN,
       { key: 'due', label: 'Due', type: 'date' },
     ],
   },
@@ -56,9 +65,10 @@ export const BOARD_SCHEMAS = {
     title: 'Clients',
     icon: 'Building2',
     columns: [
-      { key: 'people', label: 'People', type: 'people' },
+      { key: 'client', label: 'Client', type: 'client' },
+      OWNER,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },
-      { key: 'priority', label: 'Priority', type: 'label', options: PRIORITY },
+      PRIORITY_COLUMN,
       { key: 'due', label: 'Due', type: 'date' },
     ],
   },
@@ -79,7 +89,7 @@ export const BOARD_SCHEMAS = {
 export const itemWord = (schema) => schema?.item || 'Task';
 export const hasDates = (schema) => (schema?.columns || []).some((c) => c.type === 'date');
 
-// Item values with `people` as a clean list of user ids (the people column). Phase 1's single `owner` becomes
+// Item values with `people` as a clean list of user ids (the owner or people column). Phase 1's single `owner` becomes
 // people, as the 0002 migration does in the database.
 export function withPeople(values) {
   const { owner, ...rest } = values && typeof values === 'object' ? values : {};

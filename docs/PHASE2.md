@@ -12,8 +12,9 @@ RLS on every table, repo is public (no real people/client data, keys or bank det
 - **My Work** is each person's own daily to-do list: work assigned by admins, board items they are on,
   daily marketing routines generated automatically, and automation items. Admins can view and add to
   anyone's schedule.
-- **Projects** and **Admin** boards merge into one **Projects** board; work is assigned by tagging people
-  (multi-person column, and an `@Name` in a task update adds that person). Staff edited it until `0003`, viewed it
+- **Projects** and **Admin** boards merge into one **Projects** board; work was assigned by tagging people
+  (multi-person column, and an `@Name` in a task update added that person) until each task got one **Owner** (§17).
+  Staff edited it until `0003`, viewed it
   under `0003` (§8), and edit it again since `0006`, when Projects became several team boards plus each person's own
   page (§11).
 - **Marketing** board: shared, everyone edits ("marketing machine" detail comes later). Since `0006` it is split
@@ -181,7 +182,8 @@ The round-trip property must hold for every table. Rows the user can't read simp
 ## 5. Store actions (`src/data/store.jsx`) — both modes unless noted
 - Access: `setModuleAccess(userId, module, level)` (superadmin only; `level === default` deletes the override).
   `updateProfile` keeps working; role/active only for superadmin.
-- Boards: `updateItem` accepts `values.people`; `addUpdate` adds every `@Name` mentioned (active users) to the item's `people`.
+- Boards: `updateItem` accepts `values.people` (and `values.owner`: one owner, §17); `addUpdate` used to add every
+  `@Name` mentioned to the item's `people` (since §17 it doesn't: the mention shows in My Work → Mentions).
   `addItem(boardId, groupId, name)` defaults `people: [me]`. Board actions take a board id since 0006 (§11; was the
   module key).
 - My Work: `addTodo({ assignee, title, day, start, minutes, category, notes })` (staff: own only),
@@ -213,10 +215,11 @@ The round-trip property must hold for every table. Rows the user can't read simp
   picker (default me). Sections: *Carried over* (undone to-dos before today), *Today* (to-dos sorted by start time
   then position: checkbox, title, category pill, minutes, source icon for routine/automation, delete), inline add
   (title, category, minutes, optional time; admins can add for the selected person), *On boards* (items on any board
-  you can see whose `people` include the person and aren't done), *Mentions* (existing). KPI row: to-dos today, done,
+  you can see whose `people` include the person and aren't done; *Priorities* since §17), *Mentions* (existing).
+  KPI row: to-dos today, done,
   carried over, mentions. Calls `ensureTodos(today)` once per day per signed-in user.
-- **Projects / Marketing** boards: people column = multi-avatar picker (`PeoplePicker` in `src/components/ui`);
-  read-only at `view` (per board since 0006, §11).
+- **Projects / Marketing** boards: people column = multi-avatar picker (`PeoplePicker` in `src/components/ui`; one
+  Owner, `OwnerPicker`, since §17); read-only at `view` (per board since 0006, §11).
 - **Outreach**: contact status select (New → Meeting booked …) and owner; read-only at `view`. Since 0007 the page is
   the agent's dashboard, with this contact list kept as its **Contacts** view (§12).
 - **Pipeline**: read-only for `view` (no drag, no stage select, no Edit, no New deal, no Make client); deal card shows a
@@ -451,12 +454,12 @@ version that uses it.
   it; the column headings: the group's top; the rest of a group, or a collapsed group's heading: its end), placed by
   "before this task" so search and filters don't upset the full order (a drop where the task already sits among the
   rows shown changes nothing). **Sort** in the top bar of the Table view (Due date: the soonest first, no date last,
-  then by priority; Priority: High first, then by due date; tasks equal on both keep their order) rewrites every
+  then by priority; Priority: Urgent first (§17), then by due date; tasks equal on both keep their order) rewrites every
   group's saved order for everyone, and dragging carries on from there. The Table view shows that saved order; Kanban's
   columns list each group's tasks one group after another. Both need edit on the board; the order syncs
   as `items.position` (no migration). Deleting a board, a group
   or a task asks first; a subtask or an update goes at once. A read-only board shows none of this. My Work → On boards
-  lists open tasks from every board you can see, with the board's name.
+  (Priorities since §17) lists open tasks from every board you can see, with the board's name.
 - **Tests**: `scripts/test-db.mjs` phase 6 (starting boards and where the groups went, personal boards for existing
   and new profiles, who sees and edits which board, team boards admins only, moving a task across boards,
   `place_on_board`, re-run, realtime); `scripts/test-sync.mjs` (mapping and positions, `boardLevel` against the SQL
@@ -888,3 +891,58 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   would pick the client by the mailbox's domain (a `GOOGLE_CLIENTS` secret). Making the one client External instead
   would need Google's verification and a yearly security assessment for Gmail access. Reply sorting fills
   `reply_kind`, which needs reading the reply's text at sync time.
+
+## 17. Owners and priorities — one owner per task, Urgent → Low, My Work → Priorities
+
+- **Owner's ask**: after two weeks of use it wasn't clear in Projects (BAU and client work: demos, design updates) and
+  Marketing who owns a task, which jobs come first, or how to explain priority to staff; Outreach, Pipeline and Clients
+  worked because each contact, deal and client has one owner. Research: a task had a *People* list (the creator, plus
+  anyone `@named` in an update, added silently), priority was optional with no meaning (Marketing had none, and My
+  Work sorted by due date only), client work was tied to the client only by the name typed in the task, and personal
+  pages came first in the menu.
+- **Owner's decisions**: anyone sets the owner and the priority (no gatekeeper; admins get a *Needs attention* list).
+  Priority is **Urgent / High / Medium / Low**, each with a time meaning. Client work stays under **Clients** (Demos,
+  Previews), linked to the client. Personal pages stay, for personal notes, after the team boards. No migration:
+  everything here is in `items.values` (jsonb) and the app.
+- **One Owner** (`src/data/boards.js`): Projects, Marketing, Outreach and Clients boards have an **Owner** column (type
+  `owner`), kept in `values.people` as `[id]`, so the calendar, the person filter, imports and My Work read it as
+  before. Work in Progress' *Contact* stays a people list. A task that still has several people shows the first and
+  *+N* until someone picks one (`OwnerPicker` in `src/components/ui`; picking one makes them the only owner). New tasks
+  start with their creator as owner. Handing a task to someone else records `values.assignedBy` / `assignedAt`
+  (`nextValues()` in `src/lib/work.js`, called by `updateItem`; taking it yourself or clearing it removes them, and a
+  patch can't set them). An `@Name` in a task update no longer adds that person: it shows in their My Work →
+  Mentions.
+- **Priority** (`PRIORITY`, `PRIORITY_HINTS`): **Urgent**: today, drop other work, one at a time. **High**: this week.
+  **Medium**: this month. **Low**: when free. The label picker shows each meaning under the option and as the cell's
+  tooltip. Marketing has a Priority column too. Sort → Priority puts Urgent first; Kanban cards show the priority.
+  Deals' and clients' P1–P3 are separate and unchanged. The importer reads *urgent*, *critical*, *asap* and *P0* as
+  Urgent.
+- **My Work → Priorities** (`src/components/work/Priorities.jsx`, replaces *On boards*): the open tasks the person is on,
+  on every board they see (limited to what the viewer sees: an admin looking at someone's My Work gets what that person
+  sees), Urgent → High → Medium → Low → none, then the soonest due (none last), then board order
+  (`prioritiesFor()`). Each row: the priority pill, the task (opens it), the board and client, the status, the due date
+  (red when overdue, by the person's own day) and **New · from Josh** for a task someone else handed them in the last
+  two days. An amber note when they have more than one Urgent task or more than two In progress (`workload()`;
+  Work in Progress rows don't count): a team rule, not a block.
+- **Needs attention** (admins, My Work, `NeedsAttention.jsx`): open tasks on the team boards with an owner column that
+  are **Overdue**, **Stuck**, have **No owner** or **Several people**, or **No priority** (`needsAttention()`, by the
+  board access rules), the most pressing first; six shown, then *Show all*. Each opens the task to fix it.
+- **Mentions**: `mentionsOf()` adds task updates that `@name` the person (by name; `@here` names no one) on the boards
+  they see (`taskMentions()`), newest first with the chat ones; each opens its task.
+- **Client work**: Clients boards (Demos, Previews …) have a **Client** column first (type `client`, `values.client` = a
+  client id; `ClientPicker`), and a client's drawer → Overview lists its open linked tasks under **Board tasks**
+  (`clientTasks()`). Priorities and Needs attention show the client's name. A deleted client shows as none.
+- **Team work first**: Projects' menu lists the team boards, then your own page, and `#/projects` opens the first team
+  board you can see (your own page when there is none; `resolveBoard`).
+- **Demo seed**: tasks have one owner (Insurance renewal keeps two, and three tasks have none, for Needs attention); David and
+  Josh have Urgent client work (Josh has two, so his Priorities shows the note); Marketing has priorities (Bridge
+  project spotlight has none); Demos and Previews tasks are linked to their clients; David handed *Council landing
+  page* to Hello (New in her Priorities). Demo data saved before this keeps its people until someone picks an owner.
+- **For the owner, in the app (no code)**: give staff **Edit** on Clients in Settings → Team so they can update client
+  work (it also lets them edit client details and notes and draft invoices; money in, expenses, approving and sending
+  stay admins only); rename *General* to *BAU*; merge *Campaigns* and *Events*; move the *Daily Automation* tasks into
+  Settings → Routines and delete that board. The note to send staff is `docs/HOW-WE-WORK.md`.
+- **Tests**: `scripts/test-sync.mjs` (the columns and scale, `nextValues`, Priorities order, New, the workload note,
+  Needs attention's rules and access, task mentions, client tasks, the seed, `resolveBoard`'s new default).
+- **Later, not built**: templates (demo prep, design update, onboarding), adding a task to My Work's day from the task,
+  moving tasks between modules, and notifications beyond Mentions.

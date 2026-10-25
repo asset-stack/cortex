@@ -94,7 +94,8 @@ export const boardHref = (board, itemId) => (board
 /**
  * The board a #/<module>/<sub> address shows, from the boards `visible` to the signed-in user (in state order):
  * the board named by `sub`; else the one holding `itemId` (old #/projects?item= links); else the module's default
- * (your own page for Projects, the first team board otherwise). null when there is none. A module with its own page
+ * (its first team board: team work comes first; for Projects with none you can see, your own page). null when there
+ * is none. A module with its own page
  * (MODULE_HOMES: Outreach, Clients) has no default board: #/<module> is that page, so only a named board (or the one
  * holding `itemId`) is shown.
  */
@@ -106,5 +107,5 @@ export function resolveBoard(state, visible, module, sub, itemId) {
   const holding = itemId && mine.find((b) => b.groups.some((g) => g.items.some((i) => i.id === itemId)));
   if (holding) return holding;
   if (MODULE_HOMES[module] || PAGE_BOARD_MODULES.includes(module)) return null;
-  return (module === 'projects' && mine.find((b) => b.owner === state?.me)) || mine.find((b) => !b.owner) || mine[0];
+  return mine.find((b) => !b.owner) || (module === 'projects' && mine.find((b) => b.owner === state?.me)) || mine[0];
 }
