@@ -1972,6 +1972,10 @@ await check('format: dates and clocks in a time zone', () => {
   assert.match(format.localTime('Asia/Manila', at), /^9:30\s?pm$/i);
   assert.deepEqual([format.localClock('', at), format.localClock('Mars/Olympus', at), format.localTime(undefined, at)], ['', '', '']);
   assert.equal(typeof format.browserTimezone(), 'string');
+  // The world clocks: time, weekday and hour (for day or night) in each city.
+  const now = (z) => { const n = format.zoneNow(z, at); return n && [n.time.replace(/\s/g, ' ').toLowerCase(), n.day, n.hour]; };
+  assert.deepEqual(['Australia/Sydney', 'Asia/Tbilisi', 'Asia/Manila'].map(now), [['12:30 am', 'Tue', 0], ['5:30 pm', 'Mon', 17], ['9:30 pm', 'Mon', 21]]);
+  assert.deepEqual([format.zoneNow('', at), format.zoneNow('Mars/Olympus', at), format.zoneNow(undefined, at)], [null, null, null]);
 });
 
 await check("automations: contactPipelineLocal dates the follow-up on its owner's today (user_today()), Sydney when unknown", () => {

@@ -174,6 +174,20 @@ export function localTime(timezone, at = new Date()) {
   }
 }
 
+// A time zone's current time, short weekday and hour (0–23), e.g. { time: '7:39 pm', day: 'Fri', hour: 19 } (the world
+// clocks); null for a blank or unknown zone.
+export function zoneNow(timezone, at = new Date()) {
+  const time = localTime(timezone, at);
+  if (!time) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-AU', { timeZone: timezone, weekday: 'short', hour: 'numeric', hourCycle: 'h23' }).formatToParts(at);
+    const part = (type) => parts.find((p) => p.type === type)?.value || '';
+    return { time, day: part('weekday'), hour: Number(part('hour')) % 24 };
+  } catch {
+    return null;
+  }
+}
+
 // A person's city and current local time, e.g. "Tbilisi · 9:12 am" ('' for an unknown zone).
 export function localClock(timezone, at = new Date()) {
   const time = localTime(timezone, at);
