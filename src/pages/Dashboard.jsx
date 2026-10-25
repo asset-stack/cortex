@@ -1,20 +1,24 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarCheck, Clock, History } from 'lucide-react';
+import { CalendarCheck, Clock, History, Plus } from 'lucide-react';
 import { ensuredTodos, useStore, useUsers } from '@/data/store';
 import { KpiRow } from '@/components/ui';
+import Board from '@/components/board/Board';
+import NewTaskModal from '@/components/board/NewTaskModal';
 import DayNav from '@/components/work/DayNav';
 import PersonSwitch from '@/components/work/PersonSwitch';
 import TodoList from '@/components/work/TodoList';
 import AddTodo from '@/components/work/AddTodo';
-import Priorities from '@/components/work/Priorities';
+import MyTasks from '@/components/work/MyTasks';
 import NeedsAttention from '@/components/work/NeedsAttention';
 import Mentions, { mentionsOf } from '@/components/work/Mentions';
 import Tools from '@/components/work/Tools';
 import TimesheetModal from '@/components/timesheet/TimesheetModal';
 import { useAccess } from '@/lib/access';
 import { addDays } from '@/lib/automations';
+import { personalBoard } from '@/lib/boards';
 import { localYmd } from '@/lib/format';
 import { dayLabel } from '@/lib/timesheet';
+import { prioritiesFor, workload } from '@/lib/work';
 
 function greeting() {
   const h = new Date().getHours();
@@ -27,7 +31,12 @@ const byStart = (todos) => todos
   .sort((a, b) => (!a.t.start) - (!b.t.start) || (a.t.start < b.t.start ? -1 : a.t.start > b.t.start ? 1 : 0) || a.position - b.position)
   .map(({ t }) => t);
 
-export default function MyWork() {
+/**
+ * The Dashboard (docs/PHASE2.md §18; was My Work): someone's master task list (Waiting on you, the day's to-dos, My
+ * tasks across every department, Urgent first) and their notes (their own page), with Needs attention (admins),
+ * Mentions and Tools beside it. Admins look at anyone's.
+ */
+export default function Dashboard() {
   const { state, actions } = useStore();
   const users = useUsers();
   const access = useAccess();
@@ -36,6 +45,7 @@ export default function MyWork() {
   const day = addDays(today, offset);
   const [picked, setPicked] = useState('');
   const [logging, setLogging] = useState(false);
+  const [adding, setAdding] = useState(false);
 
   // Routine to-dos (and an admin's Monday bank reminder) are made once per signed-in person and day.
   useEffect(() => {
@@ -59,6 +69,10 @@ export default function MyWork() {
     .sort((a, b) => (a.t.day < b.t.day ? -1 : a.t.day > b.t.day ? 1 : 0) || a.position - b.position)
     .map(({ t }) => t), [mine, today]);
   const mentions = useMemo(() => mentionsOf(state, person), [state, person]);
+  const rows = useMemo(() => prioritiesFor(state, personId, { today }), [state, personId, today]);
+  const load = workload(rows);
+  const notes = personalBoard(state, personId);
+  const showNotes = notes && access.canViewBoard(notes);
 
   const title = offset === 0 ? 'Today' : offset === -1 ? 'Yesterday' : offset === 1 ? 'Tomorrow' : dayLabel(day);
 
@@ -66,12 +80,18 @@ export default function MyWork() {
     <div>
       <div className="flex items-center justify-between gap-4">
         <h1 className="page-title text-[34px] md:text-[44px] leading-none">{self ? `${greeting()}, ${person?.name}` : person?.name}</h1>
-        {self && (
-          <button type="button" onClick={() => setLogging(true)} aria-label="Log time" title="Log time"
+        <div className="flex shrink-0 items-center gap-2">
+          {self && (
+            <button type="button" onClick={() => setLogging(true)} aria-label="Log time" title="Log time"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center gap-2 rounded-full chip font-semibold sm:w-auto sm:px-5">
+              <Clock className="h-4 w-4" /><span className="hidden sm:inline">Log time</span>
+            </button>
+          )}
+          <button type="button" onClick={() => setAdding(true)} aria-label="New task" title="New task"
             className="btn-primary inline-flex h-11 w-11 shrink-0 items-center justify-center gap-2 rounded-full font-semibold sm:w-auto sm:px-5">
-            <Clock className="h-4 w-4" /><span className="hidden sm:inline">Log time</span>
+            <Plus className="h-4 w-4" /><span className="hidden sm:inline">New task</span>
           </button>
-        )}
+        </div>
       </div>
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
@@ -80,21 +100,24 @@ export default function MyWork() {
       </div>
 
       <KpiRow items={[
+        { value: load.waiting, label: 'Waiting on you', tint: '#f59e0b' },
+        { value: load.urgent, label: 'Urgent', tint: '#e2445c' },
+        { value: load.overdue, label: 'Overdue', tint: '#7c3aed' },
         { value: dayTodos.length, label: offset === 0 ? 'To-dos today' : 'To-dos', tint: '#334155' },
-        { value: dayTodos.filter((t) => t.done).length, label: 'Done', tint: '#0f9f6f' },
-        { value: carried.length, label: 'Carried over', tint: '#f59e0b' },
-        { value: mentions.length, label: 'Mentions', tint: '#579bfc' },
       ]} />
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex min-w-0 flex-col gap-6">
+          {load.waiting > 0 && <MyTasks rows={rows.filter((r) => r.waiting)} personId={personId} waiting act title={self ? 'Waiting on you' : `Waiting on ${person?.name}`} />}
           {offset === 0 && carried.length > 0 && (
             <TodoList title="Carried over" icon={History} todos={carried} showDay moveTo={{ day: today, label: 'today' }} />
           )}
           <TodoList title={title} icon={CalendarCheck} todos={dayTodos} empty="Nothing planned." rim>
             <AddTodo assignee={personId} day={day} />
           </TodoList>
-          <Priorities personId={personId} />
+          <MyTasks rows={rows.filter((r) => !r.waiting)} personId={personId} act load={load} title={self ? 'My tasks' : `${person?.name}’s tasks`}
+            empty={self ? 'Nothing assigned to you.' : 'Nothing assigned.'} />
+          {showNotes && <section aria-label="My notes" className="mt-4"><Board key={notes.id} board={notes} embedded title={self ? 'My notes' : `${person?.name}’s notes`} /></section>}
         </div>
         <div className="flex min-w-0 flex-col gap-6">
           {access.isAdmin && <NeedsAttention />}
@@ -104,6 +127,7 @@ export default function MyWork() {
       </div>
 
       <TimesheetModal open={logging} onClose={() => setLogging(false)} day={day} />
+      {adding && <NewTaskModal onClose={() => setAdding(false)} owner={self ? '' : personId} />}
     </div>
   );
 }

@@ -47,14 +47,15 @@ function RenameBoard({ board, onClose }) {
   );
 }
 
-/** A board with its views, filters and task drawer. `embedded`: shown on its module's page under the main content (Work
- *  in Progress on the Pipeline page): a section heading, and its admins' options are Rename only (it isn't in a menu). */
-export default function Board({ board, embedded = false }) {
+/** A board with its views, filters and task drawer. `embedded`: shown on another page under its main content (Work in
+ *  Progress on the Pipeline page, a person's notes on their Dashboard): a section heading (`title`, else the board's), no
+ *  person switch, its address left as it is, and its admins' options are Rename only (it isn't in a menu). */
+export default function Board({ board, embedded = false, title: named = '' }) {
   const { state, actions } = useStore();
   const access = useAccess();
   const editable = access.canEditBoard(board); // at view: no adding, pickers, drag or typing
   const schema = BOARD_SCHEMAS[board.module];
-  const title = boardTitle(state, board);
+  const title = named || boardTitle(state, board);
   const dated = hasDates(schema); // no dates: no calendar, no sort by due
   const prioritised = (schema?.columns || []).some((c) => c.key === 'priority');
   const word = itemWord(schema);
@@ -63,7 +64,7 @@ export default function Board({ board, embedded = false }) {
   const [q, setQ] = useState('');
   const [person, setPerson] = useState('');
   const [status, setStatus] = useState('');
-  const [openId, setOpenId] = useState(() => hashParam('item')); // My Work links to #/<module>/<board>?item=<id>
+  const [openId, setOpenId] = useState(() => hashParam('item')); // task links go to #/<module>/<board>?item=<id>
   const [added, setAdded] = useState([]); // created under the current filters; shown even if they don't match
   const [personAnchor, setPersonAnchor] = useState(null);
   const [statusAnchor, setStatusAnchor] = useState(null);
@@ -103,8 +104,10 @@ export default function Board({ board, embedded = false }) {
   const newTask = () => { const id = add(board.groups[0]?.id, `New ${word.toLowerCase()}`); if (id) setOpenId(id); };
   const closeItem = () => {
     setOpenId(null);
-    // Drop ?item= so a reload or Back doesn't reopen it; replaceState fires no hashchange.
-    if (window.location.hash.includes('?')) window.history.replaceState(null, '', `#/${board.module}/${board.id}`);
+    // Drop ?item= so a reload or Back doesn't reopen it; replaceState fires no hashchange. Embedded, it stays on its page.
+    if (window.location.hash.includes('?')) {
+      window.history.replaceState(null, '', embedded ? window.location.hash.split('?')[0] : `#/${board.module}/${board.id}`);
+    }
     // The drawer hands focus back to what opened it; a task moved here from another board was opened by a row on that
     // board, which is gone, so focus would fall to the page: put it on this board's title instead.
     window.setTimeout(() => {
@@ -138,7 +141,7 @@ export default function Board({ board, embedded = false }) {
           {embedded
             ? <h2 ref={heading} tabIndex={-1} className="page-title min-w-0 break-words text-[26px] md:text-[32px] leading-none outline-none">{title}</h2>
             : <h1 ref={heading} tabIndex={-1} className="page-title min-w-0 break-words text-[34px] md:text-[44px] leading-none outline-none">{title}</h1>}
-          {people.length > 1 && <PersonSwitch value={board.owner} onChange={showPerson} people={people} />}
+          {!embedded && people.length > 1 && <PersonSwitch value={board.owner} onChange={showPerson} people={people} />}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {options && (

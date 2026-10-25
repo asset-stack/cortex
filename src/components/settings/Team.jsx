@@ -2,11 +2,11 @@ import { useStore } from '@/data/store';
 import { ALLOWED_DOMAIN } from '@/data/backend/client';
 import { Avatar } from '@/components/ui';
 import { LEVELS, MODULES, ROLES, ROLE_LABELS, STAFF_DEFAULTS, roleOf, useAccess } from '@/lib/access';
+import { MODULE_LABELS } from '@/lib/boards';
 import { cn } from '@/lib/cn';
 import { localClock } from '@/lib/format';
 import { Switch } from './controls';
 
-const MODULE_LABELS = { projects: 'Projects', marketing: 'Marketing', outreach: 'Outreach', pipeline: 'Pipeline', clients: 'Clients' };
 const LEVEL_LABELS = { none: 'None', view: 'View', edit: 'Edit' };
 
 // A staff member's level for a module as stored: their override, else the staff default. (moduleLevel() would say

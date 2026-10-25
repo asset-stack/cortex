@@ -949,3 +949,64 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   Needs attention's rules and access, task mentions, client tasks, the seed, `resolveBoard`'s new default).
 - **Later, not built**: templates (demo prep, design update, onboarding), adding a task to My Work's day from the task,
   moving tasks between modules, and notifications beyond Mentions.
+
+## 18. Dashboard, Team and Operations — one task, one home, many views
+
+- **Owner's ask**: replace My Work with a **Dashboard** whose master task list combines the work allocated to you
+  (waiting on you to act, so you're accountable to the team) and your daily to-dos, with your own task list below; a
+  view of each person's priority work and load; a home for business work that isn't Marketing, Outreach or Clients; and
+  client work (e.g. a new video from a client's preview) added from the client and pushed to the owner's list.
+- **Principle**: every task lives in **one place**, the board where the work belongs (optionally linked to a client),
+  with one owner, priority and due date. The Dashboard, Team pages and a client's page are views of that same task,
+  never copies. A task's category is where it lives, shown as a breadcrumb (`Clients › Previews › Northside Diocese`,
+  `Operations › BAU`; `whereOf()`); there is no separate Department field that could disagree with the board.
+- **Owner's decisions**: ship §17 first (done), then this. General business work lives in **Operations** (Projects
+  renamed) with boards. **Everyone** opens the Team pages; personal notes stay private. New work is **accepted** by its
+  owner. No migration: everything is in `items.values` (jsonb) and `todos` as they are.
+- **Dashboard** (`#/dashboard`, `src/pages/Dashboard.jsx`; `#/work` redirects there): **Waiting on you** (tasks handed to
+  you, not yet accepted: *From David · 2h*, **Accept**), **Today** (the day's to-dos, carried-over ones above), **My
+  tasks** (`src/components/work/MyTasks.jsx`: every open task you're on, Urgent first, with its breadcrumb, status, due
+  and **Do today**; the team-rule note), and **My notes** (your own page, embedded: `Board embedded title`). Beside them:
+  Needs attention (admins), Mentions (counted in its heading), Tools. KPIs: Waiting on you, Urgent, Overdue, To-dos
+  today. **New task** in the header. Admins still look at anyone's.
+- **Accept** (`src/lib/work.js`): a task handed to someone (`assignedBy`, §17) waits on them (`isWaiting()`) until they
+  accept it (`acceptItem` → `acceptedValues()`, `values.acceptedAt`) or change its status (`nextValues()`: starting it
+  accepts it). A new owner waits again; taking it yourself or clearing it removes all three keys; a patch can't set
+  them. Only the owner accepts, and only people who can edit the board can be owner (§17), so they always can. Needs
+  attention adds **Not accepted** (`ACCEPT_WITHIN`, a day after `assignedAt`). The New tag of §17 is gone.
+- **Do today**: `addTodoForItem(boardId, itemId, { day, assignee })` makes a to-do with `source: 'manual'` and
+  `ref: 'item:<id>'` (no migration: the `source` check allows manual, `ref` is free text), titled after the task and
+  filed under its board's category (`BOARD_CATEGORY`), once per task, person and day (`todoForItem()`, checked in the
+  app). Yours, or an admin's for anyone, on a board both see. The to-do shows a link to its task (`itemOfTodo()`;
+  none once the task is gone or out of sight). Ticking the to-do ticks only the to-do; the task is done on the task.
+- **Team** (`#/team`, `#/team/<id>`, `src/pages/Team.jsx`; no module key, like the Calendar): a card per active person
+  (Waiting, Urgent, In progress, Overdue, Open: `workload()`; their top three tasks) and each person's page (what waits
+  on them, their tasks, **New task for …**). Team boards only (`prioritiesFor(…, { teamOnly })`), by the board rules for
+  the viewer and the person, so notes never show. The sidebar lists the people under Team.
+- **Operations**: the Projects module is shown as **Operations** (`MODULE_LABELS` in `src/lib/boards.js`: the menu,
+  breadcrumbs, `BOARD_SCHEMAS.projects.title`, Settings → Team). Its key, the database, `STARTING_BOARDS` and the
+  timesheet category `Projects` stay. Personal pages leave its menu (they're My notes; `boardTitle()` is *David’s
+  notes*), and `#/projects` opens the first team board you can see.
+- **New task** (`src/components/board/NewTaskModal.jsx`): name; **Where** (team boards you can edit, by department, and
+  your notes; not Work in Progress); **Client** (boards with a Client column); **Owner** (`OwnerPicker` for that board);
+  **Priority** (with its meanings); **Due**. `addItem(boardId, groupId, name, values)` runs the values through
+  `newTaskValues()` in the same change, so a task made for someone else waits on them. From the Dashboard, Team › person
+  (owner preset) and a client's drawer → **Add task** (Clients boards only, client preset). A board's own New task is
+  unchanged.
+- **Client page**: Overview starts with **Tasks** (the client's open linked tasks, `clientTasks()`, which now counts only
+  boards with a Client column; *Waiting to be accepted* where it applies) and **Add task**. The old simple checklist
+  (`client_tasks`) stays, as **Checklist**.
+- **Calendar**: opens this month only (the rest open on a click); this month's table has a ring and this week's row is
+  tinted (`aria-current="date"`).
+- **Demo seed**: Josh has *New video from the Northside preview* (Previews, Northside, High) waiting on him from David,
+  and an accepted hand-over (Coastal Rail preview); Hello's *Council landing page* waits on her; David's Today has his
+  Urgent Northside walkthrough via Do today.
+- **For the owner, in the app**: give staff **Edit** on Clients (so they can own and accept client work); rename
+  General → **BAU**; add **Finance** and **Development** boards under Operations (move Landing Page and Tender Portal
+  work into Development, or keep them as boards); merge Campaigns and Events; move Daily Automation into Routines. Send
+  staff `docs/HOW-WE-WORK.md`.
+- **Tests**: `scripts/test-sync.mjs` (accept and its rules, new-task values, breadcrumbs and `MODULE_LABELS`, Do today's
+  helpers, the Dashboard and Team lists and counts, Not accepted, client tasks only on client boards, the seed,
+  `boardTitle`, `boardHref`'s Dashboard).
+- **Later, not built**: tags across departments (e.g. *Video*), templates, notifications beyond Mentions and Waiting,
+  and ticking a Do-today to-do to finish its task.

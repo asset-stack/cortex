@@ -46,7 +46,7 @@ export default function MonthBlock({ month, days, count, open, onToggle, today, 
       {open && (
         <>
           <div className="mt-3 hidden overflow-x-auto scroll-thin md:block">
-            <div className="min-w-[760px] overflow-hidden rounded-[24px] glass">
+            <div className={cn('min-w-[760px] overflow-hidden rounded-[24px] glass', current && 'ring-2 ring-sky-300/40')}>
             <table className="w-full table-fixed text-[13px]">
               <thead>
                 <tr className="text-[12px] dimmer">
@@ -56,7 +56,8 @@ export default function MonthBlock({ month, days, count, open, onToggle, today, 
               </thead>
               <tbody>
                 {weeks.map((w) => (
-                  <tr key={w.monday} className="border-t rowline align-top">
+                  <tr key={w.monday} className={cn('border-t rowline align-top', w.days.includes(today) && 'bg-sky-400/10')}
+                    aria-current={w.days.includes(today) ? 'date' : undefined}>
                     <th scope="row" className="px-3 py-2 text-left font-semibold">
                       Wk {w.week}<div className="text-[11.5px] font-medium dimmer">{dayMonth(w.monday)}</div>
                     </th>
@@ -93,7 +94,7 @@ export default function MonthBlock({ month, days, count, open, onToggle, today, 
               const inMonth = w.days.filter((d) => d.startsWith(month));
               const busy = inMonth.filter((d) => days.get(d)?.length);
               return (
-                <div key={w.monday} className="rounded-[20px] glass p-3">
+                <div key={w.monday} className={cn('rounded-[20px] glass p-3', w.days.includes(today) && 'ring-2 ring-sky-300/40')}>
                   <div className="text-[13px] font-bold">Wk {w.week}<span className="font-medium dimmer"> · {dayMonth(inMonth[0])} – {dayMonth(inMonth.at(-1))}</span></div>
                   {busy.length ? busy.map((d) => (
                     <div key={d} className="mt-2">

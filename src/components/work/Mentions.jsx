@@ -17,7 +17,7 @@ export function mentionsOf(state, person) {
   return [...chat, ...taskMentions(state, person)].sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
 }
 
-/** The latest five mentions (the KPI counts them all), and overdue invoices for those who can see Clients. */
+/** The latest five mentions (the heading counts them all), and overdue invoices for those who can see Clients. */
 export default function Mentions({ mentions, person }) {
   const { state } = useStore();
   const users = useUsers();
@@ -27,7 +27,9 @@ export default function Mentions({ mentions, person }) {
 
   return (
     <section className="glass glass-rim self-start rounded-[24px] p-5" aria-label="Mentions">
-      <h2 className="flex items-center gap-2 font-extrabold text-[16px]"><AtSign className="h-4 w-4" aria-hidden="true" />Mentions</h2>
+      <h2 className="flex items-center gap-2 font-extrabold text-[16px]">
+        <AtSign className="h-4 w-4" aria-hidden="true" />Mentions<span className="text-[12px] font-semibold dimmer tnum">{mentions.length}</span>
+      </h2>
       {latest.length === 0 && <p className="mt-3 dimmer">No one has tagged {person?.id === state.me ? 'you' : person?.name} yet.</p>}
       <ol className="mt-3 flex flex-col gap-2">
         {latest.map((m) => {

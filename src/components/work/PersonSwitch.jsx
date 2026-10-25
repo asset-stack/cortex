@@ -5,7 +5,7 @@ import { Avatar, Popover } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import { localClock, localTime } from '@/lib/format';
 
-/** Admins: whose My Work (or Projects page) to show. Active team members only; `people` (user ids) narrows the list. */
+/** Admins: whose Dashboard (or notes page) to show. Active team members only; `people` (user ids) narrows the list. */
 export default function PersonSwitch({ value, onChange, people: only }) {
   const { state } = useStore();
   const [anchor, setAnchor] = useState(null);

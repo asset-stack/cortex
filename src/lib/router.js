@@ -1,9 +1,10 @@
 // Tiny hash router: #/clients, #/marketing/<board id> … keeps the build static.
 import { useEffect, useState } from 'react';
 
-export const ROUTES = ['work', 'calendar', 'projects', 'marketing', 'outreach', 'pipeline', 'clients', 'settings'];
-// Old links that still work: the Admin board merged into Projects (docs/PHASE2.md §6), item ids unchanged.
-export const REDIRECTS = { admin: 'projects' };
+export const ROUTES = ['dashboard', 'calendar', 'team', 'projects', 'marketing', 'outreach', 'pipeline', 'clients', 'settings'];
+// Old links that still work: the Admin board merged into Projects (docs/PHASE2.md §6), item ids unchanged; My Work is
+// the Dashboard (§18).
+export const REDIRECTS = { admin: 'projects', work: 'dashboard' };
 
 // A malformed %-escape (a hand-typed or truncated link) is kept as typed rather than crashing the app.
 const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
@@ -18,7 +19,7 @@ const split = () => {
 const read = () => {
   const { route, sub } = split();
   if (REDIRECTS[route]) return { route: REDIRECTS[route], sub: '' };
-  return ROUTES.includes(route) ? { route, sub } : { route: 'work', sub: '' };
+  return ROUTES.includes(route) ? { route, sub } : { route: 'dashboard', sub: '' };
 };
 
 // #/admin?item=x → #/projects?item=x in the address bar, without a history entry (replaceState fires no hashchange).
@@ -29,7 +30,7 @@ const fixAddress = () => {
 
 /**
  * { route, sub }: the page and, for the board modules, the board id ('' for the module's default board, or for Outreach
- * and Clients their own page: MODULE_HOMES in src/lib/boards.js).
+ * and Clients their own page: MODULE_HOMES in src/lib/boards.js); for Team, a person's id ('' for everyone).
  */
 export function useRoute() {
   const [at, setAt] = useState(read);

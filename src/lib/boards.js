@@ -4,6 +4,9 @@
 // Relative imports with extensions, so scripts/test-sync.mjs can load this file in Node.
 
 export const BOARD_MODULES = ['projects', 'marketing', 'outreach', 'clients', 'pipeline'];
+// What each board module is called on screen (its menu, a task's breadcrumb, Settings → Team). Projects is shown as
+// Operations since §18 (its key, database and timesheet category stay 'projects' / Projects).
+export const MODULE_LABELS = { projects: 'Operations', marketing: 'Marketing', outreach: 'Outreach', clients: 'Clients', pipeline: 'Pipeline' };
 // Modules whose boards sit on the module's own page, under its main content (Pipeline: Work in Progress under the
 // deals), rather than in the sidebar; the others list theirs as sub-menus.
 export const PAGE_BOARD_MODULES = ['pipeline'];
@@ -78,18 +81,18 @@ export function sortedItems(items, by, { priorities = [], dateKey = 'due' } = {}
 
 export const firstName = (name) => String(name ?? '').trim().split(/\s+/)[0] || 'Someone';
 
-/** "Landing Page", or "Shem’s Projects" for a personal board. */
+/** "Landing Page", or "Shem’s notes" for a personal board (its owner's page, on their Dashboard as My notes). */
 export function boardTitle(state, board) {
   if (!board) return '';
   if (!board.owner) return String(board.name ?? '').trim() || 'Untitled board';
   const owner = (state?.users || []).find((u) => u.id === board.owner);
-  return `${firstName(owner?.name)}’s Projects`;
+  return `${firstName(owner?.name)}’s notes`;
 }
 
 /** #/projects/<board id>, optionally opening a task. */
 export const boardHref = (board, itemId) => (board
   ? `#/${board.module}/${board.id}${itemId ? `?item=${encodeURIComponent(itemId)}` : ''}`
-  : '#/work');
+  : '#/dashboard');
 
 /**
  * The board a #/<module>/<sub> address shows, from the boards `visible` to the signed-in user (in state order):

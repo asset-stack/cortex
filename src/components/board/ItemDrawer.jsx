@@ -163,7 +163,7 @@ export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly 
 
           <section>
             <h3 className="font-bold">Updates</h3>
-            {/* An @Name in an update shows in that person's My Work → Mentions; the owner stays as it is. */}
+            {/* An @Name in an update shows in that person's Dashboard → Mentions; the owner stays as it is. */}
             {!readOnly && (
               <form className="mt-2 flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); if (update.trim()) { actions.addUpdate(boardId, item.id, update.trim()); setUpdate(''); } }}>
                 <textarea value={update} onChange={(e) => setUpdate(e.target.value)} rows={3} placeholder="Write an update" aria-label="Write an update" className="field resize-none" />

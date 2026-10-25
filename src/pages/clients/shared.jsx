@@ -52,7 +52,7 @@ export function StatusPill({ status, className }) {
   return <span className={cn('pill !h-6 !text-[12px] shrink-0', className)} style={{ backgroundColor: INVOICE_STATUS[status] || '#5c6370' }}>{status}</span>;
 }
 
-/** A titled glass panel (same header as My Work's lists). `action` sits at the right of the title. */
+/** A titled glass panel (same header as the Dashboard's lists). `action` sits at the right of the title. */
 export function Panel({ title, icon: Icon, count, action, rim, className, children }) {
   return (
     <section aria-label={title} className={cn('glass min-w-0 rounded-[24px]', rim && 'glass-rim', className)}>

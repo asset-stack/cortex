@@ -59,7 +59,7 @@ export default function Calendar() {
   const access = useAccess();
   const today = localYmd();
   const months = useMemo(() => nextMonths(today, 12), [today]);
-  const [openMonths, setOpenMonths] = useState(() => new Set(months.slice(0, 2)));
+  const [openMonths, setOpenMonths] = useState(() => new Set(months.slice(0, 1))); // this month; the rest open on a click
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [openArchived, setOpenArchived] = useState(() => new Set());
   const [person, setPerson] = useState('');

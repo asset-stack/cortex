@@ -320,14 +320,16 @@ There are no invitations to send.
 2. On first sign-in Cortex creates their profile as **Staff** and adds them to #general. Addresses from
    `setup-admins.sql` come in with the role listed there (**SuperAdmin** or **Admin**).
 3. The SuperAdmin manages people in **Settings** → **Team**: the **Role** menu (SuperAdmin / Admin / Staff),
-   the **Active** switch, and each staff member's access to **Projects**, **Marketing**, **Outreach**,
-   **Pipeline** and **Clients** (None / View / Edit). Staff start with Projects and Marketing on Edit, Pipeline
-   and Clients on View, and Outreach on None; admins always have Edit. Admins see the page read-only.
-   Each person also gets their own Projects page, which they can always edit (unless Projects is None for them).
+   the **Active** switch, and each staff member's access to **Operations** (the Projects module), **Marketing**,
+   **Outreach**, **Pipeline** and **Clients** (None / View / Edit). Staff start with Operations and Marketing on Edit,
+   Pipeline and Clients on View, and Outreach on None; admins always have Edit. Admins see the page read-only.
+   Give staff **Edit** on Clients so they can own, accept and update client work (Demos, Previews).
+   Each person also gets their own page (**My notes** on their Dashboard), which they can always edit (unless
+   Operations is None for them).
    Switching Active off removes all of that person's access at once, because every database policy checks it.
    Your own row is locked, and the last active SuperAdmin can't be demoted or deactivated.
 4. Admins set each person's daily routines in **Settings** → **Routines**; they appear on that person's
-   **My Work** each day.
+   **Dashboard** each day.
 5. When someone leaves, the SuperAdmin switches **Active** off the same day and suspends their Workspace
    account. Deactivate rather than delete, so their notes, updates and messages stay attributed.
 
@@ -631,7 +633,7 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
 | No rename or delete on someone's Projects page | Personal pages come and go with their person. Only team boards are renamed or deleted (by admins). |
 | **Projects** / **Marketing** look empty after running 0006, or it showed an error | The run stopped part-way, so tasks aren't linked to a board yet (nothing is deleted). Run the current `0006_boards.sql` again; it links them to **General** / **Posting schedule** and finishes the rest. |
 | A new group turned up on **General** or **Posting schedule** after the 0006 update | An old open tab (the app from before 0006) added it. Move its tasks where they belong, delete it, and reload that tab. |
-| A task added just after the 0006 update isn't on **General** / **Posting schedule** | An old open tab added it to another board's starting group (another team board, or someone's own page). Find it in **My Work** → **Priorities** for the people on it, or as the SuperAdmin on each page, and move it to a team board from its drawer (or re-create it there if it is on someone's page). |
+| A task added just after the 0006 update isn't on **General** / **Posting schedule** | An old open tab added it to another board's starting group (another team board, or someone's own page). Find it in **Dashboard** → **My tasks** (or **Team**) for the people on it, or as the SuperAdmin on each page, and move it to a team board from its drawer (or re-create it there if it is on someone's page). |
 | Connect Google: "Error 400: redirect_uri_mismatch" | Add `https://<project-ref>.supabase.co/functions/v1/google/callback` to the Google client (section 11.1). |
 | Connect Google comes back with "Connect the Google account for your own Cortex email" | You picked a different Google account. Each admin connects their own. |
 | "Reconnect your Google account in Settings" | Google withdrew Cortex's access (password change, revoked, or the scopes changed). **Connect Google** again. |

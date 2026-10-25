@@ -106,7 +106,7 @@ function AddRoutine({ assignee, name }) {
   );
 }
 
-/** Admins: each person's daily routines (My Work turns them into to-dos on their weekdays). */
+/** Admins: each person's daily routines (the Dashboard turns them into to-dos on their weekdays). */
 export default function Routines() {
   const { state } = useStore();
   const routines = state.routines || [];

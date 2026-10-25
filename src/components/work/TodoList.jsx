@@ -1,8 +1,10 @@
-import { ArrowDownToLine, Repeat, Trash2, Zap } from 'lucide-react';
+import { ArrowDownToLine, Repeat, SquareCheckBig, Trash2, Zap } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { CATEGORIES } from '@/data/boards';
 import { LabelPicker } from '@/components/ui';
 import { useAccess } from '@/lib/access';
+import { boardHref } from '@/lib/boards';
+import { itemOfTodo } from '@/lib/work';
 import { formatMinutes } from '@/lib/timesheet';
 import { shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
@@ -32,6 +34,7 @@ function TodoRow({ todo: t, showDay, moveTo }) {
   const movable = moveTo && mine && !state.todos.some((x) => x.id !== t.id && x.assignee === t.assignee && x.day === moveTo.day
     && ((t.routineId && x.routineId === t.routineId) || (t.source === 'automation' && x.source === 'automation' && x.ref === t.ref)));
   const title = t.title.trim() || 'Untitled';
+  const task = itemOfTodo(state, t); // Do today: the board task it's for, while you can see it (gone or moved: none)
   return (
     <li className="flex items-start gap-3 border-t rowline px-5 py-3">
       <input type="checkbox" checked={t.done} disabled={!mine} onChange={() => actions.toggleTodo(t.id)} aria-label={`Mark ${title} done`}
@@ -41,6 +44,10 @@ function TodoRow({ todo: t, showDay, moveTo }) {
           <div className={cn('flex items-center gap-1.5 font-semibold', t.done && 'line-through opacity-60')}>
             <span className="min-w-0 break-words">{title}</span>
             <SourceIcon source={t.source} />
+            {task && (
+              <a href={boardHref(task.board, task.item.id)} aria-label={`Open the task ${title}`} title="Open the task"
+                className="inline-grid shrink-0 dimmer hover:text-white"><SquareCheckBig className="h-3.5 w-3.5" aria-hidden="true" /></a>
+            )}
           </div>
           {t.notes && <p className="mt-0.5 line-clamp-2 text-[12.5px] dimmer">{t.notes}</p>}
         </div>

@@ -1,25 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
-import { Building2, CalendarDays, ChevronDown, FolderKanban, GitBranch, Loader2, LogOut, Mail, Megaphone, PanelLeftClose, PanelLeftOpen, Plus, RotateCcw, Settings, Sparkle } from 'lucide-react';
+import {
+  Building2, CalendarDays, ChevronDown, FolderKanban, GitBranch, LayoutDashboard, Loader2, LogOut, Mail, Megaphone, PanelLeftClose, PanelLeftOpen, Plus,
+  RotateCcw, Settings, Users,
+} from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { Avatar, Modal, Popover } from '@/components/ui';
 import NewBoardModal from '@/components/board/NewBoard';
 import { ROLE_LABELS, roleOf, useAccess } from '@/lib/access';
-import { MENU_BOARD_MODULES, MODULE_HOMES, boardHref, boardTitle, personalBoard, resolveBoard } from '@/lib/boards';
+import { MENU_BOARD_MODULES, MODULE_HOMES, MODULE_LABELS, boardHref, boardTitle, resolveBoard } from '@/lib/boards';
 import { hashParam } from '@/lib/router';
 import { cn } from '@/lib/cn';
 
 // Everything a page can link to, in nav order. `module` pages show only when the user can at least view that module
-// (src/lib/access.js); the former Admin board is part of Projects.
+// (src/lib/access.js); the former Admin board is part of Projects, shown as Operations (§18).
 export const NAV = [
-  { id: 'work', label: 'My Work', icon: Sparkle },
-  // The team Calendar (0009): no module of its own; each thing on it keeps its own access rule (src/lib/calendar.js).
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  // The team Calendar (0009) and Team (§18): no module of their own; each thing on them keeps its own access rule
+  // (src/lib/calendar.js, src/lib/work.js).
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
-  { id: 'projects', label: 'Projects', icon: FolderKanban, module: 'projects' },
-  { id: 'marketing', label: 'Marketing', icon: Megaphone, module: 'marketing' },
-  { id: 'outreach', label: 'Outreach', icon: Mail, badge: 'AI', module: 'outreach' },
-  { id: 'pipeline', label: 'Pipeline', icon: GitBranch, module: 'pipeline' },
-  { id: 'clients', label: 'Clients', icon: Building2, module: 'clients' },
+  { id: 'team', label: 'Team', icon: Users },
+  { id: 'projects', label: MODULE_LABELS.projects, icon: FolderKanban, module: 'projects' },
+  { id: 'marketing', label: MODULE_LABELS.marketing, icon: Megaphone, module: 'marketing' },
+  { id: 'outreach', label: MODULE_LABELS.outreach, icon: Mail, badge: 'AI', module: 'outreach' },
+  { id: 'pipeline', label: MODULE_LABELS.pipeline, icon: GitBranch, module: 'pipeline' },
+  { id: 'clients', label: MODULE_LABELS.clients, icon: Building2, module: 'clients' },
 ];
+// Nav rows with a sub-menu: the board modules (their boards) and Team (a row per active person).
+const SECTIONS = [...MENU_BOARD_MODULES, 'team'];
 
 // Admin-only pages, kept out of NAV (page shortcuts list modules only).
 const ADMIN_NAV = [{ id: 'settings', label: 'Settings', icon: Settings }];
@@ -32,22 +39,21 @@ export function useNav() {
 }
 
 /**
- * What's listed under the board modules (Projects: the team boards, then your own page; Marketing: its team boards;
- * Outreach and Clients: their own page, then their team boards), only the boards you can open, and the id of the entry
- * on screen (`current`: a board's id, a MODULE_HOMES id on #/outreach or #/clients, '' elsewhere).
+ * What's listed under the board modules (Operations and Marketing: their team boards; Outreach and Clients: their own
+ * page, then their team boards; personal pages are on each person's Dashboard as My notes), only the boards you can
+ * open, and under Team each active person; and the id of the entry on screen (`current`: a board's id, a MODULE_HOMES id
+ * on #/outreach or #/clients, a person's id on #/team/<id>, '' elsewhere).
  */
 function useBoardNav(route, sub) {
   const { state } = useStore();
   const access = useAccess();
   const visible = (state.boards || []).filter(access.canViewBoard);
-  const own = personalBoard(state, state.me);
   const lists = Object.fromEntries(MENU_BOARD_MODULES.map((m) => [m, [
     ...(MODULE_HOMES[m] ? [MODULE_HOMES[m]] : []),
-    ...[
-      ...visible.filter((b) => b.module === m && !b.owner),
-      ...(m === 'projects' && own && visible.includes(own) ? [own] : []),
-    ].map((b) => ({ id: b.id, href: boardHref(b), title: boardTitle(state, b) })),
+    ...visible.filter((b) => b.module === m && !b.owner).map((b) => ({ id: b.id, href: boardHref(b), title: boardTitle(state, b) })),
   ]]));
+  lists.team = state.users.filter((u) => u.active !== false).map((u) => ({ id: u.id, href: `#/team/${encodeURIComponent(u.id)}`, title: u.name }));
+  if (route === 'team') return { lists, current: sub, isAdmin: access.isAdmin };
   const home = !sub && MODULE_HOMES[route];
   const current = home || !MENU_BOARD_MODULES.includes(route) ? null : resolveBoard(state, visible, route, sub, hashParam('item'));
   return { lists, current: home ? home.id : current?.id || '', isAdmin: access.isAdmin };
@@ -168,7 +174,8 @@ function ResetDemo() {
   );
 }
 
-/** A board module's nav row: the link to its default page, a toggle, and (open) its boards plus admins' New board. */
+/** A board module's nav row (or Team's): the link to its default page, a toggle, and (open) its boards plus admins' New
+ *  board (Team: its people). */
 function BoardSection({ item, route, boards, current, open, onToggle, onNew }) {
   const { id, label, icon: Icon, badge } = item;
   const here = route === id;
@@ -182,7 +189,7 @@ function BoardSection({ item, route, boards, current, open, onToggle, onNew }) {
           <span className="min-w-0 flex-1 truncate">{label}</span>
           {badge && <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-bold', here && !lit ? 'bg-[#1a2340]/10' : 'bg-white/20')}>{badge}</span>}
         </a>
-        <button type="button" onClick={onToggle} aria-expanded={open} aria-controls={listId} aria-label={`${open ? 'Hide' : 'Show'} ${label} boards`}
+        <button type="button" onClick={onToggle} aria-expanded={open} aria-controls={listId} aria-label={`${open ? 'Hide' : 'Show'} ${label} ${id === 'team' ? 'people' : 'boards'}`}
           className={cn('mr-1.5 grid h-7 w-7 shrink-0 place-items-center rounded-full', here && !lit ? 'hover:bg-[#1a2340]/10' : 'hover:bg-white/15')}>
           <ChevronDown className={cn('h-4 w-4 transition-transform', !open && '-rotate-90')} />
         </button>
@@ -215,7 +222,7 @@ export default function Sidebar({ route, sub }) {
   const { lists, current, isAdmin } = useBoardNav(route, sub);
   // Which board sections are open: the current module's, plus whatever was toggled; going into a module opens it.
   const [open, setOpen] = useState(() => ({ [route]: true }));
-  useEffect(() => { if (MENU_BOARD_MODULES.includes(route)) setOpen((o) => (o[route] ? o : { ...o, [route]: true })); }, [route]);
+  useEffect(() => { if (SECTIONS.includes(route)) setOpen((o) => (o[route] ? o : { ...o, [route]: true })); }, [route]);
   const [adding, setAdding] = useState(null); // module getting a new board
 
   return (
@@ -230,10 +237,10 @@ export default function Sidebar({ route, sub }) {
       <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 text-[14px]">
         {nav.map((item) => {
           const { id, label, icon: Icon, badge } = item;
-          if (!collapsed && MENU_BOARD_MODULES.includes(id)) {
+          if (!collapsed && SECTIONS.includes(id)) {
             return (
               <BoardSection key={id} item={item} route={route} boards={lists[id]} current={current} open={!!open[id]}
-                onToggle={() => setOpen((o) => ({ ...o, [id]: !o[id] }))} onNew={isAdmin ? () => setAdding(id) : undefined} />
+                onToggle={() => setOpen((o) => ({ ...o, [id]: !o[id] }))} onNew={isAdmin && id !== 'team' ? () => setAdding(id) : undefined} />
             );
           }
           return (
@@ -264,7 +271,7 @@ export default function Sidebar({ route, sub }) {
 export function MobileNav({ route, sub }) {
   const nav = useNav();
   const { lists, current, isAdmin } = useBoardNav(route, sub);
-  const boards = MENU_BOARD_MODULES.includes(route) ? lists[route] : null;
+  const boards = SECTIONS.includes(route) ? lists[route] : null;
   const label = nav.find((n) => n.id === route)?.label;
   const [adding, setAdding] = useState(false);
   // Keep the current board's chip in view in its scrolling row.
@@ -291,18 +298,18 @@ export function MobileNav({ route, sub }) {
         </div>
       </div>
       {boards && (
-        <nav ref={row} aria-label={`${label} boards`} className="relative mt-2 flex gap-1.5 overflow-x-auto text-[12.5px]">
+        <nav ref={row} aria-label={`${label} ${route === 'team' ? 'people' : 'boards'}`} className="relative mt-2 flex gap-1.5 overflow-x-auto text-[12.5px]">
           {boards.map((b) => (
             <a key={b.id} href={b.href} aria-current={b.id === current ? 'page' : undefined}
               className={cn('max-w-[220px] shrink-0 truncate whitespace-nowrap rounded-full px-3 py-1', b.id === current ? 'chip-on font-semibold' : 'chip')}>{b.title}</a>
           ))}
-          {isAdmin && (
+          {isAdmin && route !== 'team' && (
             <button type="button" onClick={() => setAdding(true)} aria-label="New board" title="New board"
               className="grid h-[28px] w-[28px] shrink-0 place-items-center rounded-full chip"><Plus className="h-3.5 w-3.5" /></button>
           )}
         </nav>
       )}
-      {adding && boards && <NewBoardModal module={route} onClose={() => setAdding(false)} />}
+      {adding && boards && route !== 'team' && <NewBoardModal module={route} onClose={() => setAdding(false)} />}
     </div>
   );
 }

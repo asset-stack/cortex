@@ -21,7 +21,7 @@ const PRIORITY_COLUMN = { key: 'priority', label: 'Priority', type: 'label', opt
 // Clients. All are modules in src/lib/access.js.
 export const BOARD_SCHEMAS = {
   projects: {
-    title: 'Projects',
+    title: 'Operations', // shown as Operations since §18; the key stays 'projects'
     icon: 'FolderKanban',
     columns: [
       OWNER,

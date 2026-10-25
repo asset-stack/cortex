@@ -8,7 +8,8 @@ import {
 import { useStore, useUsers } from '@/data/store';
 import { CLIENT_GROUPS, CLIENT_STATUSES, PLAN_FREQUENCIES, PRIORITY } from '@/data/boards';
 import { boardHref, boardTitle } from '@/lib/boards';
-import { clientTasks } from '@/lib/work';
+import { clientTasks, isWaiting } from '@/lib/work';
+import NewTaskModal from '@/components/board/NewTaskModal';
 import { useAccess } from '@/lib/access';
 import { PLAN_MONTHS, addMonths, isPlanDate } from '@/lib/automations';
 import { CONTRACT_STATUS } from '@/lib/contract';
@@ -108,13 +109,25 @@ function LinkField({ label, value, readOnly, onChange, placeholder }) {
   );
 }
 
-// Open tasks on the Clients boards (Demos, Previews …) with this client in their Client column, each opening its task.
+// Open tasks on the Clients boards (Demos, Previews …) with this client in their Client column, each opening its task;
+// Add task makes one there with the client set (docs/PHASE2.md §18).
 function BoardTasks({ c }) {
   const { state } = useStore();
+  const access = useAccess();
   const rows = clientTasks(state, c.id);
+  const [adding, setAdding] = useState(false);
+  const canAdd = state.boards.some((b) => b.module === 'clients' && !b.owner && access.canEditBoard(b));
   return (
     <section>
-      <h3 className="font-bold">Board tasks</h3>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="font-bold">Tasks</h3>
+        {canAdd && (
+          <button type="button" onClick={() => setAdding(true)} className="inline-flex h-9 items-center gap-1.5 rounded-full chip px-3.5 text-[13px] font-semibold">
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />Add task
+          </button>
+        )}
+      </div>
+      {adding && <NewTaskModal onClose={() => setAdding(false)} clientId={c.id} modules={['clients']} />}
       {rows.length === 0 ? <p className="mt-1 dimmer">None open.</p> : (
         <ul className="mt-2 flex flex-col gap-1">
           {rows.map(({ item, board }) => (
@@ -123,7 +136,9 @@ function BoardTasks({ c }) {
                 <AvatarStack userIds={item.values.people} size={24} max={1} label="Owner" />
                 <span className="min-w-0 flex-1">
                   <span className="block break-words font-semibold">{item.name.trim() || 'Untitled task'}</span>
-                  <span className="block truncate text-[12.5px] dimmer">{boardTitle(state, board)}{item.values.due ? ` · ${shortDate(item.values.due)}` : ''}</span>
+                  <span className="block truncate text-[12.5px] dimmer">
+                    {boardTitle(state, board)}{item.values.due ? ` · ${shortDate(item.values.due)}` : ''}{isWaiting(item) ? ' · Waiting to be accepted' : ''}
+                  </span>
                 </span>
                 {PRIORITY[item.values.priority] && (
                   <span className="pill !h-[22px] shrink-0 !px-2 !text-[11px]" style={{ backgroundColor: PRIORITY[item.values.priority] }}>
@@ -145,6 +160,7 @@ function Overview({ c, editable }) {
   const upd = (k) => (e) => actions.updateClient(c.id, { [k]: e.target.value });
   return (
     <div className="flex flex-col gap-6">
+      <BoardTasks c={c} />
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Status</span>
           <LabelPicker label="Status" value={c.status} options={CLIENT_STATUSES} allowEmpty={false} readOnly={!editable}
@@ -171,9 +187,8 @@ function Overview({ c, editable }) {
         </label>
       </div>
       <ClientContacts c={c} editable={editable} />
-      <BoardTasks c={c} />
       <section>
-        <h3 className="font-bold">Tasks</h3>
+        <h3 className="font-bold">Checklist</h3>
         <ul className="mt-2 flex flex-col gap-1">
           {c.tasks.map((t) => (
             <li key={t.id}><label className="flex items-center gap-2.5 rounded-xl px-2 py-1.5 hover:bg-white/5">
@@ -181,8 +196,8 @@ function Overview({ c, editable }) {
               <span className={t.done ? 'line-through dimmer' : ''}>{t.text}</span></label></li>
           ))}
         </ul>
-        {c.tasks.length === 0 && !editable && <p className="mt-1 dimmer">No tasks.</p>}
-        {editable && <QuickAdd className="mt-2" placeholder="Add task" onSubmit={(t) => actions.addClientTask(c.id, t)} />}
+        {c.tasks.length === 0 && !editable && <p className="mt-1 dimmer">Nothing on the checklist.</p>}
+        {editable && <QuickAdd className="mt-2" placeholder="Add to the checklist" onSubmit={(t) => actions.addClientTask(c.id, t)} />}
       </section>
       <section>
         <h3 className="font-bold">Notes</h3>

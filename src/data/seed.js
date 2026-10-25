@@ -164,7 +164,15 @@ function boards(clientId = () => '') {
     board('clients', 'Previews', [
       group('To do', '#c9ffe6', [
         item('Northside Diocese preview site', { client: clientId('Northside Diocese'), people: ['josh'], status: 'In progress', priority: 'Urgent', due: '2026-10-28' }),
-        item('Coastal Rail preview with sample assets', { client: clientId('Coastal Rail'), people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-11-04' }),
+        // Handed to Josh by David: one he has accepted, and one that waits on him (Waiting on you on his Dashboard).
+        item('Coastal Rail preview with sample assets', {
+          client: clientId('Coastal Rail'), people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-11-04',
+          assignedBy: 'david', assignedAt: hoursAgo(30), acceptedAt: hoursAgo(26),
+        }),
+        item('New video from the Northside preview', {
+          client: clientId('Northside Diocese'), people: ['josh'], status: 'Not started', priority: 'High', due: '2026-10-30',
+          assignedBy: 'david', assignedAt: hoursAgo(2),
+        }),
       ]),
     ]),
     board('pipeline', 'Work in Progress', [
@@ -653,6 +661,9 @@ export function createSeed() {
   todo({ assignee: 'hello', createdBy: 'josh', title: 'Golf Day photos to the Marketing board', minutes: 30, category: 'Marketing' });
   todo({ assignee: 'hello', createdBy: 'josh', title: 'Book a room for Thursday onboarding', minutes: 15, category: 'Admin', done: true, doneAt: new Date(now).toISOString() });
   todo({ assignee: 'josh', createdBy: 'josh', title: 'Prepare Shire of Southcliff walkthrough', start: '10:00', minutes: 60, category: 'Demos' });
+  // Do today: David put his Urgent Northside walkthrough on his day (a to-do linked to the task, src/lib/work.js).
+  const walkthrough = state.boards.flatMap((b) => b.groups.flatMap((g) => g.items)).find((i) => i.name === 'Northside Diocese: asset register walkthrough');
+  if (walkthrough) todo({ assignee: 'david', createdBy: 'david', title: walkthrough.name, start: '14:00', minutes: 60, category: 'Clients', ref: `item:${walkthrough.id}` });
   return state;
 }
 

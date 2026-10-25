@@ -3,7 +3,8 @@
 Cortex is AssetStack's internal ops platform (Vite + React 18 + Tailwind 3 + lucide-react, Supabase in live mode).
 It is separate from the marketing site (`AssetLanding`) and from the signed-in product
 (bunburycouncil.assetstack.site). The backend contract is `docs/BACKEND.md` (phase 1) plus `docs/PHASE2.md`
-(team workflow: roles, module access, My Work, finance, timesheets, boards, Outreach, Calendar, Outreach from Gmail);
+(team workflow: roles, module access, the Dashboard (was My Work), finance, timesheets, boards, Outreach, Calendar,
+Outreach from Gmail, owners and priorities, Team);
 setup steps are in `DEPLOY.md`.
 
 ## Rules
@@ -35,10 +36,13 @@ setup steps are in `DEPLOY.md`.
   Clients and Pipeline (`BOARD_MODULES`); Outreach's and Clients' menus start with their own page (`MODULE_HOMES`), and
   Pipeline's boards (Work in Progress) sit on its page under the deals, not in the menu (`PAGE_BOARD_MODULES`). Admins add
   new team boards in the app; personal pages come and go with their person.
-- **Board tasks have one Owner** (`docs/PHASE2.md` §17): the owner column keeps `values.people` as `[id]`, priority is
-  `PRIORITY` (Urgent → Low, with `PRIORITY_HINTS`), and the rules for handing over, My Work → Priorities, Needs attention,
-  task mentions and a client's tasks live in `src/lib/work.js` (only `nextValues()` sets `assignedBy` / `assignedAt`).
-  An `@Name` in an update never changes who is on a task.
+- **Board tasks have one home and one Owner** (`docs/PHASE2.md` §17, §18): a task lives on one board (the Dashboard,
+  Team pages and a client's page are views of it, never copies; its breadcrumb is `whereOf()`). The owner column keeps
+  `values.people` as `[id]`, priority is `PRIORITY` (Urgent → Low, with `PRIORITY_HINTS`), and the rules for handing
+  over and accepting, the Dashboard and Team lists, Needs attention, task mentions, a client's tasks and Do today live
+  in `src/lib/work.js` (only `nextValues()` / `acceptedValues()` set `assignedBy` / `assignedAt` / `acceptedAt`). An
+  `@Name` in an update never changes who is on a task. The Projects module is shown as **Operations** (`MODULE_LABELS`);
+  its key stays `projects`.
 - **A new module gets a module key**: add it to `MODULES` and `STAFF_DEFAULTS` in `src/lib/access.js`, to the
   `module_access.module` check and the defaults in `public.module_level()` (in a new migration), give its tables
   `can_view` / `can_edit` policies on that key, and set `module` on its `NAV` entry in `Sidebar.jsx`.

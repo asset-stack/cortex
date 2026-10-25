@@ -6,7 +6,8 @@ import ChatDock from '@/components/chat/ChatDock';
 import WorldClocks from '@/components/layout/WorldClocks';
 import BoardPage from '@/components/board/BoardPage';
 import TimesheetPrompt from '@/components/timesheet/TimesheetPrompt';
-import MyWork from '@/pages/MyWork';
+import Dashboard from '@/pages/Dashboard';
+import Team from '@/pages/Team';
 import Calendar from '@/pages/Calendar';
 import Pipeline from '@/pages/Pipeline';
 import Clients from '@/pages/Clients';
@@ -19,16 +20,18 @@ function Page({ route, sub }) {
     case 'marketing':
       return <BoardPage module={route} sub={sub} />;
     case 'calendar': return <Calendar />;
+    case 'team': return <Team userId={sub} />;
     case 'pipeline': return <Pipeline />;
     case 'clients': return sub ? <BoardPage module="clients" sub={sub} /> : <Clients />;
     // #/outreach and #/clients are their own pages; #/outreach/<board id> and #/clients/<board id> their boards.
     case 'outreach': return sub ? <BoardPage module="outreach" sub={sub} /> : <Outreach />;
     case 'settings': return <Settings />;
-    default: return <MyWork />;
+    default: return <Dashboard />;
   }
 }
 
-// Settings is admins only; a module the user can't see (access 'none') falls back to My Work.
+// Settings is admins only; a module the user can't see (access 'none') falls back to the Dashboard. Team has no module:
+// each task on it keeps its board's access rule (src/lib/work.js).
 function allowed(route, access) {
   if (route === 'settings') return access.isAdmin;
   return !MODULES.includes(route) || access.canView(route);
@@ -38,7 +41,7 @@ export default function App() {
   const access = useAccess();
   const at = useRoute();
   const ok = allowed(at.route, access);
-  const route = ok ? at.route : 'work';
+  const route = ok ? at.route : 'dashboard';
   const sub = ok ? at.sub : ''; // the board id under Projects / Marketing / Outreach / Clients
   const scroller = useRef(null);
   const dock = useRef(null);

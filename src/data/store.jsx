@@ -10,14 +10,15 @@ import { LIVE, supabase } from '@/data/backend/client';
 import { TABLES, assemble, diff, flatten, normalizeRow, stable } from '@/data/backend/schema';
 import { createSync } from '@/data/backend/sync';
 import { GateScreen, Spinner } from '@/components/auth/AuthGate';
-import { LEVELS, MODULES, ROLES, STAFF_DEFAULTS, canEdit, canEditBoard, canView, isAdmin, isSuperadmin } from '@/lib/access';
+import { LEVELS, MODULES, ROLES, STAFF_DEFAULTS, canEdit, canEditBoard, canView, canViewBoard, isAdmin, isSuperadmin } from '@/lib/access';
 import { BOARD_MODULES, FIRST_GROUP, FIRST_GROUP_COLOR, GROUP_COLORS, findBoard, sameAudience, sortedItems, withItemPlaced } from '@/lib/boards';
 import {
   PLAN_MONTHS, addDays, addMonths, clientCreatedLocal, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isPlanDate,
   isYmd, makeTodo, mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
 } from '@/lib/automations';
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
-import { nextValues } from '@/lib/work';
+import { acceptedValues, itemRef, newTaskValues, nextValues, todoForItem } from '@/lib/work';
+import { BOARD_CATEGORY } from '@/lib/timesheet';
 import { cleanTool } from '@/lib/tools';
 import { cleanCalendarEvent } from '@/lib/calendar';
 import {
@@ -376,13 +377,27 @@ function createActions(mutate, mode) {
       return true;
     }),
 
-    // Into `groupId` (else the board's first group; a board with none gets one). → id
-    addItem: (boardId, groupId, name = 'New task') => onBoard(boardId, (d, b) => {
+    // Into `groupId` (else the board's first group; a board with none gets one), with you as its owner unless `values`
+    // (New task: owner, priority, due, client …) say otherwise; a task made for someone else waits on them to accept it
+    // (src/lib/work.js newTaskValues). → id
+    addItem: (boardId, groupId, name = 'New task', values = null) => onBoard(boardId, (d, b) => {
       if (!b.groups.length) b.groups.push(firstGroup(b.module));
       const g = b.groups.find((x) => x.id === groupId) || b.groups[0];
       const item = newItem({ name: textOf(name).trim() || 'New task', values: {} }, [d.me]);
+      if (values) {
+        item.values = newTaskValues(values, { me: d.me, now: nowIso() });
+        item.done = item.values.status === 'Done';
+      }
       g.items.push(item);
       return item.id; // so the caller can open it
+    }),
+    // The owner accepts a task someone handed them (Waiting on you on the Dashboard).
+    acceptItem: (boardId, itemId) => onBoard(boardId, (d) => {
+      const { item } = findItem(d, boardId, itemId);
+      const values = item && acceptedValues(item.values, { me: d.me, now: nowIso() });
+      if (!values) return false;
+      item.values = values;
+      return true;
     }),
     updateItem: (boardId, itemId, patch = {}) => onBoard(boardId, (d) => {
       const { item } = findItem(d, boardId, itemId);
@@ -509,6 +524,22 @@ function createActions(mutate, mode) {
 
     // ── My Work ──
 
+    // Do today: a to-do on `assignee`'s `day` (yours and today by default) for a board task you can see, named after it
+    // and filed under its board's category, once per task, person and day (src/lib/work.js). → the to-do's id
+    addTodoForItem: (boardId, itemId, { day, assignee } = {}) => mutate((d) => {
+      const b = findBoard(d, boardId);
+      const { item } = findItem(d, boardId, itemId);
+      const who = assignee || d.me;
+      const on = ymdOr(day, localYmd());
+      if (!b || !item || !canViewBoard(d, b) || !canViewBoard(d, b, who) || !userExists(d, who) || (who !== d.me && !isAdmin(d))) return false;
+      if (todoForItem(d.todos, item.id, who, on)) return false;
+      const t = makeTodo({
+        assignee: who, createdBy: d.me, title: textOf(item.name).trim() || 'Untitled task', day: on, minutes: 30,
+        category: BOARD_CATEGORY[b.module] || 'Other', ref: itemRef(item.id),
+      });
+      d.todos.push(t);
+      return t.id;
+    }),
     // Staff add to their own list; admins to anyone's. → id
     addTodo: (todo = {}) => mutate((d) => {
       const assignee = todo.assignee || d.me;
