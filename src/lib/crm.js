@@ -3,12 +3,14 @@
 // entries of the deal it came from. Next steps are board tasks (items.values.deal / client, src/lib/work.js). Pure, with
 // relative imports, so scripts/test-sync.mjs runs it in Node; the access rules are 0012's, mirrored.
 import { canEdit, canView, isAdmin } from './access.js';
-import { safeUrl } from './format.js';
+import { localYmd, safeUrl } from './format.js';
 
 export const ENTRY_KINDS = ['note', 'meeting', 'link'];
 export const LINK_LABELS = ['Meeting notes', 'Demo', 'Deck', 'Proposal', 'Recording', 'Other'];
 // Longest text each field keeps (the database's checks).
 const MAX = { title: 300, body: 20000, url: 2000, label: 60, attendees: 1000 };
+/** Longest link an entry keeps, as saved (https:// added, spaces and accents encoded). */
+export const URL_MAX = MAX.url;
 
 const isActive = (state, userId) => (state?.users || []).some((u) => u.id === userId && u.active !== false);
 const text = (v, max) => String(v ?? '').trim().slice(0, max);
@@ -25,15 +27,21 @@ export const canAddEntry = (state, { clientId = '', dealId = '' } = {}, userId =
 export const canChangeEntry = (state, e, userId = state?.me) => Boolean(e) && canAddEntry(state, e, userId)
   && (e.user === userId || isAdmin(state, userId));
 
+/** A link as an entry keeps it: http(s) (https:// added when missing) and no longer than URL_MAX once saved, else ''. */
+export function entryUrl(v) {
+  const url = String(v ?? '').trim() ? safeUrl(String(v).trim()) || '' : '';
+  return url.length <= URL_MAX ? url : '';
+}
+
 /**
- * A new or edited entry's fields, cleaned: a known kind; text trimmed to the database's limits; a link that is http(s)
- * (https:// added when missing; anything else dropped); a meeting's date as YYYY-MM-DD; a link's label one of
- * LINK_LABELS (else Other). → the fields, or null when there's nothing to keep (a note with no text, a link with no
- * usable URL, a meeting with no title, summary or notes link).
+ * A new or edited entry's fields, cleaned: a known kind; text trimmed to the database's limits; a link as `entryUrl()`
+ * (anything else dropped); a meeting's date as YYYY-MM-DD; a link's label one of LINK_LABELS (else Other). → the fields,
+ * or null when there's nothing to keep (a note with no text, a link with no usable URL, a meeting with no title, summary
+ * or notes link).
  */
 export function cleanEntry(fields = {}) {
   const kind = ENTRY_KINDS.includes(fields.kind) ? fields.kind : 'note';
-  const url = fields.url ? safeUrl(text(fields.url, MAX.url)) || '' : '';
+  const url = entryUrl(fields.url);
   const out = {
     kind,
     title: text(fields.title, MAX.title),
@@ -49,20 +57,20 @@ export function cleanEntry(fields = {}) {
   return out;
 }
 
-/** The deal a client came from (Make client), or null. */
-export const dealOfClient = (state, clientId) => (clientId && (state?.deals || []).find((d) => d.clientId === clientId)) || null;
+/** The deals a client came from (Make client; a second deal for the same organisation joins the same client). */
+export const dealsOfClient = (state, clientId) => (clientId ? (state?.deals || []).filter((d) => d.clientId === clientId) : []);
 
-// The entries on a deal, or on a client (its own and its deal's: those reach it in the database at Make client, and
+// The entries on a deal, or on a client (its own and its deals': those reach it in the database at Make client, and
 // may not have come back yet), each once.
 function entriesOf(state, { dealId = '', clientId = '' }) {
   const all = state?.crmEntries || [];
   if (dealId) return all.filter((e) => e.dealId === dealId);
   if (!clientId) return [];
-  const deal = dealOfClient(state, clientId);
-  return all.filter((e) => e.clientId === clientId || (deal && e.dealId === deal.id));
+  const deals = new Set(dealsOfClient(state, clientId).map((d) => d.id));
+  return all.filter((e) => e.clientId === clientId || deals.has(e.dealId));
 }
-// Newest first: a meeting by the day it happened, anything else by when it was added; then the latest added.
-const when = (e) => (e.kind === 'meeting' && e.happenedOn) || String(e.createdAt || '').slice(0, 10);
+// Newest first: a meeting by the day it happened, anything else by the day (here) it was added; then the latest added.
+const when = (e) => (e.kind === 'meeting' && e.happenedOn) || (e.createdAt ? localYmd(new Date(e.createdAt)) : '');
 const newestFirst = (a, b) => (when(a) < when(b) ? 1 : when(a) > when(b) ? -1 : String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
 
 /**

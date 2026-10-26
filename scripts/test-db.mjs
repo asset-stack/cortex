@@ -5610,6 +5610,40 @@ async function phase12(ctx) {
     dealGone === 1 && otherGone === 1 && afterDelete.length === 2 && afterDelete.every((r) => r.deal_id === null && r.client_id === client), afterDelete);
   check('102. deleting a client deletes its entries', clientGone === 1 && left === 0, { clientGone, left });
   await db.query('delete from clients where id = $1', [spare]);
+
+  // 103. An entry added to a deal is its deal's client's when it has one (so it takes Clients edit, and reaches the
+  // client), and never another client's; Make client carries a deal's entries only when done with Clients edit; an edit
+  // can't take an entry off a deal that still exists.
+  await as(david);
+  await db.query("delete from module_access where user_id = any($1) and module in ('pipeline', 'clients')", [[alice, hello]]);
+  await db.query(`insert into module_access (user_id, module, level) values ($1, 'pipeline', 'edit'), ($1, 'clients', 'view'),
+    ($2, 'pipeline', 'view'), ($2, 'clients', 'edit')`, [alice, hello]);
+  await as(boss);
+  const won = (await one("insert into deals (name, stage) values ('Example Port', 'Demos') returning id")).id;
+  const open = (await one("insert into deals (name, stage) values ('Example Lakes', 'Contacted') returning id")).id;
+  const port = (await one("insert into clients (name) values ('Example Port') returning id")).id;
+  const unrelated = (await one("insert into clients (name) values ('Example Bay') returning id")).id;
+  await db.query('update deals set client_id = $2 where id = $1', [won, port]);
+  await as(alice); // Pipeline edit, Clients view
+  const lateByPipeline = await error("insert into crm_entries (deal_id, kind, body) values ($1, 'note', 'After Make client')", [won]);
+  const openNote = (await one("insert into crm_entries (deal_id, kind, body) values ($1, 'note', 'On the open deal') returning id", [open])).id;
+  await as(hello); // Clients edit, Pipeline view
+  const lateByClients = await error("insert into crm_entries (deal_id, kind, body) values ($1, 'note', 'Kick-off notes')", [won]);
+  const smuggled = await error("insert into crm_entries (deal_id, client_id, kind, body) values ($1, $2, 'note', 'Not mine to add')", [open, unrelated]);
+  await as(null);
+  const lateRow = await one("select client_id from crm_entries where body = 'Kick-off notes'");
+  await as(alice); // deals' rules let Pipeline edit set a deal's client; the app's Make client also needs Clients edit
+  const relinked = await affected('update deals set client_id = $2 where id = $1', [open, unrelated]);
+  await db.query('update crm_entries set deal_id = null where id = $1', [openNote]);
+  await as(null);
+  const openRow = await one('select deal_id, client_id from crm_entries where id = $1', [openNote]);
+  check('103. an entry added to a deal that is a client is the client’s (Clients edit, not Pipeline edit, adds it), never another client’s; Make client without Clients edit carries nothing; an edit can’t take an entry off its deal',
+    lateByPipeline !== null && lateByClients === null && lateRow?.client_id === port && smuggled !== null
+      && relinked === 1 && openRow.client_id === null && openRow.deal_id === open,
+    { lateByPipeline, lateByClients, lateRow, smuggled, relinked, openRow });
+  await as(boss);
+  await db.query('delete from deals where id = any($1)', [[won, open]]);
+  await db.query('delete from clients where id = any($1)', [[port, unrelated]]);
   return ctx;
 }
 

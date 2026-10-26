@@ -221,8 +221,9 @@ Text columns default to `''` and are `not null` unless noted, so the state never
 - `crm_entries` (0012): select `is_staff()` and (a client's with `can_view('clients')`, or a deal's with
   `can_view('pipeline')`); insert, update and delete need `can_edit('clients')` for a client's and `can_edit('pipeline')`
   for a deal's that isn't a client yet, and update/delete are the author's or an admin's. Triggers keep the author, the
-  date and the entry's deal and client (`protect_crm_entry`), give a deal's entries its client at Make client
-  (`crm_carry_to_client`) and delete those that never reached a client with their deal (`crm_drop_deal_entries`).
+  date and the entry's deal and client, and give a new entry on a deal its deal's client (`protect_crm_entry`), give a
+  deal's entries its client at Make client by a Clients editor (`crm_carry_to_client`) and delete those that never
+  reached a client with their deal (`crm_drop_deal_entries`).
 - `read_state`: all operations only where `user_id = auth.uid()`.
 - `admin_emails`: no policies (not readable by clients).
 

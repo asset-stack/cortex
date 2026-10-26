@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { CLIENT_GROUPS, CLIENT_STATUSES, PLAN_FREQUENCIES } from '@/data/boards';
-import { dealOfClient, timelineOf } from '@/lib/crm';
+import { dealsOfClient, timelineOf } from '@/lib/crm';
 import { Links, NextSteps, Timeline } from '@/components/crm/Profile';
 import { useAccess } from '@/lib/access';
 import { PLAN_MONTHS, addMonths, isPlanDate } from '@/lib/automations';
@@ -82,7 +82,7 @@ function ClientCard({ c, onOpen }) {
           <KeyRound className="h-3.5 w-3.5" />{c.access.length}
         </button>
         <button type="button" onClick={() => onOpen(c.id, 'overview')} className="inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 font-semibold"
-          aria-label={notes ? `${notes} on the timeline` : 'Timeline'}>
+          aria-label={notes ? `${notes} on the timeline` : 'Note'}>
           <NotebookPen className="h-3.5 w-3.5" />{notes || 'Note'}
         </button>
         <div className="ml-auto flex -space-x-2">{c.team.map((u) => <Avatar key={u} userId={u} size={26} />)}</div>
@@ -114,13 +114,17 @@ function LinkField({ label, value, readOnly, onChange, placeholder }) {
 function FromDeal({ c }) {
   const { state } = useStore();
   const access = useAccess();
-  const deal = dealOfClient(state, c.id);
-  if (!deal) return null;
-  const contact = deal.contactId && access.canView('outreach') ? state.contacts.find((x) => x.id === deal.contactId) : null;
+  const deals = dealsOfClient(state, c.id);
+  if (!deals.length) return null;
   return (
-    <p className="-mt-3 text-[13px] dim">
-      From deal · {compactMoney(deal.value)}{deal.sector ? ` · ${deal.sector}` : ''}{contact ? ` · ${contact.name}` : ''}
-    </p>
+    <div className="-mt-3 text-[13px] dim">
+      {deals.map((deal) => {
+        const contact = deal.contactId && access.canView('outreach') ? state.contacts.find((x) => x.id === deal.contactId) : null;
+        return (
+          <p key={deal.id}>From deal · {compactMoney(deal.value)}{deal.sector ? ` · ${deal.sector}` : ''}{contact ? ` · ${contact.name}` : ''}</p>
+        );
+      })}
+    </div>
   );
 }
 

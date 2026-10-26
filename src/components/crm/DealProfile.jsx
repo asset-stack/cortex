@@ -15,7 +15,7 @@ export default function DealProfile({ dealId, onClose, onEdit }) {
   const { state } = useStore();
   const users = useUsers();
   const access = useAccess();
-  const deal = state.deals.find((d) => d.id === dealId);
+  const deal = state.deals.find((d) => d.id === dealId && !d.clientId); // made a client (or deleted): the profile closes
   const contact = deal?.contactId && access.canView('outreach') ? state.contacts.find((c) => c.id === deal.contactId) : null;
   return (
     <Drawer open={Boolean(deal)} onClose={onClose} title={deal?.name || ''} width={600}>

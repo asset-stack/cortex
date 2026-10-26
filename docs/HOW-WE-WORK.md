@@ -11,7 +11,7 @@ A short note for the team: who owns a task, what comes first, and where work goe
 
 ## Handing work over
 - Give someone a task by setting them as its **Owner**, or with **New task** (Dashboard, Team › their name, or a client's
-  page → **Add task**).
+  page → **Add next step**).
 - It sits at the top of their Dashboard under **Waiting on you · from you** until they click **Accept** (starting it
   counts too). Until then you and the team see it as waiting.
 - Not accepted after a day? It shows in admins' **Needs attention**.
@@ -45,8 +45,9 @@ Open the deal (**Pipeline**, click its name) or the client (**Clients**) and, on
    Dashboard like any other task.
 3. **Add link** for anything else worth keeping: a demo, deck, proposal or recording.
 
-When a deal is made a client, its profile comes with it. Adding needs **Edit** on Pipeline (deals) or Clients (clients);
-ask an admin if you only have View.
+When a deal is made a client, its profile comes with it. Adding a meeting, note or link needs **Edit** on Pipeline (a
+deal) or Clients (a client). A deal's next steps are tasks on the Outreach boards (Sales Tasks), so seeing and adding
+them needs Outreach access; a client's are on the Clients boards. Ask an admin if you only have View.
 
 ## Where work goes
 - **Operations**: running the business: BAU, finance, development and internal projects.

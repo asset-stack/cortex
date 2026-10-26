@@ -2125,6 +2125,13 @@ await check('crm: cleanEntry keeps what an entry needs — a known kind, http(s)
     [null, null, null]);
   assert.equal(crm.cleanEntry({ kind: 'call', body: 'x' }).kind, 'note', 'an unknown kind is a note');
   assert.equal(crm.cleanEntry({ kind: 'note', body: 'x'.repeat(30000) }).body.length, 20000);
+  // A link is measured as saved (https:// added, spaces and accents encoded), never cut: too long is no link.
+  const fits = `https://example.com/${'a'.repeat(crm.URL_MAX - 20)}`;
+  assert.equal(crm.cleanEntry({ kind: 'link', url: fits }).url, fits);
+  assert.deepEqual([crm.cleanEntry({ kind: 'link', url: `example.com/${'a'.repeat(1990)}` }), crm.cleanEntry({ kind: 'link', url: `https://example.com/${'é'.repeat(340)}` })],
+    [null, null], 'over the limit once https:// is added or the accents are encoded');
+  assert.deepEqual(crm.cleanEntry({ kind: 'meeting', title: 'Kick-off', url: `https://example.com/${'a b'.repeat(660)}` }).url, '', 'a meeting keeps the rest');
+  assert.deepEqual([crm.entryUrl(' example.com/x '), crm.entryUrl(''), crm.entryUrl('ftp://example.com')], ['https://example.com/x', '', '']);
   assert.deepEqual(crm.LINK_LABELS, ['Meeting notes', 'Demo', 'Deck', 'Proposal', 'Recording', 'Other']);
 });
 
@@ -2137,8 +2144,30 @@ await check('crm: a deal’s and client’s timeline and links — newest first 
   assert.deepEqual(crm.linksOf(st, { dealId: 'd-open' }).map((x) => x.id), ['e3']);
   assert.deepEqual(crm.linksOf(st, { clientId: 'c-won' }).map((x) => [x.id, x.label, Boolean(x.fixed)]), [['fixed:Demo', 'Demo', true]], 'the Demo field; the javascript: link is left out');
   assert.deepEqual(crm.linksOf(st, { clientId: 'c-own' }), [], 'an unsafe Platform field is left out');
-  assert.equal(crm.dealOfClient(st, 'c-won')?.id, 'd-won');
-  assert.deepEqual([crm.dealOfClient(st, 'c-own'), crm.dealOfClient(st, ''), crm.timelineOf(st, {}), crm.linksOf(null, {})], [null, null, [], []]);
+  assert.deepEqual(crm.dealsOfClient(st, 'c-won').map((d) => d.id), ['d-won']);
+  assert.deepEqual([crm.dealsOfClient(st, 'c-own'), crm.dealsOfClient(st, ''), crm.timelineOf(st, {}), crm.linksOf(null, {})], [[], [], [], []]);
+  // A second deal for the same organisation, made the same client: its entries show on the client too.
+  st.deals.push({ id: 'd-again', name: 'Won deal', clientId: 'c-won' });
+  st.crmEntries.push({ id: 'e7', dealId: 'd-again', clientId: '', kind: 'note', body: 'Second order', user: 'sam', createdAt: '2026-10-25T00:00:00.000Z' },
+    { id: 'e8', dealId: 'd-again', clientId: '', kind: 'link', label: 'Proposal', title: 'Phase 2', url: 'https://example.com/p2', user: 'sam', createdAt: '2026-10-25T00:00:00.000Z' });
+  assert.deepEqual(crm.timelineOf(st, { clientId: 'c-won' }).map((x) => x.id), ['e7', 'e5', 'e4', 'note:n1'], 'both deals’ entries');
+  assert.deepEqual(crm.linksOf(st, { clientId: 'c-won' }).map((x) => x.id), ['fixed:Demo', 'e8']);
+  assert.deepEqual(crm.dealsOfClient(st, 'c-won').map((d) => d.id), ['d-won', 'd-again']);
+});
+
+await check('crm: the timeline goes by the day here — a note added this morning (yesterday in UTC) is above a meeting held yesterday', () => {
+  const tz = process.env.TZ;
+  process.env.TZ = 'Australia/Sydney';
+  try {
+    const st = crmState();
+    st.crmEntries = [
+      { id: 'meet', dealId: 'd-open', clientId: '', kind: 'meeting', title: 'Walkthrough', happenedOn: '2026-10-25', user: 'ann', createdAt: '2026-10-26T03:00:00.000Z' },
+      { id: 'note', dealId: 'd-open', clientId: '', kind: 'note', body: 'Rang back', user: 'ann', createdAt: '2026-10-25T22:30:00.000Z' }, // 26 Oct, 9:30 in Sydney
+    ];
+    assert.deepEqual(crm.timelineOf(st, { dealId: 'd-open' }).map((x) => x.id), ['note', 'meet']);
+  } finally {
+    if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz;
+  }
 });
 
 await check('crm: demo mode’s Make client carries a deal’s entries to its client; deleting a deal drops the ones that never reached a client (as 0012’s triggers)', () => {
@@ -2163,6 +2192,10 @@ await check('crm: next steps are tasks — a deal’s (Outreach boards’ Deal c
   assert.deepEqual(work.dealTasks(st, 'd-2').map((r) => r.item.id), ['o-2'], 'open ones only');
   assert.deepEqual(work.clientTasks(st, 'c-1').map((r) => r.item.id), ['o-3', 'd-1'], 'the client’s deal’s next steps, then its own Clients tasks (board order)');
   assert.deepEqual(work.dealTasks({ ...st, me: 'stu' }, 'd-2'), [], 'Outreach none: not visible');
+  // A second deal made the same client: its next steps join the client's.
+  st.deals.push({ id: 'd-3', name: 'Example deal', clientId: 'c-1' });
+  sales.groups[0].items.push({ id: 'o-5', name: 'Phase 2 quote', values: { people: ['ann'], deal: 'd-3' }, done: false, updates: [], subtasks: [] });
+  assert.deepEqual(work.clientTasks(st, 'c-1').map((r) => r.item.id), ['o-3', 'o-5', 'd-1'], 'both deals’ next steps');
   assert.deepEqual([work.dealTasks(st, ''), work.hasDeal({ module: 'outreach' }), work.hasDeal({ module: 'clients' })], [[], true, false]);
 });
 

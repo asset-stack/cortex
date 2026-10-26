@@ -1,6 +1,6 @@
 // The CRM profile's sections (docs/PHASE2.md §19), shared by a deal's profile (Pipeline) and a client's (Clients):
 // Next steps (board tasks linked to it), Timeline (notes and meetings) and Links. `target`: { dealId } or { clientId }.
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { CalendarDays, ExternalLink, FileText, Link2, Pencil, Plus, StickyNote, Trash2 } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { PRIORITY } from '@/data/boards';
@@ -8,7 +8,7 @@ import { Avatar, AvatarStack } from '@/components/ui';
 import NewTaskModal from '@/components/board/NewTaskModal';
 import { useAccess } from '@/lib/access';
 import { boardHref } from '@/lib/boards';
-import { LINK_LABELS, canAddEntry, canChangeEntry, linksOf, timelineOf } from '@/lib/crm';
+import { LINK_LABELS, URL_MAX, canAddEntry, canChangeEntry, linksOf, timelineOf } from '@/lib/crm';
 import { ago, localYmd, safeUrl, shortDate } from '@/lib/format';
 import { clientTasks, dealTasks, isWaiting, whereOf } from '@/lib/work';
 import { cn } from '@/lib/cn';
@@ -19,11 +19,33 @@ const SMALL_BTN = 'inline-flex h-9 items-center gap-1.5 rounded-full chip px-3.5
 function Heading({ children, actions }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <h3 className="font-bold">{children}</h3>
+      <h3 tabIndex={-1} data-focus="heading" className="font-bold outline-none">{children}</h3>
       {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
     </div>
   );
 }
+
+// When a form closes or an entry goes, the focused button goes with it: hand focus to the section's `[data-focus=key]`
+// (the button that opened the form, an entry's Edit), else its heading, as ItemDrawer does. → [section ref, focusOn]
+function useSectionFocus() {
+  const ref = useRef(null);
+  const [key, setKey] = useState('');
+  useEffect(() => {
+    if (!key) return;
+    const at = (k) => ref.current?.querySelector(`[data-focus="${CSS.escape(k)}"]`);
+    (at(key) || at('heading'))?.focus({ preventScroll: true });
+    setKey('');
+  }, [key]);
+  return [ref, setKey];
+}
+
+// A link the form can't keep: not a web address, or too long once saved. → the message, or ''
+const linkProblem = (v) => {
+  const url = safeUrl(String(v || '').trim());
+  return !url ? 'That link isn’t a web address' : url.length > URL_MAX ? 'That link is too long' : '';
+};
+// Escape cancels the form, not the whole profile.
+const escapeCancels = (cancel) => (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); cancel(); } };
 
 /** A deal's or client's next steps: its open linked tasks (each opens it) and Add next step (a task for someone, linked
  *  to it, on an Outreach board for a deal and a Clients board for a client). */
@@ -33,7 +55,10 @@ export function NextSteps({ target }) {
   const [adding, setAdding] = useState(false);
   const rows = target.dealId ? dealTasks(state, target.dealId) : clientTasks(state, target.clientId);
   const modules = target.dealId ? ['outreach'] : ['clients'];
-  const canAdd = state.boards.some((b) => modules.includes(b.module) && !b.owner && access.canEditBoard(b));
+  const boards = state.boards.filter((b) => modules.includes(b.module) && !b.owner);
+  const canAdd = boards.some(access.canEditBoard);
+  // Next steps live on those boards (and a client's also on its deal's Outreach ones): without any to see, say nothing.
+  if (!rows.length && !boards.some(access.canViewBoard)) return null;
   return (
     <section>
       <Heading actions={canAdd && <button type="button" onClick={() => setAdding(true)} className={SMALL_BTN}><Plus className="h-3.5 w-3.5" aria-hidden="true" />Add next step</button>}>
@@ -83,11 +108,12 @@ function EntryForm({ initial, onSave, onCancel }) {
   const meeting = f.kind === 'meeting';
   const submit = (e) => {
     e.preventDefault();
-    if (meeting && f.url && !safeUrl(f.url)) { setErr('That link isn’t a web address'); return; }
+    const problem = meeting && String(f.url || '').trim() && linkProblem(f.url);
+    if (problem) { setErr(problem); return; }
     if (!onSave(f)) setErr(meeting ? 'Add a title, a summary or a notes link' : 'Write something first');
   };
   return (
-    <form onSubmit={submit} className="mt-3 flex flex-col gap-2 rounded-2xl chip p-3">
+    <form onSubmit={submit} onKeyDown={escapeCancels(onCancel)} className="mt-3 flex flex-col gap-2 rounded-2xl chip p-3">
       {meeting && (
         <>
           <div className="grid grid-cols-[minmax(0,1fr)_150px] gap-2">
@@ -109,7 +135,7 @@ function EntryForm({ initial, onSave, onCancel }) {
   );
 }
 
-function Entry({ e, onEdit }) {
+function Entry({ e, onEdit, onRemoved }) {
   const { state, actions } = useStore();
   const users = useUsers();
   const own = !e.legacy && canChangeEntry(state, e);
@@ -118,7 +144,8 @@ function Entry({ e, onEdit }) {
   const what = e.kind === 'meeting' ? e.title || 'meeting' : 'note';
   // There's no undo: ask first (as for contracts and expenses).
   const remove = () => {
-    if (window.confirm(e.kind !== 'meeting' ? 'Delete this note?' : e.title ? `Delete the meeting ${e.title}?` : 'Delete this meeting?')) actions.removeEntry(e.id);
+    if (window.confirm(e.kind !== 'meeting' ? 'Delete this note?' : e.title ? `Delete the meeting ${e.title}?` : 'Delete this meeting?')
+      && actions.removeEntry(e.id) !== false) onRemoved();
   };
   return (
     <li className="flex gap-3 rounded-2xl chip p-3">
@@ -131,7 +158,7 @@ function Entry({ e, onEdit }) {
           </div>
           {own && (
             <div className="-mr-1.5 -mt-1.5 flex shrink-0">
-              <button type="button" onClick={() => onEdit(e)} aria-label={`Edit ${what}`} title="Edit" className={ICON}><Pencil className="h-3.5 w-3.5" /></button>
+              <button type="button" onClick={() => onEdit(e)} data-focus={`edit:${e.id}`} aria-label={`Edit ${what}`} title="Edit" className={ICON}><Pencil className="h-3.5 w-3.5" /></button>
               <button type="button" onClick={remove} aria-label={`Delete ${what}`} title="Delete" className={ICON}><Trash2 className="h-3.5 w-3.5" /></button>
             </div>
           )}
@@ -158,25 +185,28 @@ function Entry({ e, onEdit }) {
 export function Timeline({ target }) {
   const { state, actions } = useStore();
   const [form, setForm] = useState(null); // { kind, … } new, or an entry being edited
+  const [ref, focusOn] = useSectionFocus();
   const list = timelineOf(state, target);
   const canAdd = canAddEntry(state, { ...target, clientId: target.clientId || state.deals.find((d) => d.id === target.dealId)?.clientId || '' });
   const save = (f) => (form.id
     ? actions.updateEntry(form.id, f) !== false
     : actions.addEntry({ ...f, ...target }) !== false);
+  // Back to the entry's Edit, or to the button that opened the form.
+  const close = () => { focusOn(form.id ? `edit:${form.id}` : form.kind); setForm(null); };
   return (
-    <section>
+    <section ref={ref}>
       <Heading actions={canAdd && !form && (
         <>
-          <button type="button" onClick={() => setForm(blank('note'))} className={SMALL_BTN}><Plus className="h-3.5 w-3.5" aria-hidden="true" />Note</button>
-          <button type="button" onClick={() => setForm(blank('meeting'))} className={SMALL_BTN}><Plus className="h-3.5 w-3.5" aria-hidden="true" />Meeting</button>
+          <button type="button" onClick={() => setForm(blank('note'))} data-focus="note" className={SMALL_BTN}><Plus className="h-3.5 w-3.5" aria-hidden="true" />Note</button>
+          <button type="button" onClick={() => setForm(blank('meeting'))} data-focus="meeting" className={SMALL_BTN}><Plus className="h-3.5 w-3.5" aria-hidden="true" />Meeting</button>
         </>
       )}>
         Timeline
       </Heading>
-      {form && <EntryForm key={form.id || form.kind} initial={form} onSave={(f) => { const ok = save(f); if (ok) setForm(null); return ok; }} onCancel={() => setForm(null)} />}
+      {form && <EntryForm key={form.id || form.kind} initial={form} onSave={(f) => { const ok = save(f); if (ok) close(); return ok; }} onCancel={close} />}
       {list.length === 0 && !form && <p className="mt-1 dimmer">Nothing yet.</p>}
       <ol className="mt-3 flex flex-col gap-2.5">
-        {list.map((e) => (form?.id === e.id ? null : <Entry key={e.id} e={e} onEdit={(x) => setForm({ ...x })} />))}
+        {list.map((e) => (form?.id === e.id ? null : <Entry key={e.id} e={e} onEdit={(x) => setForm({ ...x })} onRemoved={() => focusOn('heading')} />))}
       </ol>
     </section>
   );
@@ -190,25 +220,28 @@ export function Links({ target }) {
   const { state, actions } = useStore();
   const [f, setF] = useState(null);
   const [err, setErr] = useState('');
+  const [ref, focusOn] = useSectionFocus();
   const list = linksOf(state, target);
   const canAdd = canAddEntry(state, { ...target, clientId: target.clientId || state.deals.find((d) => d.id === target.dealId)?.clientId || '' });
+  const close = () => { focusOn('add'); setF(null); };
   const submit = (e) => {
     e.preventDefault();
-    if (!safeUrl(f.url)) { setErr('Add a web address'); return; }
+    const problem = String(f.url || '').trim() ? linkProblem(f.url) : 'Add a web address';
+    if (problem) { setErr(problem); return; }
     if (actions.addEntry({ kind: 'link', ...f, ...target }) === false) { setErr('Couldn’t add this link'); return; }
-    setF(null);
+    close();
   };
   return (
-    <section>
+    <section ref={ref}>
       <Heading actions={canAdd && !f && (
-        <button type="button" onClick={() => { setErr(''); setF({ label: 'Meeting notes', title: '', url: '' }); }} className={SMALL_BTN}>
+        <button type="button" onClick={() => { setErr(''); setF({ label: 'Meeting notes', title: '', url: '' }); }} data-focus="add" className={SMALL_BTN}>
           <Plus className="h-3.5 w-3.5" aria-hidden="true" />Add link
         </button>
       )}>
         Links
       </Heading>
       {f && (
-        <form onSubmit={submit} className="mt-3 flex flex-col gap-2 rounded-2xl chip p-3">
+        <form onSubmit={submit} onKeyDown={escapeCancels(close)} className="mt-3 flex flex-col gap-2 rounded-2xl chip p-3">
           <div className="grid grid-cols-[150px_minmax(0,1fr)] gap-2">
             <select className="field" aria-label="Kind of link" value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })}>
               {LINK_LABELS.map((l) => <option key={l} value={l}>{l}</option>)}
@@ -219,7 +252,7 @@ export function Links({ target }) {
             onChange={(e) => { setErr(''); setF({ ...f, url: e.target.value }); }} />
           {err && <div role="alert" className="text-[12.5px] text-rose-200">{err}</div>}
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setF(null)} className="rounded-full chip px-4 h-9 font-semibold">Cancel</button>
+            <button type="button" onClick={close} className="rounded-full chip px-4 h-9 font-semibold">Cancel</button>
             <button type="submit" className="btn-primary rounded-full px-4 h-9 font-semibold">Add</button>
           </div>
         </form>
@@ -234,7 +267,7 @@ export function Links({ target }) {
               {l.title || l.url}<span className="sr-only"> (opens in a new tab)</span>
             </a>
             {!l.fixed && canChangeEntry(state, l) && (
-              <button type="button" onClick={() => actions.removeEntry(l.id)} aria-label={`Remove link ${l.title || l.url}`} title="Remove" className={ICON}>
+              <button type="button" onClick={() => { if (actions.removeEntry(l.id) !== false) focusOn('heading'); }} aria-label={`Remove link ${l.title || l.url}`} title="Remove" className={ICON}>
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
             )}

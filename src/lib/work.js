@@ -184,13 +184,13 @@ export function taskMentions(state, person, { viewer = state?.me } = {}) {
 }
 
 /** A client's open next steps on the boards the viewer sees, in board order: tasks linked to it (`values.client`, Clients
- *  boards) and to the deal it came from (`values.deal`, Outreach boards). → [{ item, board }] */
+ *  boards) and to the deals it came from (`values.deal`, Outreach boards). → [{ item, board }] */
 export function clientTasks(state, clientId, { viewer = state?.me } = {}) {
   if (!clientId) return [];
-  const dealId = (state?.deals || []).find((d) => d.clientId === clientId)?.id || '';
-  return (state?.boards || []).filter((b) => (hasClient(b) || (dealId && hasDeal(b))) && canViewBoard(state, b, viewer))
+  const deals = new Set((state?.deals || []).filter((d) => d.clientId === clientId).map((d) => d.id));
+  return (state?.boards || []).filter((b) => (hasClient(b) || (deals.size && hasDeal(b))) && canViewBoard(state, b, viewer))
     .flatMap((board) => board.groups.flatMap((g) => g.items
-      .filter((item) => !item.done && ((hasClient(board) && item.values?.client === clientId) || (dealId && hasDeal(board) && item.values?.deal === dealId)))
+      .filter((item) => !item.done && ((hasClient(board) && item.values?.client === clientId) || (hasDeal(board) && deals.has(item.values?.deal))))
       .map((item) => ({ item, board }))));
 }
 

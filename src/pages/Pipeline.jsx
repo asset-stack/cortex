@@ -175,6 +175,9 @@ export default function Pipeline() {
   // The confirm closes if the deal is deleted or made a client meanwhile.
   const makingDeal = making ? deals.find((d) => d.id === making) : null;
   useEffect(() => { if (making && !makingDeal) { setMaking(null); refocus(null); } }, [making, makingDeal]);
+  // So does the open profile.
+  const profileGone = Boolean(profile) && !deals.some((d) => d.id === profile);
+  useEffect(() => { if (profileGone) { setProfile(null); refocus(null); } }, [profileGone]);
   const value = deals.reduce((t, d) => t + (d.value || 0), 0);
   const drop = (stage) => (editable ? {
     onDragOver: (e) => { e.preventDefault(); setOver(stage); },

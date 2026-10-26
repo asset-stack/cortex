@@ -41,10 +41,12 @@ create index if not exists crm_entries_client_idx on public.crm_entries (client_
 -- 2. Guards --------------------------------------------------------------------------------------------------------
 
 -- An entry's author and date are whoever added it, when (the SQL editor and the secret key, with no signed-in user, may
--- set them). Its deal never changes (the database may clear it when the deal is deleted); its client is set only once,
--- to its deal's client (Make client), and never moved or cleared by an edit.
+-- set them). One added to a deal is its deal's client's when the deal has one (and on no client when it hasn't), so it
+-- follows the same rules as the rest of the deal's history. Its deal never changes (only deleting the deal clears it);
+-- its client is set only once, to its deal's client (Make client), and never moved or cleared by an edit. Security
+-- definer: the deal is looked up whatever the writer may read.
 create or replace function public.protect_crm_entry() returns trigger
-language plpgsql set search_path = public as $$
+language plpgsql security definer set search_path = public as $$
 begin
   if auth.uid() is not null then
     if tg_op = 'INSERT' then
@@ -55,8 +57,12 @@ begin
       new.created_at := old.created_at;
     end if;
   end if;
+  if tg_op = 'INSERT' and new.deal_id is not null then
+    new.client_id := (select d.client_id from public.deals d where d.id = new.deal_id);
+  end if;
   if tg_op = 'UPDATE' then
-    if new.deal_id is not null then
+    if new.deal_id is not null
+      or exists (select 1 from public.deals d where d.id = old.deal_id) then
       new.deal_id := old.deal_id;
     end if;
     if new.client_id is distinct from old.client_id and not coalesce(
@@ -70,6 +76,8 @@ begin
 end;
 $$;
 
+revoke all on function public.protect_crm_entry() from public, anon, authenticated;
+
 drop trigger if exists protect_crm_entry on public.crm_entries;
 create trigger protect_crm_entry before insert or update on public.crm_entries
   for each row execute function public.protect_crm_entry();
@@ -77,11 +85,13 @@ create trigger protect_crm_entry before insert or update on public.crm_entries
 -- 3. Make client and deleting a deal --------------------------------------------------------------------------------
 
 -- A deal made a client: its entries become the client's (whoever wrote them; RLS would let the converter change only
--- their own, hence security definer).
+-- their own, hence security definer). Only when Make client is done by someone who may write the client's profile
+-- (Clients edit, as the app's Make client needs) or by the SQL editor.
 create or replace function public.crm_carry_to_client() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  if new.client_id is not null and new.client_id is distinct from old.client_id then
+  if new.client_id is not null and new.client_id is distinct from old.client_id
+     and (auth.uid() is null or public.can_edit('clients')) then
     update public.crm_entries set client_id = new.client_id where deal_id = new.id and client_id is null;
   end if;
   return new;
