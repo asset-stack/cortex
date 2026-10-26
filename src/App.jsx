@@ -4,6 +4,7 @@ import { MODULES, useAccess } from '@/lib/access';
 import Sidebar, { MobileNav } from '@/components/layout/Sidebar';
 import ChatDock from '@/components/chat/ChatDock';
 import WorldClocks from '@/components/layout/WorldClocks';
+import DatabaseNotice from '@/components/layout/DatabaseNotice';
 import BoardPage from '@/components/board/BoardPage';
 import TimesheetPrompt from '@/components/timesheet/TimesheetPrompt';
 import Dashboard from '@/pages/Dashboard';
@@ -80,6 +81,7 @@ export default function App() {
             <MobileNav route={route} sub={sub} />
             <div className="mx-auto max-w-[1240px] px-4 pb-32 pt-6 md:px-8 md:pt-9" style={dockH ? { paddingBottom: `max(8rem, ${dockH + 16}px)` } : undefined}>
               <WorldClocks className="mb-4 md:mb-5" />
+              {access.isAdmin && <DatabaseNotice />}
               {access.role === 'staff' && <TimesheetPrompt />}
               <Page route={route} sub={sub} />
             </div>

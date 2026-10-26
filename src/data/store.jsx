@@ -32,6 +32,8 @@ const KEY = 'assetstack-ops:v1';
 // Demo reset and data adopted from another tab start it again.
 export const ensuredTodos = new Set();
 const SAVED = { state: 'saved', message: '' };
+// useStore().missing: tables the database doesn't have yet (live mode, a migration not run; never in demo mode).
+const NONE_MISSING = [];
 const ROW_KEY = Object.fromEntries(TABLES.map((t) => [t.name, t.key]));
 const ROW_PK = Object.fromEntries(TABLES.map((t) => [t.name, (t.onConflict || 'id').split(',')]));
 const PAGE = 1000; // PostgREST's default max rows per request
@@ -218,7 +220,8 @@ function takeNew(existing, records, build, result) {
 
 // Every action edits a draft through mutate(fn) and may return a value (a new id, an import count). Returning false
 // means refused: mutate then saves nothing. `mode` supplies what differs per mode: reset / setMe / signOut (public),
-// read (fn of the current state), rpc + pull (live), and the finance file store (upload, fileUrl, removeFile).
+// read (fn of the current state), rpc + pull (live), the finance file store (upload, fileUrl, removeFile), and missing
+// (live: whether a table's migration hasn't run yet, so its actions refuse).
 // Demo mode's copy of 0010's forgetting: a mailbox's Gmail connection, threads and messages go together.
 function forgetGmail(d, mailboxId) {
   if (d.outreachGmail) delete d.outreachGmail[mailboxId];
@@ -227,6 +230,8 @@ function forgetGmail(d, mailboxId) {
 }
 
 function createActions(mutate, mode) {
+  // Live mode before a table's migration has run: its actions refuse (there is nowhere to save to).
+  const absent = (table) => Boolean(mode.missing?.(table));
   // fn runs only when the signed-in user may do it; otherwise false and nothing changes.
   const editing = (module, fn) => mutate((d) => (canEdit(d, module) ? fn(d) : false));
   const admin = (fn) => mutate((d) => (isAdmin(d) ? fn(d) : false));
@@ -831,7 +836,7 @@ function createActions(mutate, mode) {
 
     // On a deal (Pipeline edit) or a client (Clients edit), as yourself, now. One on a deal already made a client is the
     // client's too. → id
-    addEntry: (fields = {}) => mutate((d) => {
+    addEntry: (fields = {}) => !absent('crm_entries') && mutate((d) => {
       const deal = fields.dealId ? d.deals.find((x) => x.id === fields.dealId) : null;
       const dealId = deal?.id || '';
       const clientId = (fields.clientId && d.clients.some((x) => x.id === fields.clientId) ? fields.clientId : '') || deal?.clientId || '';
@@ -842,7 +847,7 @@ function createActions(mutate, mode) {
       return e.id;
     }),
     // Its author, or an admin; its kind, deal and client stay.
-    updateEntry: (id, patch = {}) => mutate((d) => {
+    updateEntry: (id, patch = {}) => !absent('crm_entries') && mutate((d) => {
       const e = (d.crmEntries || []).find((x) => x.id === id);
       if (!canChangeEntry(d, e)) return false;
       const clean = cleanEntry({ ...e, ...patch, kind: e.kind });
@@ -850,7 +855,7 @@ function createActions(mutate, mode) {
       Object.assign(e, clean);
       return true;
     }),
-    removeEntry: (id) => mutate((d) => {
+    removeEntry: (id) => !absent('crm_entries') && mutate((d) => {
       const e = (d.crmEntries || []).find((x) => x.id === id);
       if (!canChangeEntry(d, e)) return false;
       d.crmEntries = d.crmEntries.filter((x) => x !== e);
@@ -1433,7 +1438,7 @@ function DemoProvider({ children }) {
 
   const outreach = useMemo(() => demoOutreach(state), [state]);
   const calendar = useMemo(() => demoCalendar(), []);
-  const value = useMemo(() => ({ state, actions, sync: SAVED, google: DEMO_GOOGLE, outreach, calendar }), [state, actions, outreach, calendar]);
+  const value = useMemo(() => ({ state, actions, sync: SAVED, google: DEMO_GOOGLE, outreach, calendar, missing: NONE_MISSING }), [state, actions, outreach, calendar]);
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
 
@@ -1856,6 +1861,8 @@ function createLiveEngine({ me, onState, onPhase, onSync }) {
   async function start() {
     onPhase({ status: 'loading' });
     sync = createSync({ supabase, onStatus, onRealtime, onRejected });
+    await sync.probe(); // a table whose migration hasn't run stays out of the channel, the load and the writes
+    if (closed) return;
     unsubscribe = sync.subscribe((change) => {
       if (closed) return;
       if (rows) apply(change);
@@ -1871,7 +1878,7 @@ function createLiveEngine({ me, onState, onPhase, onSync }) {
       clearTimeout(timer);
       timer = null;
       publish(build());
-      onPhase({ status: 'ready' });
+      onPhase({ status: 'ready', missing: sync.missing() });
       maybeResync(); // realtime joined while this loaded
     } catch (e) {
       if (!closed) onPhase({ status: 'error', message: e?.message || 'Loading failed' });
@@ -1913,7 +1920,10 @@ function createLiveEngine({ me, onState, onPhase, onSync }) {
   const flush = () => sync?.flush();
   const pending = () => Boolean(sync?.hasPending()); // edits not saved yet
   const read = (fn) => (state ? fn(state) : undefined);
-  return { start, stop, mutate, read, pull, flush, pending };
+  // The tables the database doesn't have yet (their migration hasn't run; schema.js `since`).
+  const missingTables = () => sync?.missing() || [];
+
+  return { start, stop, mutate, read, pull, flush, pending, missing: missingTables };
 }
 
 const wait = (ms) => new Promise((r) => { setTimeout(r, ms); });
@@ -1985,6 +1995,7 @@ function LiveProvider({ userId, children }) {
     const fail = (message) => { setSync({ state: 'error', message }); };
     return createActions(mutate, {
       live: true,
+      missing: (table) => Boolean(engine.current?.missing().includes(table)),
       read: (fn) => engine.current?.read(fn),
       reset: () => {}, // demo only
       setMe: () => {}, // demo only: live `me` is the signed-in user
@@ -2088,7 +2099,8 @@ function LiveProvider({ userId, children }) {
 
   const outreach = useMemo(() => liveOutreach(actions.syncOutreach, flushSoon, actions.syncOutreachGmail), [actions, flushSoon]);
   const calendar = useMemo(() => liveCalendar(actions.syncCalendar), [actions]);
-  const value = useMemo(() => ({ state, actions, sync, google, outreach, calendar }), [state, actions, sync, google, outreach, calendar]);
+  const missing = phase.missing?.length ? phase.missing : NONE_MISSING;
+  const value = useMemo(() => ({ state, actions, sync, google, outreach, calendar, missing }), [state, actions, sync, google, outreach, calendar, missing]);
 
   if (phase.status === 'error') {
     return (

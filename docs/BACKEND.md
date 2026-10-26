@@ -244,7 +244,8 @@ Text columns default to `''` and are `not null` unless noted, so the state never
   `export const ALLOWED_DOMAIN = 'assetstackai.com'`. Client created with `auth: { flowType: 'pkce', persistSession: true, detectSessionInUrl: true }`
   (PKCE so the OAuth return uses `?code=` and doesn't collide with the `#/route` hash router).
 - `schema.js` (pure, no Supabase import):
-  - `TABLES`: ordered parent → child, each `{ name, key: (row) => string, onConflict? }`
+  - `TABLES`: ordered parent → child, each `{ name, key: (row) => string, onConflict?, since? }` (`since`: the
+    migration that adds the table, e.g. `crm_entries` → `0012_crm_profile.sql`; see `probe()` below)
     (`channel_members` key `channel_id:user_id`, `read_state` key `user_id:channel_id`, `module_access` key
     `user_id:module`). `outreach_emails` is deliberately not in `TABLES` (0007): it is never loaded, diffed or written
     by the sync engine.
@@ -258,8 +259,14 @@ Text columns default to `''` and are `not null` unless noted, so the state never
   - `isPending(table, key)`, `hasPending()` (anything queued or in flight).
   - `staleEcho(table, key, row | null)`: true when a realtime change is the echo of one of our writes that a newer write of ours has since replaced (sent rows are remembered per row, oldest first, for 30 s; matching uses them up).
   - `dispose()`: nothing is scheduled afterwards, so a stopped engine stops writing.
-  - `loadAll() → rowsByTable` (one `select *` per table).
-  - `subscribe(onChange)` one realtime channel, `postgres_changes` `*` on every table (`postgres_changes_options: { wait: true }`, so `SUBSCRIBED` means changes are streaming); calls `onChange({ table, eventType, row /* new or old */ })` and passes each channel status to `onRealtime(status)`.
+  - `probe()`: before `subscribe()`, one small select per `since` table. A "not found" answer (PostgREST `PGRST205`,
+    Postgres `42P01`: its migration hasn't run) marks it missing: it is left out of the channel, loads as no rows and
+    takes no writes (`queue` drops its ops), and `missing()` names it. The store passes that on as `useStore().missing`
+    (the CRM actions refuse, the profile has no add buttons, admins see which file to run). So a release that gets ahead
+    of its migration loses that feature, not the workspace. Any other error, or a missing core table, still fails the
+    load. A reload after the migration runs picks the table up.
+  - `loadAll() → rowsByTable` (one `select *` per table; a `since` table found missing there loads as no rows too).
+  - `subscribe(onChange)` one realtime channel, `postgres_changes` `*` on every table it has (not a missing one) (`postgres_changes_options: { wait: true }`, so `SUBSCRIBED` means changes are streaming); calls `onChange({ table, eventType, row /* new or old */ })` and passes each channel status to `onRealtime(status)`.
   - `onStatus` states: `'saved' | 'saving' | 'error' | 'offline'`.
 
 ## 4. Store (`src/data/store.jsx`)

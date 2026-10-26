@@ -82,7 +82,13 @@ Contacted → First meetings → Demos, and Work in Progress under the deals; `d
 `docs/PHASE2.md` §19).
 
 Later schema changes arrive as new numbered files in `supabase/migrations/` (`0013_…`). Run each new file
-once, in order, the same way. Never run an older file after a newer one.
+once, in order, the same way. Never run an older file after a newer one. From `0013`, each file ends with a line that
+prints `Cortex 00NN applied`: if the SQL editor doesn't show that row, the file didn't finish (look for the error above
+it). To check that a file with a new table ran, `select to_regclass('public.<table>');` shows the table's name, or
+NULL when it isn't there (for 0012: `select to_regclass('public.crm_entries');`).
+
+If the app reaches the live site before its file has run, Cortex still opens: what the file adds is off (no rows, no
+saving), and admins see a notice naming the file to run. Run it, then reload.
 
 **0003 on a database that already has 0002**: **SQL Editor** → **+** → **Create a new snippet**, paste
 `supabase/migrations/0003_timezones_projects_view.sql` and **Run** *before* deploying the code that needs it (the
@@ -645,7 +651,8 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
 | A task's drawer on someone's own page offers no **Board** to move it to | By design: tasks move between team boards, or between groups of one page, never onto or off a personal page. |
 | An admin can't see another admin's notes (*Name’s notes*, once called *Name’s Projects*) | By design: admins see their own and staff's pages; only the SuperAdmin sees everyone's. |
 | No rename or delete on someone's notes page | Personal pages come and go with their person. Only team boards are renamed or deleted (by admins). |
-| "Couldn't load your workspace … crm_entries" after an update | `0012_crm_profile.sql` hasn't run yet (section 2). |
+| "Couldn't load your workspace … crm_entries" after an update (before this was handled: now Cortex opens with a *Database update needed* notice instead) | `0012_crm_profile.sql` hasn't run. In the SQL editor, `select to_regclass('public.crm_entries');`: NULL means run the file (section 2) and look for an error if it doesn't finish; `crm_entries` means the table is there and PostgREST hasn't noticed: run `notify pgrst, 'reload schema';`. Then **Retry**. |
+| **Database update needed: run 00NN_….sql** at the top of Cortex (admins) | That migration hasn't run on this database: run it (section 2), then reload. Until then what it adds is off; everything else works. |
 | A staff member reads a deal's or a client's profile but has no **Note**, **Meeting** or **Add link** | Expected with View: adding to a deal's profile needs **Pipeline** Edit, to a client's **Clients** Edit (**Settings** → **Team**). Someone else's entry is changed only by its author or an admin. |
 | A deal's profile has no **Next steps**, or no **Add next step** | A deal's next steps are tasks on the Outreach boards: seeing them needs **Outreach** View and adding them Outreach Edit (staff have None by default). |
 | On **Team**, a staff member sees fewer of a teammate's tasks than an admin does, or **New task** says a teammate can't edit a board they can | `0011_team_access_read.sql` hasn't run yet (section 2): until then staff read only their own access levels. |

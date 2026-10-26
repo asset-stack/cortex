@@ -28,6 +28,9 @@ function fkColumns(table, err) {
   const name = new RegExp(`"${table}_(\\w+)_fkey"`).exec(err.message || '')?.[1];
   return name ? [name] : [];
 }
+// PostgREST's "no such table" (its schema cache doesn't have it; Postgres's own code before PostgREST checked).
+const notFound = (err) => /^(PGRST205|42P01)$/.test(err?.code || '')
+  || /could not find the table|relation "[^"]*" does not exist/i.test(err?.message || '');
 // Last write wins, except a later upsert never brings back a deleted row.
 const coalesce = (older, newer) => (older?.op === 'delete' && newer.op === 'upsert' ? older : newer);
 const listOf = (m, k) => { if (!m.has(k)) m.set(k, []); return m.get(k); };
@@ -49,6 +52,7 @@ export function createSync({ supabase, onStatus = () => {}, onRealtime = () => {
   let realtimeDown = false;
   let disposed = false; // set by dispose(): nothing new is scheduled, so a stopped engine stops writing
   let reported = '';
+  const missing = new Set(); // `since` tables the database doesn't have yet (their migration hasn't run)
 
   function report() {
     const next = failure
@@ -58,6 +62,7 @@ export function createSync({ supabase, onStatus = () => {}, onRealtime = () => {
   }
 
   function queue(ops) {
+    ops = ops?.filter((op) => !missing.has(op.table)); // a table that isn't there takes no writes
     if (!ops?.length || disposed) return;
     ops.forEach((op) => {
       const id = opId(op.table, op.key);
@@ -262,14 +267,28 @@ export function createSync({ supabase, onStatus = () => {}, onRealtime = () => {
     return list.length > 0;
   }
 
-  // One `select *` per table (paged past PostgREST's row cap) → { [table]: Map<key, row> }, rows normalised.
+  // Which tables with a `since` migration the database doesn't have yet. Those are left out of the subscription, the
+  // load and every write, so a release that gets ahead of its migration loses that feature, not the workspace. Run
+  // before subscribe(). Any other error is left to loadAll. → the missing table names
+  async function probe() {
+    await Promise.all(TABLES.filter((t) => t.since).map(async (table) => {
+      let error = null;
+      try { ({ error } = (await supabase.from(table.name).select(pkOf(table)[0]).range(0, 0)) || {}); } catch { /* loadAll says */ }
+      if (notFound(error)) missing.add(table.name); else missing.delete(table.name);
+    }));
+    return [...missing];
+  }
+
+  // One `select *` per table (paged past PostgREST's row cap) → { [table]: Map<key, row> }, rows normalised. A `since`
+  // table that isn't there (yet) loads as no rows; any other failure fails the load.
   async function loadAll() {
     const entries = await Promise.all(TABLES.map(async (table) => {
       const rows = new Map();
-      for (let from = 0; ;) {
+      for (let from = 0; !missing.has(table.name);) {
         let q = supabase.from(table.name).select('*', { count: 'exact' });
         pkOf(table).forEach((col) => { q = q.order(col); });
         const { data, error, count } = await q.range(from, from + PAGE - 1);
+        if (error && table.since && notFound(error)) { missing.add(table.name); rows.clear(); break; }
         if (error) throw new Error(`Loading ${table.name} failed: ${error.message}`);
         data.forEach((raw) => { const row = normalizeRow(table.name, raw); rows.set(table.key(row), row); });
         from += data.length;
@@ -288,7 +307,7 @@ export function createSync({ supabase, onStatus = () => {}, onRealtime = () => {
     const channel = supabase.channel(`cortex-sync-${Math.random().toString(36).slice(2, 10)}`, {
       config: { postgres_changes_options: { wait: true } },
     });
-    TABLES.forEach((table) => channel.on('postgres_changes', { event: '*', schema: 'public', table: table.name }, (p) => {
+    TABLES.filter((table) => !missing.has(table.name)).forEach((table) => channel.on('postgres_changes', { event: '*', schema: 'public', table: table.name }, (p) => {
       const row = p.eventType === 'DELETE' ? p.old : normalizeRow(table.name, p.new);
       onChange({ table: table.name, eventType: p.eventType, key: table.key(row), row });
     }));
@@ -312,5 +331,5 @@ export function createSync({ supabase, onStatus = () => {}, onRealtime = () => {
     if (typeof window !== 'undefined') window.removeEventListener('online', onOnline);
   }
 
-  return { queue, flush, isPending, hasPending, staleEcho, loadAll, subscribe, dispose };
+  return { queue, flush, isPending, hasPending, staleEcho, probe, missing: () => [...missing], loadAll, subscribe, dispose };
 }

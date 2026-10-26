@@ -22,6 +22,13 @@ setup steps are in `DEPLOY.md`.
   keeps row-level security on with policies that require `is_staff()` (directly or through `is_admin()` /
   `can_view()` / `can_edit()` / the board helpers), and is added to the `supabase_realtime` publication if it is synced. Extend
   `scripts/test-db.mjs` to cover it.
+- **A release must not need its migration to open** (the 0012 outage: the app reached production before the file ran
+  and every page failed to load). A new synced table gets `since: '<file>'` in `TABLES` (`schema.js`): until it exists
+  the sync engine leaves it out (`probe()`), the app hides what needs it (`useStore().missing`) and admins see which file
+  to run. A new column on an existing table needs the same care (the app must cope without it) or a release after the
+  migration. From `0013`, a migration ends (after `commit;`) with `select 'Cortex 00NN applied' as done;`.
+- **Before publishing a release that needs a migration, verify it ran**: ask the owner for the result of
+  `select to_regclass('public.<new table>')` (or the `done` row, or a check that fits the change), never just "done".
 - Roles are `superadmin | admin | staff`. Admins (superadmin or admin) always have edit; only the SuperAdmin
   changes roles, active flags and module access. Money in, expenses and software costs are admins only, and
   staff never approve, send or mark invoices paid.

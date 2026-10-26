@@ -141,6 +141,8 @@ const byId = (r) => String(r.id);
 // parent: the table this one nests under in state, used by diff() to tell deletes from rows state never had.
 // inState: rows of a top-level table that state can show; others (a board that no longer exists) are never deleted.
 // setNull: links (column → table) the database clears when the row they point at is deleted (on delete set null).
+// since: the migration that adds the table. Until it has run, the app goes on without it (the sync engine's probe():
+//   no rows, no realtime, no writes; admins see which file to run) instead of failing to load. Core tables have none.
 export const TABLES = [
   { name: 'profiles', key: byId, update: true },
   { name: 'org_settings', key: byId, update: true },
@@ -156,7 +158,7 @@ export const TABLES = [
   { name: 'client_notes', key: byId, parent: ['clients', 'client_id'] },
   // After deals and clients. A client deleted takes its entries (on delete cascade; the store drops them too); a deal
   // deleted takes the ones that never reached a client and leaves the others off it (0012's trigger, then set null).
-  { name: 'crm_entries', key: byId, setNull: { deal_id: 'deals', user_id: 'profiles' } },
+  { name: 'crm_entries', key: byId, setNull: { deal_id: 'deals', user_id: 'profiles' }, since: '0012_crm_profile.sql' },
   { name: 'client_tasks', key: byId, parent: ['clients', 'client_id'] },
   { name: 'billing_plans', key: byId, parent: ['clients', 'client_id'] }, // before invoices (invoices.plan_id)
   { name: 'invoices', key: byId, parent: ['clients', 'client_id'], setNull: { plan_id: 'billing_plans' } },

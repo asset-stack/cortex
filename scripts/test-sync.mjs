@@ -1415,6 +1415,57 @@ await check('sync: loadAll pages every table and normalises rows', async () => {
   sync.dispose();
 });
 
+// A release that gets ahead of its migration (the live 0012 outage: "Could not find the table 'public.crm_entries' in
+// the schema cache") loses that feature, not the workspace.
+const NOT_FOUND = { code: 'PGRST205', message: "Could not find the table 'public.crm_entries' in the schema cache" };
+await check('sync: a table whose migration hasn’t run (TABLES since) is left out — no rows, no realtime, no writes — and the rest loads', async () => {
+  assert.deepEqual(TABLES.filter((t) => t.since).map((t) => [t.name, t.since]), [['crm_entries', '0012_crm_profile.sql']]);
+  const { sb, sync } = setup({ deals: [{ id: 'd1', name: 'D', value: 0, position: 0 }] });
+  sb.failures.push({ table: 'crm_entries', method: 'select', ...NOT_FOUND, sticky: true });
+  assert.deepEqual(await sync.probe(), ['crm_entries']);
+  assert.deepEqual(sb.calls.map((c) => [c.table, c.columns, c.range]), [['crm_entries', 'id', [0, 0]]], 'one small select per since table');
+  sync.subscribe(() => {});
+  const tables = sb.channels.at(-1).handlers.map((h) => h.filter.table);
+  assert.ok(!tables.includes('crm_entries') && tables.includes('deals') && tables.length === TABLES.length - 1, 'left out of realtime');
+  const rows = await sync.loadAll();
+  assert.equal(rows.crm_entries.size, 0);
+  assert.equal(rows.deals.size, 1);
+  assert.equal(sb.calls.filter((c) => c.table === 'crm_entries').length, 1, 'not loaded');
+  sync.queue([up('crm_entries', 'e1'), up('deals', 'd2')]);
+  sync.queue([del('crm_entries', 'e2')]);
+  await sync.flush();
+  assert.deepEqual(sb.calls.filter((c) => c.method !== 'select').map((c) => `${c.method} ${c.table}`), ['upsert deals'], 'no writes to it');
+  assert.deepEqual([sync.missing(), sync.hasPending()], [['crm_entries'], false]);
+  sync.dispose();
+});
+
+await check('sync: a since table found missing during a load (no probe, or it came back unsure) loads as no rows; a probe that finds it there forgets it', async () => {
+  const { sb, sync } = setup({ crm_entries: [{ id: 'e1', kind: 'note', body: 'x' }] });
+  sb.failures.push({ table: 'crm_entries', method: 'select', code: '42P01', message: 'relation "public.crm_entries" does not exist' });
+  const rows = await sync.loadAll();
+  assert.deepEqual([rows.crm_entries.size, sync.missing()], [0, ['crm_entries']]);
+  assert.deepEqual(await sync.probe(), [], 'its migration has run since');
+  assert.equal((await sync.loadAll()).crm_entries.size, 1);
+  sync.dispose();
+});
+
+await check('sync: a core table that is missing, or a since table failing for any other reason, still fails the load', async () => {
+  const core = setup();
+  core.sb.failures.push({ table: 'deals', method: 'select', ...NOT_FOUND, message: "Could not find the table 'public.deals' in the schema cache", sticky: true });
+  assert.deepEqual(await core.sync.probe(), [], 'only since tables are probed');
+  await assert.rejects(core.sync.loadAll(), /Loading deals failed/);
+  core.sync.dispose();
+  const other = setup();
+  other.sb.failures.push({ table: 'crm_entries', method: 'select', code: '42501', message: 'permission denied for table crm_entries', sticky: true });
+  assert.deepEqual(await other.sync.probe(), [], 'not "not found": left to the load');
+  await assert.rejects(other.sync.loadAll(), /Loading crm_entries failed: permission denied/);
+  other.sync.dispose();
+  const column = setup();
+  column.sb.failures.push({ table: 'crm_entries', method: 'select', code: '42703', message: 'column crm_entries.kind does not exist', sticky: true });
+  assert.deepEqual(await column.sync.probe(), [], 'a missing column isn’t a missing table');
+  column.sync.dispose();
+});
+
 await check('sync: subscribe listens to every table on one channel', async () => {
   const { sb, sync, statuses } = setup();
   const changes = [];

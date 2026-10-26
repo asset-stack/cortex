@@ -183,11 +183,13 @@ function Entry({ e, onEdit, onRemoved }) {
 /** A deal's or client's notes and meetings, newest first; Note and Meeting add one (Pipeline edit for a deal, Clients
  *  edit for a client); their author, or an admin, edits or deletes them. */
 export function Timeline({ target }) {
-  const { state, actions } = useStore();
+  const { state, actions, missing } = useStore();
   const [form, setForm] = useState(null); // { kind, … } new, or an entry being edited
   const [ref, focusOn] = useSectionFocus();
   const list = timelineOf(state, target);
-  const canAdd = canAddEntry(state, { ...target, clientId: target.clientId || state.deals.find((d) => d.id === target.dealId)?.clientId || '' });
+  // Not before 0012 has run (live mode: crm_entries missing); a client's older notes still show.
+  const canAdd = !missing.includes('crm_entries')
+    && canAddEntry(state, { ...target, clientId: target.clientId || state.deals.find((d) => d.id === target.dealId)?.clientId || '' });
   const save = (f) => (form.id
     ? actions.updateEntry(form.id, f) !== false
     : actions.addEntry({ ...f, ...target }) !== false);
@@ -217,12 +219,13 @@ export function Timeline({ target }) {
 /** A deal's or client's links (meeting notes, demo, deck, proposal, recording …), newest first; a client's Demo and
  *  Platform fields show here too. Add link: a label, a title and the address. */
 export function Links({ target }) {
-  const { state, actions } = useStore();
+  const { state, actions, missing } = useStore();
   const [f, setF] = useState(null);
   const [err, setErr] = useState('');
   const [ref, focusOn] = useSectionFocus();
   const list = linksOf(state, target);
-  const canAdd = canAddEntry(state, { ...target, clientId: target.clientId || state.deals.find((d) => d.id === target.dealId)?.clientId || '' });
+  const canAdd = !missing.includes('crm_entries')
+    && canAddEntry(state, { ...target, clientId: target.clientId || state.deals.find((d) => d.id === target.dealId)?.clientId || '' });
   const close = () => { focusOn('add'); setF(null); };
   const submit = (e) => {
     e.preventDefault();
