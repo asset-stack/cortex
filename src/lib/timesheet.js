@@ -2,6 +2,7 @@
 // and the 16:30 prompt's snooze. Pure apart from the snooze helpers (the one localStorage use outside the store,
 // per person and day), so scripts/test-sync.mjs can run suggestBlocks in Node.
 import { localYmd } from './format.js';
+import { departmentOf } from './boards.js';
 import { CATEGORIES } from '../data/boards.js';
 
 export const TIMESHEET_HOURS = { start: '09:00', end: '17:00' };
@@ -9,6 +10,9 @@ export const PROMPT_AT = '16:30'; // weekdays, in the person's own time zone
 export const EMAIL_MINUTES = 10; // per email sent → Email marketing
 export const ITEM_MINUTES = 30; // per board item worked on → its module's category (Projects, Marketing, …)
 export const BOARD_CATEGORY = { projects: 'Projects', marketing: 'Marketing', outreach: 'Outreach', clients: 'Clients', pipeline: 'Clients' };
+/** The work category a board task's time goes under: its department's (docs/PHASE2.md §20), so a marketing task kept
+ *  on an Operations board counts as Marketing. */
+export const categoryOf = (board, item) => BOARD_CATEGORY[departmentOf(board, item)] || 'Other';
 
 const pad = (n) => String(n).padStart(2, '0');
 const toMin = (hhmm) => { const m = /^(\d{1,2}):(\d{2})/.exec(String(hhmm ?? '')); return m ? +m[1] * 60 + +m[2] : NaN; };
@@ -136,7 +140,7 @@ export function dayActivity(state, userId, day) {
   const itemsTouched = [];
   (Array.isArray(state?.boards) ? state.boards : []).filter((b) => BOARD_CATEGORY[b.module]).forEach((b) => (b.groups || []).forEach((g) => (g.items || []).forEach((it) => {
     const mine = (it.updates || []).filter((u) => u.user === userId && on(u.ts)).map((u) => u.ts).sort();
-    if (mine.length) itemsTouched.push({ board: b.module, id: it.id, name: it.name, ts: mine[0] });
+    if (mine.length) itemsTouched.push({ board: departmentOf(b, it), id: it.id, name: it.name, ts: mine[0] });
   })));
 
   const messagesSent = (state?.messages || []).filter((m) => m.user === userId && on(m.ts));

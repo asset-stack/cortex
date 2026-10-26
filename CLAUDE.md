@@ -43,13 +43,16 @@ setup steps are in `DEPLOY.md`.
   Clients and Pipeline (`BOARD_MODULES`); Outreach's and Clients' menus start with their own page (`MODULE_HOMES`), and
   Pipeline's boards (Work in Progress) sit on its page under the deals, not in the menu (`PAGE_BOARD_MODULES`). Admins add
   new team boards in the app; personal pages come and go with their person.
-- **Board tasks have one home and one Owner** (`docs/PHASE2.md` §17, §18): a task lives on one board (the Dashboard,
+- **Board tasks have one home and one Owner** (`docs/PHASE2.md` §17, §18, §20): a task lives on one board (the Dashboard,
   Team pages and a client's page are views of it, never copies; its breadcrumb is `whereOf()`). The owner column keeps
   `values.people` as `[id]`, priority is `PRIORITY` (Urgent → Low, with `PRIORITY_HINTS`), and the rules for handing
   over and accepting, the Dashboard and Team lists, Needs attention, task mentions, a client's tasks and Do today live
   in `src/lib/work.js` (only `nextValues()` / `acceptedValues()` set `assignedBy` / `assignedAt` / `acceptedAt`). An
   `@Name` in an update never changes who is on a task. The Projects module is shown as **Operations** (`MODULE_LABELS`);
-  its key stays `projects`.
+  its key stays `projects`. **Also on** (`values.also`, §20) puts others on a task without making it theirs: it never
+  counts in `workload()`, never waits on them, never lists the owner. A task's **Department** is `departmentOf()` (a
+  module key; '' = its board's). Both are `team` columns: render a board's columns from `schemaOf(board)`, never
+  `BOARD_SCHEMAS[module]` (personal pages don't have them), and save values through `boardValues()`.
 - **CRM profile (0012)**: a deal's or client's notes, meetings and links are `crm_entries` (`state.crmEntries`; rules in
   `src/lib/crm.js` ⇄ 0012's policies and triggers). An entry on a client follows Clients access, one on a deal that isn't
   a client yet Pipeline's; its author or an admin changes it. Make client gives a deal's entries its client in the

@@ -32,9 +32,9 @@ const byStart = (todos) => todos
   .map(({ t }) => t);
 
 /**
- * The Dashboard (docs/PHASE2.md §18; was My Work): someone's master task list (Waiting on you, the day's to-dos, My
- * tasks across every department, Urgent first) and their notes (their own page), with Needs attention (admins),
- * Mentions and Tools beside it. Admins look at anyone's.
+ * The Dashboard (docs/PHASE2.md §18, §20; was My Work): someone's master task list (Waiting on you, the day's to-dos, My
+ * tasks: a card per board, in its order, with the tasks they're also on) and their notes (their own page), with Needs
+ * attention (admins), Mentions and Tools beside it. Admins look at anyone's.
  */
 export default function Dashboard() {
   const { state, actions } = useStore();
@@ -115,7 +115,9 @@ export default function Dashboard() {
           <TodoList title={title} icon={CalendarCheck} todos={dayTodos} empty="Nothing planned." rim>
             <AddTodo assignee={personId} day={day} />
           </TodoList>
-          <MyTasks rows={rows.filter((r) => !r.waiting)} personId={personId} act load={load} title={self ? 'My tasks' : `${person?.name}’s tasks`}
+          {/* Their notes page is below as My notes, so it has no card of its own here. */}
+          <MyTasks rows={rows.filter((r) => !r.waiting && !(showNotes && r.board.id === notes.id))} personId={personId} act load={load}
+            title={self ? 'My tasks' : `${person?.name}’s tasks`}
             empty={self ? 'Nothing assigned to you.' : 'Nothing assigned.'} />
           {showNotes && <section aria-label={self ? 'My notes' : `${person?.name}’s notes`} className="mt-4"><Board key={notes.id} board={notes} embedded title={self ? 'My notes' : `${person?.name}’s notes`} /></section>}
         </div>

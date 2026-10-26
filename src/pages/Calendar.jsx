@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, ChevronDown, ListFilter, User } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { useAccess } from '@/lib/access';
-import { BOARD_SCHEMAS } from '@/data/boards';
+import { BOARD_SCHEMAS, schemaOf } from '@/data/boards';
 import { findBoard } from '@/lib/boards';
 import {
   CLIENT_KINDS, KINDS, archiveMonths, collectEntries, earliestDate, entriesByDay, filterEntries, inMonth, lastOf, nextMonths, placeAt,
@@ -215,7 +215,7 @@ export default function Calendar() {
         </div>
       </Modal>
       {/* A task or post opens here, read only unless you can edit its board. */}
-      <ItemDrawer key={item?.itemId ?? 'closed'} boardId={item?.boardId} schema={BOARD_SCHEMAS[board?.module] || BOARD_SCHEMAS.projects}
+      <ItemDrawer key={item?.itemId ?? 'closed'} boardId={item?.boardId} schema={schemaOf(board) || BOARD_SCHEMAS.projects}
         itemId={board ? item.itemId : null} onClose={() => setItem(null)} readOnly={!board || !access.canEditBoard(board)} />
     </div>
   );

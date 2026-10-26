@@ -2,7 +2,8 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Pencil, Trash2, X } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { useAccess } from '@/lib/access';
-import { boardHref, boardTitle, findBoard, sameAudience } from '@/lib/boards';
+import { DEPARTMENTS, MODULE_LABELS, boardHref, boardTitle, departmentOf, findBoard, sameAudience } from '@/lib/boards';
+import { alsoOf, taggable } from '@/lib/work';
 import { itemWord } from '@/data/boards';
 import { Avatar, ClientPicker, ConfirmModal, DealPicker, Drawer, InlineRename, LabelPicker, OwnerPicker, PeoplePicker, QuickAdd } from '@/components/ui';
 import { MessageText } from '@/lib/mentions';
@@ -87,9 +88,20 @@ export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly 
                 )}
                 {c.type === 'people' && (
                   <div>
-                    <PeoplePicker value={item.values.people || []} label={c.label} size={32} max={5} readOnly={readOnly}
-                      onChange={(v) => actions.updateItem(boardId, item.id, { values: { people: v } })} />
+                    <PeoplePicker value={item.values[c.key] || []} label={c.label} size={32} max={5} readOnly={readOnly}
+                      onChange={(v) => actions.updateItem(boardId, item.id, { values: { [c.key]: v } })} />
                   </div>
+                )}
+                {c.type === 'also' && (
+                  <div>
+                    <PeoplePicker value={alsoOf(item)} allow={taggable(state, board, item)} label={c.label} empty="Nobody" size={32} max={5}
+                      readOnly={readOnly} onChange={(v) => actions.updateItem(boardId, item.id, { values: { [c.key]: v } })} />
+                  </div>
+                )}
+                {c.type === 'department' && (
+                  <LabelPicker label={c.label} value={departmentOf(board, item)} options={DEPARTMENTS} labels={MODULE_LABELS}
+                    muted={!item.values[c.key]} allowEmpty={Boolean(item.values[c.key])} readOnly={readOnly}
+                    onChange={(v) => actions.updateItem(boardId, item.id, { values: { [c.key]: v } })} />
                 )}
                 {c.type === 'client' && (
                   <ClientPicker value={item.values[c.key] || ''} label={c.label} readOnly={readOnly}

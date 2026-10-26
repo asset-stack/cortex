@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '@/data/store';
 import { PRIORITY, STATUS } from '@/data/boards';
+import { DEPARTMENTS, MODULE_LABELS } from '@/lib/boards';
 import { AvatarStack } from '@/components/ui';
 import { shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
@@ -10,6 +11,7 @@ export default function KanbanView({ boardId, schema, groups, onOpen, readOnly =
   const [over, setOver] = useState(null);
   const who = schema?.columns.find((c) => c.key === 'people'); // Owner (one person) or People
   const prioritised = schema?.columns.some((c) => c.key === 'priority');
+  const departments = schema?.columns.some((c) => c.type === 'department'); // a card says its department when it isn't the board's
   // Columns mix groups: their tasks in board order (each group's saved order, the groups in theirs).
   const all = groups.flatMap((g) => g.items);
   // View access: cards still open the task, but nothing can be dragged or dropped.
@@ -46,6 +48,11 @@ export default function KanbanView({ boardId, schema, groups, onOpen, readOnly =
                       {prioritised && PRIORITY[i.values.priority] && (
                         <span className="pill !h-[22px] !px-2 !text-[11px]" style={{ backgroundColor: PRIORITY[i.values.priority] }}>
                           <span className="sr-only">Priority: </span>{i.values.priority}
+                        </span>
+                      )}
+                      {departments && DEPARTMENTS[i.values.department] && (
+                        <span className="pill !h-[22px] !px-2 !text-[11px]" style={{ backgroundColor: DEPARTMENTS[i.values.department] }}>
+                          <span className="sr-only">Department: </span>{MODULE_LABELS[i.values.department]}
                         </span>
                       )}
                       <span className="ml-auto text-[12px] dim tnum">{shortDate(i.values.due)}</span>

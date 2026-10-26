@@ -66,9 +66,10 @@ function boards(clientId = () => '', dealId = () => '') {
     ], 'hello'),
     board('projects', 'Landing Page', [
       group('Active', '#c9ffe6', [
-        item('Hero copy refresh', { people: ['hello'], status: 'In progress', priority: 'High', due: '2026-10-23' },
+        // Also on (§20): David checks the copy; it's Hello's to answer for.
+        item('Hero copy refresh', { people: ['hello'], also: ['david'], status: 'In progress', priority: 'High', due: '2026-10-23' },
           { updates: [{ id: id('u'), user: 'hello', text: 'First draft is in the doc. @David can you check the headline?', ts: hoursAgo(8) }] }),
-        item('Council case study section', { people: ['david'], status: 'Not started', priority: 'Medium', due: '2026-11-06' }),
+        item('Council case study section', { people: ['david'], status: 'Not started', priority: 'Medium', due: '2026-11-06', department: 'marketing' }),
         item('Page speed audit', { people: ['josh'], status: 'Not started', priority: 'Low', due: '2026-11-13' }),
       ]),
       group('Backlog', '#e6eaf2', [
@@ -77,7 +78,7 @@ function boards(clientId = () => '', dealId = () => '') {
     ]),
     board('projects', 'Tender Portal', [
       group('Active', '#c9ffe6', [
-        item('Free Tender Portal', { people: ['david'], status: 'In progress', priority: 'High', due: '2026-11-15' },
+        item('Free Tender Portal', { people: ['david'], also: ['josh'], status: 'In progress', priority: 'High', due: '2026-11-15' },
           { subtasks: [{ id: id('s'), text: 'Supplier sign-up flow', done: true }, { id: id('s'), text: 'Tender alert emails', done: false }] }),
         item('Tender alert emails', { people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-11-20' }),
       ]),
@@ -92,7 +93,7 @@ function boards(clientId = () => '', dealId = () => '') {
       ]),
       // The former Admin board.
       group('Admin', '#ffe6b0', [
-        item('Merchandise', { people: ['hello'], status: 'Not started', priority: 'Low', due: '2026-10-18' }),
+        item('Merchandise', { people: ['hello'], status: 'Not started', priority: 'Low', due: '2026-10-18', department: 'marketing' }),
         item('Trademark', { people: ['josh'], status: 'Stuck', priority: 'High', due: '2026-10-22' },
           { updates: [{ id: id('u'), user: 'josh', text: 'Waiting on the examiner response.', ts: hoursAgo(30) }] }),
         item('Insurance renewal', { people: ['josh', 'hello'], status: 'In progress', priority: 'High', due: '2026-10-31' }),

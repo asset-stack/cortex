@@ -1,8 +1,10 @@
 // Board schemas: column definitions and label colours for the Monday-style boards, plus the other label sets.
-// Column types: owner (one person) | people | client | deal | status | label | date | text. `owner` and `people` are both
-// kept in `values.people` (user ids): an owner column holds one, so a task has one person answerable for it
-// (docs/PHASE2.md §17). `client` holds a client id in `values.client`, `deal` a deal id in `values.deal` (a next step on
-// a deal's profile, §19).
+// Column types: owner (one person) | people | also | client | deal | department | status | label | date | text. `owner`
+// and `people` are both kept in `values.people` (user ids): an owner column holds one, so a task has one person
+// answerable for it (docs/PHASE2.md §17). `also` (Also on, §20) holds the other people on it in `values.also`: they see it
+// in their task lists, but it isn't theirs to answer for. `client` holds a client id in `values.client`, `deal` a deal id
+// in `values.deal` (a next step on a deal's profile, §19), `department` a board module in `values.department` ('' = the
+// board's own: departmentOf() in src/lib/boards.js). `team`: a column only team boards have (not personal pages).
 
 export const STATUS = {
   'Not started': '#9aa3b5',
@@ -16,7 +18,10 @@ export const STATUS = {
 export const PRIORITY = { Urgent: '#e2445c', High: '#fdab3d', Medium: '#579bfc', Low: '#7d8fa3' };
 export const PRIORITY_HINTS = { Urgent: 'Today: drop other work. One at a time.', High: 'This week', Medium: 'This month', Low: 'When free' };
 const OWNER = { key: 'people', label: 'Owner', type: 'owner' };
+const ALSO = { key: 'also', label: 'Also on', type: 'also', team: true };
 const PRIORITY_COLUMN = { key: 'priority', label: 'Priority', type: 'label', options: PRIORITY, hints: PRIORITY_HINTS };
+// Which department a task belongs to (§20): Operations, Marketing, Outreach, Clients or Pipeline. Last on every team board.
+const DEPARTMENT = { key: 'department', label: 'Department', type: 'department', team: true };
 
 // The board modules' columns (BOARD_MODULES): Projects (with the former Admin board merged in), Marketing, Outreach and
 // Clients. All are modules in src/lib/access.js.
@@ -26,9 +31,11 @@ export const BOARD_SCHEMAS = {
     icon: 'FolderKanban',
     columns: [
       OWNER,
+      ALSO,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },
       PRIORITY_COLUMN,
       { key: 'due', label: 'Due', type: 'date' },
+      DEPARTMENT,
     ],
   },
   marketing: {
@@ -36,6 +43,7 @@ export const BOARD_SCHEMAS = {
     icon: 'Megaphone',
     columns: [
       OWNER,
+      ALSO,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },
       PRIORITY_COLUMN,
       {
@@ -48,6 +56,7 @@ export const BOARD_SCHEMAS = {
       },
       { key: 'approval', label: 'Approval', type: 'label', options: { Yes: '#00c875', No: '#a25ddc', Pending: '#579bfc' } },
       { key: 'due', label: 'Due', type: 'date' },
+      DEPARTMENT,
     ],
   },
   // Outreach's boards (Sales Tasks …) have the standard task columns, as Projects, and say which deal a task is for (a
@@ -58,9 +67,11 @@ export const BOARD_SCHEMAS = {
     columns: [
       { key: 'deal', label: 'Deal', type: 'deal' },
       OWNER,
+      ALSO,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },
       PRIORITY_COLUMN,
       { key: 'due', label: 'Due', type: 'date' },
+      DEPARTMENT,
     ],
   },
   clients: {
@@ -69,9 +80,11 @@ export const BOARD_SCHEMAS = {
     columns: [
       { key: 'client', label: 'Client', type: 'client' },
       OWNER,
+      ALSO,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },
       PRIORITY_COLUMN,
       { key: 'due', label: 'Due', type: 'date' },
+      DEPARTMENT,
     ],
   },
   // Work in Progress, under the deals on the Pipeline page: a row per client (`item`: what a row is called), its
@@ -84,9 +97,15 @@ export const BOARD_SCHEMAS = {
       { key: 'details', label: 'Details', type: 'text' },
       { key: 'status', label: 'Status', type: 'status', options: STATUS },
       { key: 'people', label: 'Contact', type: 'people' },
+      DEPARTMENT,
     ],
   },
 };
+// A board's schema: its module's, less the `team` columns (Also on, Department) on a personal page (`owner` set: notes
+// nobody else is on, all in Operations). The same object every time, so it can be compared and memoised.
+const PERSONAL = Object.fromEntries(Object.entries(BOARD_SCHEMAS)
+  .map(([m, s]) => [m, { ...s, columns: s.columns.filter((c) => !c.team) }]));
+export const schemaOf = (board) => (board?.owner ? PERSONAL : BOARD_SCHEMAS)[board?.module];
 // What a board's rows are called ("Task", or "Client" on Work in Progress), and whether it has dates (the calendar).
 export const itemWord = (schema) => schema?.item || 'Task';
 export const hasDates = (schema) => (schema?.columns || []).some((c) => c.type === 'date');

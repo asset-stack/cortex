@@ -81,6 +81,8 @@ moduleAccess: [{ userId, module, level }],            // overrides only (staff)
 boards: [{ id, module, name, owner, groups }],          // 0006 (§11); was { projects, marketing } ('admin' merged
                                                         // into projects in 0002)
 //   item.values.people: [userId]   replaces values.owner (string)
+//   item.values.also: [userId]      the other people on a task (Also on, §20); never the owner
+//   item.values.department: ''|module  a task's department where it isn't its board's (§20; '' = the board's)
 todos: [{ id, assignee, createdBy, title, notes, day /* 'YYYY-MM-DD' */, start /* 'HH:MM'|'' */,
           minutes, category, source /* 'manual'|'routine'|'automation' */, routineId /* ''|id */,
           ref /* e.g. 'contact:<id>' | 'deal:<id>' | 'item:<id>' | 'bank:<YYYY-MM-DD>' | '' */,
@@ -911,7 +913,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **One Owner** (`src/data/boards.js`): Projects, Marketing, Outreach and Clients boards have an **Owner** column (type
   `owner`), kept in `values.people` as `[id]`, so the calendar, the person filter, imports and My Work read it as
   before. Work in Progress' *Contact* stays a people list. A task that still has several people shows the first and
-  *+N* until someone picks one (`OwnerPicker` in `src/components/ui`; picking one makes them the only owner). New tasks
+  *+N* until someone picks one (`OwnerPicker` in `src/components/ui`; picking one makes them the only owner, and since
+  §20 the others stay on it as Also on). New tasks
   start with their creator as owner. Handing a task to someone else records `values.assignedBy` / `assignedAt`
   (`nextValues()` in `src/lib/work.js`, called by `updateItem`; taking it yourself or clearing it removes them, and a
   patch can't set them). An `@Name` in a task update no longer adds that person: it shows in their My Work →
@@ -962,7 +965,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Principle**: every task lives in **one place**, the board where the work belongs (optionally linked to a client),
   with one owner, priority and due date. The Dashboard, Team pages and a client's page are views of that same task,
   never copies. A task's category is where it lives, shown as a breadcrumb (`Clients › Previews › Northside Diocese`,
-  `Operations › BAU`; `whereOf()`); there is no separate Department field that could disagree with the board.
+  `Operations › BAU`; `whereOf()`); there is no separate Department field that could disagree with the board. (§20
+  revises this at the owner's request: a Department label on every team board, the board's own unless set.)
 - **Owner's decisions**: ship §17 first (done), then this. General business work lives in **Operations** (Projects
   renamed) with boards. **Everyone** opens the Team pages; personal notes stay off them. New work is **accepted** by its
   owner. Tasks and to-dos need no schema change (`items.values` is jsonb; `todos` as they are). One read rule changes:
@@ -985,7 +989,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   tag of §17 is gone.
 - **Do today**: `addTodoForItem(boardId, itemId, { day, assignee })` makes a to-do with `source: 'manual'` and
   `ref: 'item:<id>'` (no migration: the `source` check allows manual, `ref` is free text), titled after the task and
-  filed under its board's category (`BOARD_CATEGORY`), once per task, person and day (`todoForItem()`, checked in the
+  filed under its board's category (`BOARD_CATEGORY`; since §20 its department's, `categoryOf()`), once per task, person and day (`todoForItem()`, checked in the
   app; moving a to-do onto a day that already has one for its task is refused, as for routines). Yours, or an admin's for anyone, on a board both see. The to-do shows a link to its task (`itemOfTodo()`;
   none once the task is gone or out of sight). Ticking the to-do ticks only the to-do; the task is done on the task.
 - **Team** (`#/team`, `#/team/<id>`, `src/pages/Team.jsx`; no module key, like the Calendar): a card per active person
@@ -1005,7 +1009,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Client page** (§19 renames Tasks to **Next steps**): Overview starts with **Tasks** (the client's open linked tasks, `clientTasks()`, which now counts only
   boards with a Client column; *Waiting to be accepted* where it applies) and **Add task**. The old simple checklist
   (`client_tasks`) stays, as **Checklist**.
-- **Task lists by stage** (after use on real data: a long list where most tasks had no priority or due date read as one
+- **Task lists by stage** (replaced by a card per board in §20; Team cards keep the stage order) (after use on real data: a long list where most tasks had no priority or due date read as one
   blend in board order): My tasks and a Team page's tasks come in sections, **Stuck**, **In progress**, **Up next**
   (Not started with a priority) and **No priority** (closed at first: the backlog to triage), each in the usual order
   (Urgent first, then the soonest due, then board order; `stageOf()` / `byStage()` in `src/lib/work.js`). Waiting on you
@@ -1088,3 +1092,47 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   next steps through a deal or two, the seed).
 - **Later, not built**: reading the Doc itself (a Drive permission for everyone), meeting recordings and transcripts,
   and email threads on the profile.
+
+## 20. My tasks by board, a Department on every team board, and Also on (no migration)
+
+- **Owner's ask** (after using §18's stage lists on real data): break the task list out by board, as the boards are, with
+  a gap between them, quick editing and moving tasks up and down; a **Department** on tasks, so a mixed board (Operations
+  › Team Tasks) says what each task is for (Clients, Marketing, Operations, Pipeline …); and, keeping one Owner
+  responsible, **tag other people** on a task so it's on their list too.
+- **Owner's decisions** (2026-10-27): a card per board; moving a task changes its board's order (for everyone; Urgent →
+  Low stays a label); a Department column on **every team board**, the board's own unless changed; the tag is **Also
+  on**, shown in the tagged person's board cards marked with whose it is, and it never counts in their numbers or waits
+  on them (only the Owner accepts).
+- **Data** (`items.values`, jsonb: no migration, nothing in the database reads these): `values.also` = [user ids]
+  (`alsoOf()`: each once, never the owner); `values.department` = a board module (`projects`, `marketing`, `outreach`,
+  `clients`, `pipeline`; shown as `MODULE_LABELS`), '' for the board's own (`departmentOf()` / `departmentValue()` in
+  `src/lib/boards.js`). `boardValues()` (`src/lib/work.js`, used by `addItem` / `updateItem`) keeps each only where the
+  board has its column. Columns: `{ key: 'also', type: 'also' }` after Owner on the boards with one, and `{ key:
+  'department', type: 'department' }` last on all five; both are `team` columns, which a personal page doesn't have
+  (`schemaOf(board)` in `src/data/boards.js`: use it, not `BOARD_SCHEMAS[module]`, wherever a board's columns show).
+- **Also on**: picked in the table, the drawer or New task from active teammates who can see the board (`taggable()`),
+  never the owner (`nextValues()` drops them, and the key when it's empty). Picking the owner of a task that still has
+  several people puts the others on Also on (they used to drop off it). `prioritiesFor()` includes the tasks someone is
+  also on (`also: true`, `owner`), `workload()` and `topTasks()` (Team cards) leave them out, and Waiting on you is the
+  owner's only. The board's person filter (`itemMatches()`) and the Calendar's people include Also on.
+- **Department**: the board's own shows muted; picking another stores it, picking the board's own (or Clear) stores ''.
+  The board's filter has a Department section. A Kanban card and a My tasks row show it when it isn't the board's. Do
+  today's to-do and a timesheet's suggestions go under the task's department (`categoryOf()` in `src/lib/timesheet.js`:
+  a marketing task on an Operations board counts as Marketing). New task shows the chosen board's and can change it.
+- **My tasks** (`src/components/work/MyTasks.jsx`; Dashboard and Team › person): a card per board (`byBoard()`:
+  Operations, Marketing, Outreach, Clients, Pipeline, team boards first), titled by where it lives and linked to the
+  board, its rows in the board's own order and under their group's name when a card spans several groups. Each row:
+  priority, name (renamed in place), whose it is when you're Also on, its department when it isn't the board's, its
+  client, status (every width), due (set in place), Do today, and ⋯ (Rename, Move up, Move down) for those who can edit
+  the board; on desktop a handle drags it. Moves go through `stepPlace()` / `dropPlace()` (pure, `src/lib/boards.js`)
+  and `placeItem`: past the next task shown (and any hidden between), into the next group across its edge; a drop next
+  to where it is changes nothing; a drop on another board's card is refused (`useTaskDrag`, one drop scope per card;
+  the board's Table view uses the same hook). The Dashboard leaves out your notes page (it's below, as My notes).
+  Waiting on you stays one list.
+- **For the owner**: nothing to run. Tell the team: My tasks is now by board (drag or ⋯ to set the order), Also on puts
+  someone on a task without making it theirs, and a task on Team Tasks can say which department it's for.
+- **Tests**: `scripts/test-sync.mjs` (§20: the columns and `schemaOf`, departments and `boardValues`, Also on in
+  `nextValues` and the legacy move, `alsoOf` / `taggable`, Also on in the lists and not in the numbers, `byBoard`,
+  `dropPlace` / `stepPlace`, `itemMatches`, `categoryOf` / timesheets / calendar / imports).
+- **Later, not built**: Move up/down from the keyboard on the board page itself (it has drag and group moves), a
+  personal order separate from the board's, and Also on from an `@Name`.

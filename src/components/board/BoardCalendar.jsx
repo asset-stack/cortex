@@ -7,7 +7,7 @@ import MonthGrid from './MonthGrid';
 import { datedItems } from './CalendarView';
 
 /** A board's running 3-month calendar above its tasks (board.calendar, 0009: Posting schedule to start): this month and
- *  the next two, with the board's search, person and status filters. The same tasks are on the team Calendar. */
+ *  the next two, with the board's search and filters. The same tasks are on the team Calendar. */
 export default function BoardCalendar({ groups, onOpen }) {
   const [open, setOpen] = useState(true);
   const items = datedItems(groups);

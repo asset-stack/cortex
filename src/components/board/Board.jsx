@@ -5,8 +5,9 @@ import {
 } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { useAccess } from '@/lib/access';
-import { BOARD_SCHEMAS, STATUS, hasDates, itemWord } from '@/data/boards';
-import { boardHref, boardItems, boardTitle, personalBoard, teamBoards } from '@/lib/boards';
+import { STATUS, hasDates, itemWord, schemaOf } from '@/data/boards';
+import { DEPARTMENTS, MODULE_LABELS, boardHref, boardItems, boardTitle, personalBoard, teamBoards } from '@/lib/boards';
+import { hasDepartment, itemMatches } from '@/lib/work';
 import { Avatar, ConfirmModal, IconButton, Modal, Popover, SearchField, Segmented } from '@/components/ui';
 import PersonSwitch from '@/components/work/PersonSwitch';
 import { cn } from '@/lib/cn';
@@ -54,7 +55,7 @@ export default function Board({ board, embedded = false, title: named = '' }) {
   const { state, actions } = useStore();
   const access = useAccess();
   const editable = access.canEditBoard(board); // at view: no adding, pickers, drag or typing
-  const schema = BOARD_SCHEMAS[board.module];
+  const schema = schemaOf(board); // a personal page: no Also on or Department
   const title = named || boardTitle(state, board);
   const dated = hasDates(schema); // no dates: no calendar, no sort by due
   const prioritised = (schema?.columns || []).some((c) => c.key === 'priority');
@@ -64,6 +65,8 @@ export default function Board({ board, embedded = false, title: named = '' }) {
   const [q, setQ] = useState('');
   const [person, setPerson] = useState('');
   const [status, setStatus] = useState('');
+  const [department, setDepartment] = useState('');
+  const departments = hasDepartment(board); // team boards: filter by a task's department too
   const [openId, setOpenId] = useState(() => hashParam('item')); // task links go to #/<module>/<board>?item=<id>
   const [added, setAdded] = useState([]); // created under the current filters; shown even if they don't match
   const [personAnchor, setPersonAnchor] = useState(null);
@@ -74,7 +77,7 @@ export default function Board({ board, embedded = false, title: named = '' }) {
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => { setAdded((a) => (a.length ? [] : a)); }, [q, person, status]);
+  useEffect(() => { setAdded((a) => (a.length ? [] : a)); }, [q, person, status, department]);
 
   // A board opens fresh (keyed by id). If the control that switched to it went away with the old board (person switch,
   // delete, move), focus fell to the page: start keyboard users at this board's title instead of the top.
@@ -84,14 +87,12 @@ export default function Board({ board, embedded = false, title: named = '' }) {
     if (!document.activeElement || document.activeElement === document.body) heading.current?.focus({ preventScroll: true });
   }, [embedded]);
 
-  // Tasks show in their saved order (dragged, or set by Sort); search and the filters only hide some.
+  // Tasks show in their saved order (dragged, or set by Sort); search and the filters only hide some (the person filter
+  // finds their tasks and the ones they're also on: src/lib/work.js itemMatches).
   const groups = useMemo(() => (board.groups || []).map((g) => ({
     ...g,
-    items: g.items.filter((it) => added.includes(it.id) || (
-      (!q || it.name.toLowerCase().includes(q.toLowerCase())) &&
-      (!person || (it.values.people || []).includes(person)) &&
-      (!status || it.values.status === status))),
-  })), [board.groups, q, person, status, added]);
+    items: g.items.filter((it) => added.includes(it.id) || itemMatches(board, it, { q, person, status, department })),
+  })), [board, q, person, status, department, added]);
   // Sort (editors, in the Table view, where the order shows as set): every group's tasks in a new saved order, for
   // everyone; dragging carries on from there.
   const sorts = editable && view === 'table' ? [dated && { id: 'due', label: 'Due date', icon: CalendarClock }, prioritised && { id: 'priority', label: 'Priority', icon: Flag }].filter(Boolean) : [];
@@ -164,7 +165,9 @@ export default function Board({ board, embedded = false, title: named = '' }) {
           <IconButton icon={User} label={person ? 'Person filter on' : 'Filter by person'} active={!!person} onClick={() => setPopover(popover === 'person' ? null : 'person')} />
         </span>
         <span ref={setStatusAnchor}>
-          <IconButton icon={ListFilter} label={status ? `Status: ${status}` : 'Filter by status'} active={!!status} onClick={() => setPopover(popover === 'status' ? null : 'status')} />
+          <IconButton icon={ListFilter} label={[status && `Status: ${status}`, department && `Department: ${MODULE_LABELS[department]}`].filter(Boolean).join(', ')
+            || (departments ? 'Filter by status or department' : 'Filter by status')} active={!!(status || department)}
+            onClick={() => setPopover(popover === 'status' ? null : 'status')} />
         </span>
         {sorts.length > 0 && (
           <span ref={setSortAnchor}>
@@ -182,12 +185,21 @@ export default function Board({ board, embedded = false, title: named = '' }) {
         ))}
       </Popover>
       <Popover anchor={statusAnchor} open={popover === 'status'} onClose={() => setPopover(null)} width={180} align="right">
-        <div className="flex flex-col gap-1.5">
+        <div role="group" aria-label="Status" className="flex flex-col gap-1.5">
           {Object.entries(STATUS).map(([s, c]) => (
             <button key={s} type="button" aria-pressed={status === s} className={cn('pill', status === s && 'ring-2 ring-white')} style={{ backgroundColor: c }} onClick={() => { setStatus(s); setPopover(null); }}>{s}</button>
           ))}
           <button type="button" aria-pressed={!status} className="pill pill-empty" onClick={() => { setStatus(''); setPopover(null); }}>All statuses</button>
         </div>
+        {departments && (
+          <div role="group" aria-label="Department" className="mt-3 flex flex-col gap-1.5 border-t rowline pt-3">
+            {Object.entries(DEPARTMENTS).map(([m, c]) => (
+              <button key={m} type="button" aria-pressed={department === m} className={cn('pill', department === m && 'ring-2 ring-white')} style={{ backgroundColor: c }}
+                onClick={() => { setDepartment(m); setPopover(null); }}>{MODULE_LABELS[m]}</button>
+            ))}
+            <button type="button" aria-pressed={!department} className="pill pill-empty" onClick={() => { setDepartment(''); setPopover(null); }}>All departments</button>
+          </div>
+        )}
       </Popover>
       {sorts.length > 0 && (
         <Popover anchor={sortAnchor} open={popover === 'sort'} onClose={() => setPopover(null)} width={170} align="right">

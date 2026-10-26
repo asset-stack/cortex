@@ -6,8 +6,11 @@ A short note for the team: who owns a task, what comes first, and where work goe
 - A task lives in one place: the board where the work belongs (for example **Clients › Previews**, linked to the client,
   or **Operations › BAU**). Your Dashboard, the Team page and the client's page all show that same task.
 - The **Owner** says who is answerable for it. One person, never a group.
-- Need help from someone? Keep the owner and write `@Name` in an update on the task. They see it in their Dashboard →
-  **Mentions**.
+- Someone else working on it too? Keep the owner and add them under **Also on**: it shows on their Dashboard (marked
+  with whose it is), but it's still the owner's to answer for.
+- A quick question for someone? Write `@Name` in an update on the task. They see it in their Dashboard → **Mentions**.
+- **Department** says what a task is for (Operations, Marketing, Outreach, Clients, Pipeline). It's the board's own
+  unless you change it: on a mixed board like Team Tasks, set it on each task, and filter the board by it.
 
 ## Handing work over
 - Give someone a task by setting them as its **Owner**, or with **New task** (Dashboard, Team › their name, or a client's
@@ -29,9 +32,11 @@ Anyone can set the owner and the priority. If two things feel Urgent, ask an adm
 ## Start the day on your Dashboard
 1. **Waiting on you**: accept what's been handed to you.
 2. **Today**: your to-dos for the day. **Do today** on a task puts it here.
-3. **My tasks**: every open task you own, in sections: **Stuck**, **In progress**, **Up next** and **No priority**,
-   Urgent first in each. Set a priority (and, on a wider screen, the status) right in the list; a Not started task with
-   no priority waits in No priority until it gets one. Repeating daily work belongs in your routines (it shows on Today), not as a task kept In progress.
+3. **My tasks**: your open tasks, a card per board, in the board's order (the ones you're Also on too, marked with
+   whose they are). Set the priority, status and due date right in the list, rename a task with ⋯, and put them in
+   order: drag one up or down (desktop) or use ⋯ → Move up / Move down. The order is the board's, for everyone, so the
+   top of each board is what comes first. Repeating daily work belongs in your routines (it shows on Today), not as a
+   task kept In progress.
 4. Keep at most **2 tasks In progress**. Finish or pause one before starting another.
 5. Stuck? Set the status to **Stuck** and say why in an update. On a team board, an admin sees it in Needs attention.
 6. **My notes**, at the bottom, is your own page. It never shows on the Team page, but admins can open staff notes (and

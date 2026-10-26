@@ -7,7 +7,7 @@ import NewTaskModal from '@/components/board/NewTaskModal';
 import MyTasks from '@/components/work/MyTasks';
 import { boardHref } from '@/lib/boards';
 import { localClock, localYmd } from '@/lib/format';
-import { byStage, prioritiesFor, workload } from '@/lib/work';
+import { prioritiesFor, topTasks, workload } from '@/lib/work';
 import { cn } from '@/lib/cn';
 
 const COUNTS = [
@@ -30,8 +30,8 @@ function PersonCard({ user }) {
   const rows = useRows(user.id);
   const load = workload(rows);
   const href = `#/team/${encodeURIComponent(user.id)}`;
-  // Top three by stage: what's stuck, what they're on, what's next (never the unprioritised backlog).
-  const top = byStage(rows).filter((g) => g.stage !== 'No priority').flatMap((g) => g.rows).slice(0, 3);
+  // Top three by stage: what's stuck, what they're on, what's next (theirs: never Also on, nor the backlog with no priority).
+  const top = topTasks(rows);
   return (
     <section aria-label={user.name} className="glass glass-rim flex flex-col rounded-[24px] p-5">
       <a href={href} className="flex items-center gap-3 rounded-2xl hover:underline">

@@ -17,9 +17,9 @@ import {
   isYmd, makeTodo, mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
 } from '@/lib/automations';
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
-import { acceptedValues, itemRef, newTaskValues, nextValues, todoForItem, todoItemId } from '@/lib/work';
+import { acceptedValues, boardValues, itemRef, newTaskValues, nextValues, todoForItem, todoItemId } from '@/lib/work';
 import { canAddEntry, canChangeEntry, carryDealEntriesLocal, cleanEntry, dropDealEntriesLocal } from '@/lib/crm';
-import { BOARD_CATEGORY } from '@/lib/timesheet';
+import { categoryOf } from '@/lib/timesheet';
 import { cleanTool } from '@/lib/tools';
 import { cleanCalendarEvent } from '@/lib/calendar';
 import {
@@ -393,7 +393,7 @@ function createActions(mutate, mode) {
       const g = b.groups.find((x) => x.id === groupId) || b.groups[0];
       const item = newItem({ name: textOf(name).trim() || 'New task', values: {} }, [d.me]);
       if (values) {
-        item.values = newTaskValues(values, { me: d.me, now: nowIso() });
+        item.values = boardValues(b, newTaskValues(values, { me: d.me, now: nowIso() }));
         item.done = item.values.status === 'Done';
       }
       g.items.push(item);
@@ -407,14 +407,18 @@ function createActions(mutate, mode) {
       item.values = values;
       return true;
     }),
-    updateItem: (boardId, itemId, patch = {}) => onBoard(boardId, (d) => {
+    // Values as the board keeps them (src/lib/work.js boardValues: a Department only on team boards, '' for the board's
+    // own; Also on only where it has one, and only teammates).
+    updateItem: (boardId, itemId, patch = {}) => onBoard(boardId, (d, b) => {
       const { item } = findItem(d, boardId, itemId);
       if (!item) return false;
-      const { values, id: _id, updates: _updates, subtasks: _subtasks, ...rest } = patch;
+      const { values: changed, id: _id, updates: _updates, subtasks: _subtasks, ...rest } = patch;
       if ('name' in rest && !textOf(rest.name).trim()) delete rest.name; // a task always has a name
       Object.assign(item, rest);
+      const values = changed && 'also' in changed
+        ? { ...changed, also: (Array.isArray(changed.also) ? changed.also : []).filter((id) => userExists(d, id)) } : changed;
       if (values) {
-        item.values = nextValues(item.values, values, { me: d.me, now: nowIso() }); // handing it over records who and when
+        item.values = boardValues(b, nextValues(item.values, values, { me: d.me, now: nowIso() })); // handing it over records who and when
         if ('status' in values) item.done = item.values.status === 'Done'; // done always follows status
       }
       return true;
@@ -533,7 +537,8 @@ function createActions(mutate, mode) {
     // ── My Work ──
 
     // Do today: a to-do on `assignee`'s `day` (yours and today by default) for a board task you can see, named after it
-    // and filed under its board's category, once per task, person and day (src/lib/work.js). → the to-do's id
+    // and filed under its department's category (src/lib/timesheet.js categoryOf), once per task, person and day
+    // (src/lib/work.js). → the to-do's id
     addTodoForItem: (boardId, itemId, { day, assignee } = {}) => mutate((d) => {
       const b = findBoard(d, boardId);
       const { item } = findItem(d, boardId, itemId);
@@ -543,7 +548,7 @@ function createActions(mutate, mode) {
       if (todoForItem(d.todos, item.id, who, on)) return false;
       const t = makeTodo({
         assignee: who, createdBy: d.me, title: textOf(item.name).trim() || 'Untitled task', day: on, minutes: 30,
-        category: BOARD_CATEGORY[b.module] || 'Other', ref: itemRef(item.id),
+        category: categoryOf(b, item), ref: itemRef(item.id),
       });
       d.todos.push(t);
       return t.id;

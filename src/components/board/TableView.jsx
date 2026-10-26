@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, GripVertical, MessageCircle, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useStore } from '@/data/store';
-import { findBoard } from '@/lib/boards';
+import { DEPARTMENTS, MODULE_LABELS, departmentOf, findBoard } from '@/lib/boards';
+import { alsoOf, taggable } from '@/lib/work';
 import { itemWord } from '@/data/boards';
+import useTaskDrag from './useTaskDrag';
 import { ClientPicker, ConfirmModal, DealPicker, InlineRename, LabelPicker, OwnerPicker, PeoplePicker, Popover } from '@/components/ui';
 import { shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
@@ -12,8 +14,6 @@ const ICON = 'grid h-8 w-8 shrink-0 place-items-center rounded-full dimmer hover
 const ROW_ACTION = 'md:opacity-0 md:group-hover/row:opacity-100 md:group-focus-within/row:opacity-100 focus-visible:opacity-100';
 const MENU_ITEM = 'flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent';
 const taskName = (it) => it.name.trim() || 'Untitled task';
-// Dragging a task (desktop): its id under this type only, so nothing else (text fields, other boards' tabs) takes it.
-const DRAG_TYPE = 'application/x-cortex-task';
 const LINE_ABOVE = 'shadow-[inset_0_2px_0_0_#5fd4ff]';
 const LINE_BELOW = 'shadow-[inset_0_-2px_0_0_#5fd4ff]';
 const tasksGo = (n) => (n ? `Its ${n} ${n === 1 ? 'task is' : 'tasks are'} deleted too.` : null);
@@ -136,56 +136,12 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
   const keep = (key) => (el) => { if (el) focusable.current[key] = el; else delete focusable.current[key]; };
   const renamed = (key) => (byKey) => { setRenaming(null); if (byKey) setRefocus(key); };
 
-  // Dragging: the task being dragged, and where it would land ({ group, row, place: 'before' | 'after' } on a row,
-  // { group, top: true } on the headings, { group } for the group's end).
-  const [drag, setDrag] = useState(null);
-  const [over, setOver] = useState(null);
-  const ours = (e) => Boolean(drag) && Array.from(e.dataTransfer?.types || []).includes(DRAG_TYPE);
-  const others = (groupId) => (all.find((x) => x.id === groupId)?.items || []).filter((i) => i.id !== drag);
-  const land = (groupId, beforeId) => {
-    const id = drag;
-    setDrag(null);
-    setOver(null);
-    if (id && groupId) actions.placeItem(boardId, id, groupId, beforeId);
-  };
-  const half = (e) => { const r = e.currentTarget.getBoundingClientRect(); return e.clientY < r.top + r.height / 2 ? 'before' : 'after'; };
-  const hover = (e, next) => {
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = 'move';
-    setOver((o) => (o && o.group === next.group && o.row === next.row && o.place === next.place && o.top === next.top ? o : next));
-  };
-  const onRow = (g, it) => (readOnly ? {} : {
-    onDragOver: (e) => { if (ours(e)) hover(e, { group: g.id, row: it.id, place: half(e) }); },
-    onDrop: (e) => {
-      if (!ours(e)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      // Onto itself, or the edge it already sits against in the rows shown: it stays (with a filter on, placing it
-      // would move it past hidden tasks with nothing changing on screen).
-      const k = g.items.findIndex((i) => i.id === it.id);
-      if (it.id === drag || (half(e) === 'before' ? g.items[k - 1] : g.items[k + 1])?.id === drag) { land(null, null); return; }
-      if (half(e) === 'before') { land(g.id, it.id); return; }
-      const rest = others(g.id);
-      land(g.id, rest[rest.findIndex((i) => i.id === it.id) + 1]?.id ?? null);
-    },
-  });
-  const onTop = (g) => (readOnly ? {} : {
-    onDragOver: (e) => { if (ours(e)) hover(e, { group: g.id, top: true }); },
-    onDrop: (e) => {
-      if (!ours(e)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (g.items[0]?.id === drag) { land(null, null); return; } // already the first shown: stays
-      land(g.id, others(g.id)[0]?.id ?? null);
-    },
-  });
-  const onEnd = (g) => (readOnly ? {} : {
-    onDragOver: (e) => { if (ours(e)) hover(e, { group: g.id }); },
-    onDrop: (e) => { if (!ours(e)) return; e.preventDefault(); e.stopPropagation(); land(g.id, null); },
-  });
-  const leave = (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(null); };
-  const endHere = (g) => over && over.group === g.id && !over.row && !over.top;
+  // Dragging (src/components/board/useTaskDrag.js): onto a row, the column headings (the group's top) or the rest of the
+  // group (its end), placed against the board's full order.
+  const dnd = useTaskDrag({ boardId, groups: all, readOnly });
+  const { drag, over } = dnd;
+  // Wide enough for every column: the Done, task, updates and actions columns, then 124px a column.
+  const minWidth = Math.max(820, 340 + schema.columns.length * 124);
 
   const addGroup = () => {
     const id = actions.addGroup(boardId, 'New group');
@@ -197,13 +153,13 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
       {groups.map((g, gi) => {
         const at = all.findIndex((x) => x.id === g.id);
         const total = at >= 0 ? all[at].items.length : g.items.length;
+        const shown = g.items.map((i) => i.id); // the group's tasks on screen (search and filters may hide some)
         const gKey = `g:${g.id}`;
         // Over a part of the group that takes no drop (its open heading, the gaps, the status bar): no drop line.
         return (
-          <section key={g.id} className="mt-8" onDragLeave={drag ? leave : undefined}
-            onDragOver={drag ? () => setOver((o) => (o ? null : o)) : undefined}>
+          <section key={g.id} className="mt-8" onDragLeave={dnd.leave} onDragOver={dnd.quiet}>
             {/* A collapsed group takes a drop on its heading (to its end); an open one on its table. */}
-            <div {...(collapsed[g.id] ? onEnd(g) : {})} className={cn('rounded-[14px]', collapsed[g.id] && endHere(g) && 'drag-over')}>
+            <div {...(collapsed[g.id] ? dnd.end(g.id) : {})} className={cn('rounded-[14px]', collapsed[g.id] && dnd.endHere(g.id) && 'drag-over')}>
             <GroupHead group={g} count={g.items.length} first={at <= 0} last={at < 0 || at === all.length - 1}
               collapsed={collapsed[g.id]} renaming={renaming === gKey} readOnly={readOnly} toggleRef={keep(gKey)}
               onToggle={() => setCollapsed((c) => ({ ...c, [g.id]: !c[g.id] }))}
@@ -214,10 +170,10 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
             </div>
             {!collapsed[g.id] && (
               <>
-                <div {...onEnd(g)} className={cn('mt-3 overflow-x-auto scroll-thin rounded-[24px] glass', endHere(g) && 'drag-over')}>
-                  <table className="w-full min-w-[820px] border-collapse text-[13.5px]">
+                <div {...dnd.end(g.id)} className={cn('mt-3 overflow-x-auto scroll-thin rounded-[24px] glass', dnd.endHere(g.id) && 'drag-over')}>
+                  <table className="w-full border-collapse text-[13.5px]" style={{ minWidth }}>
                     <thead>
-                      <tr {...onTop(g)} className={cn('text-[12px] dimmer', over?.group === g.id && over.top && LINE_BELOW)}>
+                      <tr {...dnd.top(g.id, shown)} className={cn('text-[12px] dimmer', over?.group === g.id && over.top && LINE_BELOW)}>
                         <th className={cn('w-12 p-3', !readOnly && 'md:w-16')}><span className="sr-only">Done</span></th>
                         <th className="text-left p-3 font-medium">{itemWord(schema)}</th>
                         <th className="w-10"><span className="sr-only">Updates</span></th>
@@ -232,23 +188,12 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                         const tKey = `t:${it.id}`;
                         const name = taskName(it);
                         return (
-                          <tr key={it.id} {...onRow(g, it)}
+                          <tr key={it.id} {...dnd.row(g.id, shown, it.id)}
                             className={cn('group/row border-t rowline hover:bg-white/5', drag === it.id && 'opacity-50',
                               over?.row === it.id && (over.place === 'before' ? LINE_ABOVE : LINE_BELOW))}>
                             <td className="relative p-3 text-center">
                               {!readOnly && renaming !== tKey && (
-                                <span draggable aria-hidden="true" title="Drag to move"
-                                  onDragStart={(e) => {
-                                    e.dataTransfer.setData(DRAG_TYPE, it.id);
-                                    e.dataTransfer.effectAllowed = 'move';
-                                    const row = e.currentTarget.closest('tr');
-                                    if (row) e.dataTransfer.setDragImage(row, 24, row.offsetHeight / 2);
-                                    // React misses dragend when the row is gone by then (moved or hidden by someone
-                                    // else mid-drag); the handle itself still gets it.
-                                    e.currentTarget.addEventListener('dragend', () => { setDrag(null); setOver(null); }, { once: true });
-                                    setDrag(it.id);
-                                  }}
-                                  onDragEnd={() => { setDrag(null); setOver(null); }}
+                                <span {...dnd.handle(it.id)} aria-hidden="true" title="Drag to move"
                                   className={cn('absolute left-1 top-1/2 hidden -translate-y-1/2 cursor-grab rounded-md p-0.5 dimmer hover:text-white active:cursor-grabbing md:block', ROW_ACTION)}>
                                   <GripVertical className="h-4 w-4" />
                                 </span>
@@ -287,8 +232,26 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                               if (c.type === 'people') {
                                 return (
                                   <td key={c.key} className="text-center">
-                                    <PeoplePicker value={it.values.people || []} label={`${c.label} for ${it.name}`} readOnly={readOnly}
-                                      onChange={(v) => actions.updateItem(boardId, it.id, { values: { people: v } })} />
+                                    <PeoplePicker value={it.values[c.key] || []} label={`${c.label} for ${it.name}`} readOnly={readOnly}
+                                      onChange={(v) => actions.updateItem(boardId, it.id, { values: { [c.key]: v } })} />
+                                  </td>
+                                );
+                              }
+                              if (c.type === 'also') {
+                                return (
+                                  <td key={c.key} className="text-center">
+                                    <PeoplePicker value={alsoOf(it)} allow={taggable(state, board, it)} label={`${c.label} for ${it.name}`} empty="Nobody"
+                                      readOnly={readOnly} onChange={(v) => actions.updateItem(boardId, it.id, { values: { [c.key]: v } })} />
+                                  </td>
+                                );
+                              }
+                              if (c.type === 'department') {
+                                // The board's own unless set (muted); Clear goes back to it.
+                                return (
+                                  <td key={c.key} className="px-1.5">
+                                    <LabelPicker label={`${c.label} for ${it.name}`} value={departmentOf(board, it)} options={DEPARTMENTS} labels={MODULE_LABELS}
+                                      muted={!it.values[c.key]} allowEmpty={Boolean(it.values[c.key])} readOnly={readOnly}
+                                      onChange={(v) => actions.updateItem(boardId, it.id, { values: { [c.key]: v } })} />
                                   </td>
                                 );
                               }

@@ -65,6 +65,64 @@ export function withItemPlaced(groups, itemId, toGroupId, beforeId = null) {
   return from === to && ids(target) === ids(from) ? null : out;
 }
 
+// Where a drop or a move lands (dropPlace, stepPlace): after task `rowId` in group `groupId`, i.e. just before the task
+// that follows it in the group's full order (hidden tasks included), less the one moving.
+function afterIn(groups, itemId, groupId, rowId) {
+  const rest = ((groups || []).find((g) => g.id === groupId)?.items || []).filter((i) => i.id !== itemId);
+  const k = rest.findIndex((i) => i.id === rowId);
+  return { groupId, beforeId: k < 0 ? null : rest[k + 1]?.id ?? null };
+}
+
+/**
+ * Where a dragged task lands: → { groupId, beforeId } for withItemPlaced / actions.placeItem, or null when it stays put.
+ * `spot`: { group, shown, row, place: 'before' | 'after' } onto a row; { group, shown, top: true } onto the group's top
+ * (before its first task); { group, end: true } onto the rest of the group (its end). `shown`: the ids of the group's
+ * tasks on screen, in order (search, filters or a person's list may hide the others). Dropped onto itself, or against
+ * the edge it already sits on in the rows shown, it stays: placing it would move it past hidden tasks with nothing
+ * changing on screen. After a row means before the task that follows it in the full group.
+ */
+export function dropPlace(groups, itemId, spot = {}) {
+  const group = (groups || []).find((g) => g.id === spot.group);
+  if (!group || !itemId) return null;
+  const shown = spot.shown || [];
+  if (spot.end) return { groupId: group.id, beforeId: null };
+  if (spot.top) {
+    if (shown[0] === itemId) return null;
+    return { groupId: group.id, beforeId: group.items.find((i) => i.id !== itemId)?.id ?? null };
+  }
+  if (!spot.row || spot.row === itemId) return null;
+  const k = shown.indexOf(spot.row);
+  if (k >= 0 && shown[spot.place === 'before' ? k - 1 : k + 1] === itemId) return null;
+  return spot.place === 'before' ? { groupId: group.id, beforeId: spot.row } : afterIn(groups, itemId, group.id, spot.row);
+}
+
+/**
+ * Move up (dir -1) or down (+1) one place in a list showing some of a board's tasks: `shown` is [{ id, group }] in the
+ * list's order (the board's). Within a group it goes past the next task shown (and any hidden between); across a group's
+ * edge, up puts it at the end of the group above (after its last task shown), down at the start of the group below.
+ * → { groupId, beforeId }, or null at either end of the list.
+ */
+export function stepPlace(groups, itemId, shown, dir) {
+  const list = shown || [];
+  const i = list.findIndex((x) => x.id === itemId);
+  const next = i < 0 ? null : list[i + (dir < 0 ? -1 : 1)];
+  if (!next) return null;
+  const same = next.group === list[i].group;
+  return (dir < 0) === same ? { groupId: next.group, beforeId: next.id } : afterIn(groups, itemId, next.group, next.id);
+}
+
+// ── Department (docs/PHASE2.md §20): which part of the business a task belongs to, a board module ──
+// The colour of each department's pill (Operations, Marketing, Outreach and Clients as their work categories).
+export const DEPARTMENTS = { projects: '#579bfc', marketing: '#ff5ac4', outreach: '#fdab3d', clients: '#00c875', pipeline: '#784bd1' };
+/** A task's department (a board module): the one set on it, else its board's. */
+export const departmentOf = (board, item) => {
+  const v = item?.values?.department;
+  return BOARD_MODULES.includes(v) ? v : board?.module || '';
+};
+/** What `values.department` keeps for department `key` on `board`: '' for the board's own (or an unknown one), so the
+ *  stored value only says where a task differs from its board. */
+export const departmentValue = (board, key) => (BOARD_MODULES.includes(key) && key !== board?.module ? key : '');
+
 /**
  * A group's tasks in Sort's order. `by`: 'due' (the soonest due first, no date last; ties by priority) or 'priority'
  * (in `priorities`' order, e.g. High, Medium, Low, then none; ties by the soonest due). Stable: tasks that tie keep their

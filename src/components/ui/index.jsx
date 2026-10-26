@@ -94,15 +94,17 @@ export function Popover({ anchor, open, onClose, children, width = 200, align = 
 /** Monday-style coloured cell; click to pick a value. `label` names the field for screen readers. `hints`: what each
  *  option means (Priority's), shown under it in the list and as the cell's tooltip. `readOnly` shows the same pill
  *  without the picker (view access). */
-export function LabelPicker({ value, options, onChange, className, allowEmpty = true, label, hints, placeholder = '', readOnly = false }) {
+export function LabelPicker({ value, options, onChange, className, allowEmpty = true, label, hints, placeholder = '', readOnly = false, labels, muted = false }) {
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
-  const color = value ? options[value] : null;
+  const color = value && !muted ? options[value] : null;
   const hint = (value && hints?.[value]) || undefined;
+  const text = (v) => labels?.[v] ?? v; // `labels`: what an option is called, when it isn't its value (Department)
+  const shown = value ? text(value) : '';
   if (readOnly) {
     return (
-      <span className={cn('pill w-full', !value && 'pill-empty', className)} style={color ? { backgroundColor: color } : undefined} title={hint}>
-        {label && <span className="sr-only">{label}: </span>}{value || <span className="sr-only">Not set</span>}
+      <span className={cn('pill w-full', (!value || muted) && 'pill-empty', className)} style={color ? { backgroundColor: color } : undefined} title={hint}>
+        {label && <span className="sr-only">{label}: </span>}{shown || <span className="sr-only">Not set</span>}
       </span>
     );
   }
@@ -112,26 +114,26 @@ export function LabelPicker({ value, options, onChange, className, allowEmpty = 
         type="button"
         ref={setAnchor}
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-        className={cn('pill w-full', !value && 'pill-empty', className)}
+        className={cn('pill w-full', (!value || muted) && 'pill-empty', className)}
         style={color ? { backgroundColor: color } : undefined}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={label ? `${label}: ${value || 'Not set'}` : (value || 'Not set')}
+        aria-label={label ? `${label}: ${shown || 'Not set'}` : (shown || 'Not set')}
         title={hint}
       >
-        {value || placeholder || ' '}
+        {shown || placeholder || ' '}
       </button>
       <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={hints ? 220 : 180}>
         <div role="listbox" aria-label={label} className="flex flex-col gap-1.5">
           {Object.entries(options).map(([opt, c]) => (hints?.[opt] ? (
             <button key={opt} type="button" role="option" aria-selected={opt === value} onClick={() => { onChange(opt); setOpen(false); }}
               className={cn('flex flex-col gap-1 rounded-[14px] p-1 text-left hover:bg-white/10', opt === value && 'bg-white/15')}>
-              <span className="pill w-full" style={{ backgroundColor: c }}>{opt}</span>
+              <span className="pill w-full" style={{ backgroundColor: c }}>{text(opt)}</span>
               <span className="px-1.5 text-[11.5px] leading-snug dim">{hints[opt]}</span>
             </button>
           ) : (
             <button key={opt} type="button" role="option" aria-selected={opt === value} className="pill" style={{ backgroundColor: c }} onClick={() => { onChange(opt); setOpen(false); }}>
-              {opt}
+              {text(opt)}
             </button>
           )))}
           {allowEmpty && (
@@ -180,12 +182,12 @@ export function PersonPicker({ value, onChange, size = 28, readOnly = false }) {
 
 /** Overlapping avatars for a list of user ids, with a +N chip past `max`. Not interactive (safe inside a card button).
  *  Unknown ids are skipped; nobody shows the dashed placeholder. */
-export function AvatarStack({ userIds, size = 28, max = 3, label, className }) {
+export function AvatarStack({ userIds, size = 28, max = 3, label, className, empty = 'Unassigned' }) {
   const users = useUsers();
   const ids = [...new Set(Array.isArray(userIds) ? userIds : [])].filter((id) => users[id]);
   const shown = ids.length > max ? ids.slice(0, Math.max(1, max - 1)) : ids;
   const extra = ids.length - shown.length;
-  const names = ids.map((id) => users[id].name).join(', ') || 'Unassigned';
+  const names = ids.map((id) => users[id].name).join(', ') || empty;
   return (
     <span className={cn('inline-flex items-center', className)}>
       <span aria-hidden="true" className="inline-flex items-center">
@@ -202,24 +204,25 @@ export function AvatarStack({ userIds, size = 28, max = 3, label, className }) {
   );
 }
 
-/** Multi-person picker (the boards' people column): an avatar stack that opens a list of toggles. Only active people
- *  can be added; a deactivated person already in `value` stays listed so they can be taken off. `onChange(ids)`.
+/** Multi-person picker (the boards' people column, Also on): an avatar stack that opens a list of toggles. Only active
+ *  people can be added (`allow`: only these ids, e.g. who can see the board); someone already in `value` stays listed so
+ *  they can be taken off. `empty`: what nobody reads as. `onChange(ids)`.
  *  Keyboard: Enter/Space opens, arrows/Home/End move, Enter/Space toggles, Escape or Tab closes. */
-export function PeoplePicker({ value, onChange, size = 28, max = 3, label = 'People', readOnly = false }) {
+export function PeoplePicker({ value, onChange, size = 28, max = 3, label = 'People', readOnly = false, allow, empty = 'Unassigned' }) {
   const { state } = useStore();
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
   const [listed, setListed] = useState([]); // who was on it when opened, so a removed inactive person keeps their row
   const ids = Array.isArray(value) ? value : [];
-  if (readOnly) return <AvatarStack userIds={ids} size={size} max={max} label={label} />;
+  if (readOnly) return <AvatarStack userIds={ids} size={size} max={max} label={label} empty={empty} />;
   const names = ids.map((id) => state.users.find((u) => u.id === id)?.name).filter(Boolean).join(', ');
-  const people = state.users.filter((u) => u.active !== false || ids.includes(u.id) || listed.includes(u.id));
+  const people = state.users.filter((u) => (allow ? allow.includes(u.id) : u.active !== false) || ids.includes(u.id) || listed.includes(u.id));
   const toggle = (id) => onChange(ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
   return (
     <>
       <button type="button" ref={setAnchor} onClick={(e) => { e.stopPropagation(); if (!open) setListed(ids); setOpen((o) => !o); }}
-        aria-label={`${label}: ${names || 'Unassigned'}. Change people`} aria-haspopup="true" aria-expanded={open} className="rounded-full">
-        <AvatarStack userIds={ids} size={size} max={max} />
+        aria-label={`${label}: ${names || empty}. Change people`} aria-haspopup="true" aria-expanded={open} className="rounded-full">
+        <AvatarStack userIds={ids} size={size} max={max} empty={empty} />
       </button>
       <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={210}>
         <div role="group" aria-label={label} className="flex flex-col">
