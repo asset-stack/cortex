@@ -106,6 +106,9 @@ mailboxes:      [{ id, name, addresses /* [lower-case address] */, owner /* user
 outreachNotes:  [{ id, mailbox /* '' = all mailboxes */, pinned, body, author, createdAt }],         // newest first
 outreachSheet:  '<the sheet link>',                     // undefined in live mode without Outreach access
 outreachEmails: [{ id, mailbox, sender, sentOn, … }],   // demo only (emailFromRow() shape, §12)
+// 0012 (§19): a deal's or client's CRM profile. Newest first.
+crmEntries:     [{ id, dealId, clientId, kind /* 'note'|'meeting'|'link' */, title, body, url, label, happenedOn,
+                   attendees, user, createdAt }],
 ```
 Empty strings, never `null`, for absent text/ids/dates in state (as phase 1). Money and counts are numbers.
 Lists that live views read newest-first are stored with the same position convention as phase 1.
@@ -1025,3 +1028,50 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   `boardTitle`, `boardHref`'s Dashboard).
 - **Later, not built**: tags across departments (e.g. *Video*), templates, notifications beyond Mentions and Waiting,
   and ticking a Do-today to-do to finish its task.
+
+## 19. 0012: a CRM profile for deals and clients — meetings, notes, links and next steps
+
+- **Owner's ask**: after a meeting with a client, keep the meeting notes (a Google Doc today), the next steps, notes,
+  links and demos on that client's record, so it becomes their CRM profile.
+- **Owner's decisions**: a meeting is a **link to its Google Doc plus a short summary** (no new Google permission, so it
+  works for everyone; Cortex never reads the Doc). **Next steps are board tasks**, with an owner, priority and due date,
+  linked to the deal or client and on the owner's Dashboard like any other task. **Deals and clients both** have a
+  profile, and **Make client carries it over**.
+- **Data** (`supabase/migrations/0012_crm_profile.sql`): `crm_entries` (`deal_id → deals on delete set null`,
+  `client_id → clients on delete cascade`, at least one of them; `kind` `note | meeting | link`; `title`, `body` (a
+  note's text, a meeting's summary), `url` (the notes Doc, or the link), `label` (a link's kind: Meeting notes, Demo,
+  Deck, Proposal, Recording, Other), `happened_on` (a meeting's date), `attendees`; `user_id` and `created_at`, set by
+  the database). State: `crmEntries: [{ id, dealId, clientId, kind, title, body, url, label, happenedOn, attendees,
+  user, createdAt }]`, newest first.
+- **Who**: an entry on a client is the client's: Clients view reads it, Clients edit adds to it. One on a deal that
+  isn't a client yet is Pipeline's (view / edit). Its author changes and removes their own, admins anyone's
+  (`crm_select` / `crm_insert` / `crm_update` / `crm_delete` ⇄ `canReadEntry()` / `canAddEntry()` / `canChangeEntry()`
+  in `src/lib/crm.js`; the store's `addEntry` / `updateEntry` / `removeEntry` refuse the same). A trigger
+  (`protect_crm_entry`) keeps the author and date, and an entry's deal and client: an edit never moves it.
+- **Make client** (`crm_carry_to_client`, after `deals.client_id` is set; `carryDealEntriesLocal()` in demo mode): the
+  deal's entries become the client's too (they keep the deal), so the client's profile starts with the deal's history;
+  from then on they follow the Clients rules. Adding to a deal that is already a client adds to the client. Deleting a
+  deal (`crm_drop_deal_entries`; `dropDealEntriesLocal()`) deletes the entries that never reached a client; the others
+  stay with their client.
+- **Next steps** (no schema change): Outreach boards get a **Deal** column (`values.deal`, `DealPicker`; open deals);
+  `dealTasks()` is a deal's open linked tasks, and `clientTasks()` also counts the tasks linked to the deal a client came
+  from. **Add next step** opens New task with the deal (Outreach boards) or the client (Clients boards) set.
+- **Screens** (`src/components/crm/`): on **Pipeline** a deal's name opens its profile (`DealProfile.jsx`): stage,
+  priority, value and owner, **Edit deal**, sector, next step and the contact it came from, then **Next steps**,
+  **Timeline** and **Links** (`Profile.jsx`, shared with the client's drawer). Timeline: **Note**, and **Meeting** (date,
+  title, who attended, the notes link and a summary; the entry shows **Open notes**, opening the Doc in a new tab). Each
+  shows who added it and when; its author or an admin edits or deletes it (deleting asks first). Links: **Add link** (a
+  kind, a title, the address; http and https only). The **client's drawer** → Overview: a *From deal* line (value,
+  sector, contact), **Next steps** (was Tasks), **Checklist**, **Timeline** (replaces Notes: older notes show in it,
+  read-only, and new ones are entries) and **Links** (the client's Demo and Platform links first). The client card's
+  note count counts the timeline.
+- **Demo seed**: Northside (a deal in Demos) has a meeting with a notes link and summary, a note, a proposal link and
+  Josh's *Send Northside the scope document* on Sales Tasks; Westbay (a client) has a pilot review meeting and a Demo link.
+- **For the owner**: run `0012_crm_profile.sql` in the SQL editor before this goes live (DEPLOY.md section 2). Staff
+  add to a deal's profile with **Pipeline Edit** and to a client's with **Clients Edit** (Settings → Team); with View
+  they read it.
+- **Tests**: `scripts/test-db.mjs` phase 12 (re-runs, read and write by access, author or admin, the protect trigger,
+  Make client, deleting a deal or a client, the sync write); `scripts/test-sync.mjs` (the mapping, the access rules,
+  `cleanEntry()`, `timelineOf()` / `linksOf()`, the demo carry-over and delete, next steps through a deal, the seed).
+- **Later, not built**: reading the Doc itself (a Drive permission for everyone), meeting recordings and transcripts,
+  and email threads on the profile.

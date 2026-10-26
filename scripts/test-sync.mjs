@@ -195,6 +195,16 @@ const fixture = () => ({
     { id: 'wt-3', user: U1, name: 'Claude', url: 'https://claude.ai', username: '', how: '', notes: 'Team plan', createdBy: '' },
     { id: 'wt-2', user: U2, name: 'Apollo', url: 'app.apollo.io', username: 'ben@example.com', how: 'Invite from Ana', notes: '', createdBy: U1 },
   ],
+  // CRM profile (0012): newest first; one on a deal, one carried to a client, one on a client only.
+  crmEntries: [
+    { id: 'ce-n3', dealId: '', clientId: 'c-1', kind: 'link', title: 'Pitch deck', body: '', url: 'https://example.com/deck', label: 'Deck',
+      happenedOn: '', attendees: '', user: U1, createdAt: '2026-10-21T03:00:00.000Z' },
+    { id: 'ce-n2', dealId: 'd-1', clientId: '', kind: 'meeting', title: 'First meeting', body: 'Wants a pilot',
+      url: 'https://docs.google.com/document/d/example/edit', label: '', happenedOn: '2026-10-20', attendees: 'Jo Example', user: U2,
+      createdAt: '2026-10-20T05:00:00.000Z' },
+    { id: 'ce-n1', dealId: 'd-1', clientId: '', kind: 'note', title: '', body: 'Call back Friday', url: '', label: '', happenedOn: '',
+      attendees: '', user: U1, createdAt: '2026-10-19T01:00:00.000Z' },
+  ],
   // Calendar (0009): by day, then start (all-day first).
   calendarEvents: [
     { id: 'ce-1', kind: 'meeting', title: 'Planning', day: '2026-10-19', endDay: '', startsAt: '2026-10-18T23:00:00.000Z',
@@ -292,7 +302,8 @@ await check('assemble: order and state fields', () => {
   const back = assemble(flatten(s), { me: U1 });
   assert.deepEqual(Object.keys(back).sort(), ['approvals', 'boards', 'channels', 'clients', 'contacts', 'deals', 'emails', 'lastRead',
     'messages', 'org', 'sequences', 'users', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements',
-    'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'calendarEvents'].sort());
+    'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'calendarEvents', 'crmEntries'].sort());
+  assert.deepEqual(back.crmEntries, s.crmEntries, 'CRM entries newest first, every field back');
   assert.deepEqual(back.boards.map((b) => b.id), ['b-ana', 'b-ben', 'b-web', 'b-gen', 'b-post', 'b-events']);
   const web = back.boards.find((b) => b.id === 'b-web');
   assert.deepEqual(web.groups.map((g) => g.id), ['g-1', 'g-2', 'g-3']);
@@ -1774,7 +1785,7 @@ const { BOARD_SCHEMAS: SCHEMAS, PRIORITY: PRIO, PRIORITY_HINTS } = await import(
 await check('owners: Projects, Marketing, Outreach and Clients boards have one Owner and Priority (Urgent → Low, each with a meaning); Work in Progress keeps its people', () => {
   const cols = (m) => SCHEMAS[m].columns.map((c) => `${c.key}:${c.type}`).join(' ');
   assert.equal(cols('projects'), 'people:owner status:status priority:label due:date');
-  assert.equal(cols('outreach'), 'people:owner status:status priority:label due:date');
+  assert.equal(cols('outreach'), 'deal:deal people:owner status:status priority:label due:date', 'Outreach boards link a task to its deal');
   assert.equal(cols('clients'), 'client:client people:owner status:status priority:label due:date', 'Clients boards say which client');
   assert.equal(cols('marketing'), 'people:owner status:status priority:label type:label channel:label approval:label due:date');
   assert.equal(cols('pipeline'), 'details:text status:status people:people');
@@ -2058,6 +2069,117 @@ await check('priorities: the demo seed — tasks have one owner (but a few left 
   assert.deepEqual(today.map((t) => [t.assignee, work.itemOfTodo(s, t)?.item.name, t.source]), [['david', 'Northside Diocese: asset register walkthrough', 'manual']]);
   assert.ok(work.taskMentions(s, s.users.find((u) => u.id === 'hello'), { viewer: 'hello' }).length >= 1);
   assert.ok(work.needsAttention(s).some((r) => r.reasons.includes('No owner')));
+});
+
+// ── CRM profile (0012, docs/PHASE2.md §19): src/lib/crm.js ──────────────────────────────────────────────────────
+const crm = await import('../src/lib/crm.js');
+
+// Ann (admin), Stu (staff: Pipeline view, Clients view by default), Sam (staff with Pipeline and Clients edit), Off
+// (inactive). One deal (d-open), one deal made a client (d-won → c-won), and a client of its own (c-own).
+const crmState = () => ({
+  me: 'ann',
+  users: [person('ann', 'admin'), person('stu', 'staff'), person('sam', 'staff'), person('off', 'staff', false)],
+  moduleAccess: [{ userId: 'sam', module: 'pipeline', level: 'edit' }, { userId: 'sam', module: 'clients', level: 'edit' }],
+  deals: [{ id: 'd-open', name: 'Open deal', clientId: '' }, { id: 'd-won', name: 'Won deal', clientId: 'c-won' }],
+  clients: [
+    { id: 'c-won', name: 'Won deal', demoUrl: 'demo.example.com', platformUrl: '', notes: [{ id: 'n1', user: 'ann', text: 'Old note', ts: '2026-10-01T00:00:00.000Z' }] },
+    { id: 'c-own', name: 'Own client', demoUrl: '', platformUrl: 'javascript:alert(1)', notes: [] },
+  ],
+  crmEntries: [
+    { id: 'e1', dealId: 'd-open', clientId: '', kind: 'note', body: 'Call Friday', user: 'sam', createdAt: '2026-10-20T00:00:00.000Z' },
+    { id: 'e2', dealId: 'd-open', clientId: '', kind: 'meeting', title: 'Intro', happenedOn: '2026-10-22', body: '', url: 'https://docs.google.com/document/d/x/edit',
+      user: 'ann', createdAt: '2026-10-19T00:00:00.000Z' },
+    { id: 'e3', dealId: 'd-open', clientId: '', kind: 'link', label: 'Deck', title: 'Deck', url: 'https://example.com/deck', user: 'sam', createdAt: '2026-10-21T00:00:00.000Z' },
+    // d-won's, not yet carried to its client here (the database does it; realtime brings it back)
+    { id: 'e4', dealId: 'd-won', clientId: '', kind: 'meeting', title: 'Pilot review', happenedOn: '2026-10-02', user: 'ann', createdAt: '2026-10-02T00:00:00.000Z' },
+    { id: 'e5', dealId: '', clientId: 'c-won', kind: 'note', body: 'Kick-off booked', user: 'sam', createdAt: '2026-10-23T00:00:00.000Z' },
+    { id: 'e6', dealId: '', clientId: 'c-won', kind: 'link', label: 'Other', title: 'Bad', url: 'javascript:alert(1)', user: 'sam', createdAt: '2026-10-24T00:00:00.000Z' },
+  ],
+});
+
+await check('crm: who reads, adds and changes an entry (0012’s policies): a client’s takes Clients, a deal’s Pipeline; changing it takes its author or an admin', () => {
+  const st = crmState();
+  const e = (id) => st.crmEntries.find((x) => x.id === id);
+  assert.deepEqual(['ann', 'stu', 'sam', 'off'].map((u) => crm.canReadEntry(st, e('e1'), u)), [true, true, true, false], 'a deal’s: Pipeline view');
+  const noPipeline = { ...st, moduleAccess: [...st.moduleAccess, { userId: 'stu', module: 'pipeline', level: 'none' }] };
+  assert.deepEqual([crm.canReadEntry(noPipeline, e('e1'), 'stu'), crm.canReadEntry(noPipeline, e('e5'), 'stu'), crm.canReadEntry(noPipeline, { dealId: 'd-won', clientId: 'c-won' }, 'stu')],
+    [false, true, true], 'without Pipeline: a client’s still, and one on both');
+  assert.deepEqual(['ann', 'stu', 'sam', 'off'].map((u) => crm.canAddEntry(st, { dealId: 'd-open' }, u)), [true, false, true, false]);
+  assert.deepEqual(['ann', 'stu', 'sam'].map((u) => crm.canAddEntry(st, { clientId: 'c-own' }, u)), [true, false, true]);
+  const pipelineOnly = { ...st, moduleAccess: [{ userId: 'sam', module: 'pipeline', level: 'edit' }] };
+  assert.deepEqual([crm.canAddEntry(pipelineOnly, { dealId: 'd-won', clientId: 'c-won' }, 'sam'), crm.canAddEntry(st, {}, 'ann')], [false, false],
+    'one on a client takes Clients edit even with its deal; nothing for nowhere');
+  assert.deepEqual([crm.canChangeEntry(st, e('e1'), 'sam'), crm.canChangeEntry(st, e('e2'), 'sam'), crm.canChangeEntry(st, e('e2'), 'ann'), crm.canChangeEntry(st, e('e1'), 'stu'), crm.canChangeEntry(st, null, 'ann')],
+    [true, false, true, false, false], 'its author, or an admin; never without edit');
+});
+
+await check('crm: cleanEntry keeps what an entry needs — a known kind, http(s) links only, a meeting’s date, a link’s label — and refuses empty ones', () => {
+  assert.deepEqual(crm.cleanEntry({ kind: 'note', body: '  Call back  ', url: 'x', title: ' T ' }),
+    { kind: 'note', title: 'T', body: 'Call back', url: 'https://x/', label: '', happenedOn: '', attendees: '' });
+  assert.deepEqual(crm.cleanEntry({ kind: 'meeting', title: 'Intro', happenedOn: '2026-10-22', attendees: ' Jo ', url: 'docs.google.com/document/d/x' }),
+    { kind: 'meeting', title: 'Intro', body: '', url: 'https://docs.google.com/document/d/x', label: '', happenedOn: '2026-10-22', attendees: 'Jo' });
+  assert.equal(crm.cleanEntry({ kind: 'meeting', title: 'X', happenedOn: '22/10/2026' }).happenedOn, '', 'a date that isn’t YYYY-MM-DD is dropped');
+  assert.deepEqual(crm.cleanEntry({ kind: 'link', url: 'example.com/deck', label: 'Deck' }).label, 'Deck');
+  assert.equal(crm.cleanEntry({ kind: 'link', url: 'example.com', label: 'Whatever' }).label, 'Other');
+  assert.deepEqual([crm.cleanEntry({ kind: 'link', url: 'javascript:alert(1)' }), crm.cleanEntry({ kind: 'note', body: '  ' }), crm.cleanEntry({ kind: 'meeting' })],
+    [null, null, null]);
+  assert.equal(crm.cleanEntry({ kind: 'call', body: 'x' }).kind, 'note', 'an unknown kind is a note');
+  assert.equal(crm.cleanEntry({ kind: 'note', body: 'x'.repeat(30000) }).body.length, 20000);
+  assert.deepEqual(crm.LINK_LABELS, ['Meeting notes', 'Demo', 'Deck', 'Proposal', 'Recording', 'Other']);
+});
+
+await check('crm: a deal’s and client’s timeline and links — newest first (a meeting by its day), a client’s with its older notes and its deal’s entries; unsafe links left out', () => {
+  const st = crmState();
+  assert.deepEqual(crm.timelineOf(st, { dealId: 'd-open' }).map((x) => x.id), ['e2', 'e1'], 'the meeting on the 22nd before the note added on the 20th; links aren’t in it');
+  assert.deepEqual(crm.timelineOf(st, { clientId: 'c-won' }).map((x) => x.id), ['e5', 'e4', 'note:n1'], 'its own, its deal’s, its older notes');
+  const legacy = crm.timelineOf(st, { clientId: 'c-won' }).at(-1);
+  assert.deepEqual([legacy.legacy, legacy.body, legacy.user, legacy.kind], [true, 'Old note', 'ann', 'note']);
+  assert.deepEqual(crm.linksOf(st, { dealId: 'd-open' }).map((x) => x.id), ['e3']);
+  assert.deepEqual(crm.linksOf(st, { clientId: 'c-won' }).map((x) => [x.id, x.label, Boolean(x.fixed)]), [['fixed:Demo', 'Demo', true]], 'the Demo field; the javascript: link is left out');
+  assert.deepEqual(crm.linksOf(st, { clientId: 'c-own' }), [], 'an unsafe Platform field is left out');
+  assert.equal(crm.dealOfClient(st, 'c-won')?.id, 'd-won');
+  assert.deepEqual([crm.dealOfClient(st, 'c-own'), crm.dealOfClient(st, ''), crm.timelineOf(st, {}), crm.linksOf(null, {})], [null, null, [], []]);
+});
+
+await check('crm: demo mode’s Make client carries a deal’s entries to its client; deleting a deal drops the ones that never reached a client (as 0012’s triggers)', () => {
+  const st = crmState();
+  crm.carryDealEntriesLocal(st, 'd-won', 'c-won');
+  assert.deepEqual(st.crmEntries.filter((e) => e.dealId === 'd-won').map((e) => e.clientId), ['c-won']);
+  crm.carryDealEntriesLocal(st, 'd-open', '');
+  assert.ok(st.crmEntries.filter((e) => e.dealId === 'd-open').every((e) => !e.clientId), 'no client: nothing carried');
+  crm.dropDealEntriesLocal(st, 'd-open');
+  assert.deepEqual(st.crmEntries.map((e) => e.id), ['e4', 'e5', 'e6'], 'd-open’s three gone');
+  crm.dropDealEntriesLocal(st, 'd-won');
+  assert.deepEqual(st.crmEntries.map((e) => [e.id, e.dealId, e.clientId]), [['e4', '', 'c-won'], ['e5', '', 'c-won'], ['e6', '', 'c-won']], 'carried ones stay, off the deal');
+});
+
+await check('crm: next steps are tasks — a deal’s (Outreach boards’ Deal column) show on its profile and, once it is a client, on the client’s', () => {
+  const st = taskState();
+  st.deals = [{ id: 'd-1', name: 'Example deal', clientId: 'c-1' }, { id: 'd-2', name: 'Open deal', clientId: '' }];
+  const sales = st.boards.find((b) => b.id === 'sales');
+  sales.groups[0].items.push({ id: 'o-2', name: 'Send the scope', values: { people: ['ann'], deal: 'd-2' }, done: false, updates: [], subtasks: [] },
+    { id: 'o-3', name: 'Book kick-off', values: { people: ['ann'], deal: 'd-1' }, done: false, updates: [], subtasks: [] },
+    { id: 'o-4', name: 'Done one', values: { people: ['ann'], deal: 'd-2' }, done: true, updates: [], subtasks: [] });
+  assert.deepEqual(work.dealTasks(st, 'd-2').map((r) => r.item.id), ['o-2'], 'open ones only');
+  assert.deepEqual(work.clientTasks(st, 'c-1').map((r) => r.item.id), ['o-3', 'd-1'], 'the client’s deal’s next steps, then its own Clients tasks (board order)');
+  assert.deepEqual(work.dealTasks({ ...st, me: 'stu' }, 'd-2'), [], 'Outreach none: not visible');
+  assert.deepEqual([work.dealTasks(st, ''), work.hasDeal({ module: 'outreach' }), work.hasDeal({ module: 'clients' })], [[], true, false]);
+});
+
+await check('crm: the demo seed — Northside’s deal has a meeting with its notes linked, a note, a proposal and a next step; Westbay’s history came with its deal', () => {
+  if (!createSeed) return;
+  const s = createSeed();
+  const northside = s.deals.find((d) => d.name === 'Northside Diocese');
+  const westbay = s.clients.find((c) => c.name === 'Westbay Council');
+  const tl = crm.timelineOf(s, { dealId: northside.id });
+  assert.deepEqual(tl.map((e) => e.kind), ['meeting', 'note']);
+  assert.ok(/docs\.google\.com/.test(tl[0].url) && tl[0].body && tl[0].attendees);
+  assert.deepEqual(crm.linksOf(s, { dealId: northside.id }).map((l) => l.label), ['Proposal']);
+  assert.deepEqual(work.dealTasks(s, northside.id).map((r) => r.item.name), ['Send Northside the scope document']);
+  const wt = crm.timelineOf(s, { clientId: westbay.id });
+  assert.ok(wt.some((e) => e.kind === 'meeting' && e.dealId), 'the deal’s meeting, now the client’s');
+  assert.ok(crm.linksOf(s, { clientId: westbay.id }).some((l) => l.label === 'Demo' && !l.fixed));
+  assert.ok(s.crmEntries.every((e) => e.user && e.createdAt && (e.dealId || e.clientId)));
 });
 
 // The starting boards and first group the app uses are the ones the database makes: 0006 for Projects and Marketing,

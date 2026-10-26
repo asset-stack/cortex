@@ -43,8 +43,9 @@ const board = (module, name, groups, owner = '') => ({
 });
 const group = (name, color, items) => ({ id: id('g'), name, color, items });
 
-// `clientId(name)`: a seed client's id, for the Clients boards' Client column.
-function boards(clientId = () => '') {
+// `clientId(name)` / `dealId(name)`: a seed client's or deal's id, for the Clients boards' Client column and the Outreach
+// boards' Deal column (a next step on the deal's profile).
+function boards(clientId = () => '', dealId = () => '') {
   return [
     board('projects', '', [
       group('Active', '#c9ffe6', [
@@ -143,6 +144,7 @@ function boards(clientId = () => '') {
       group('To do', '#c9ffe6', [
         item('Follow up the Riverbend Water referral', { people: ['david'], status: 'Not started', priority: 'High', due: '2026-10-22' }),
         item('Book a demo with Eastvale City Council', { people: ['josh'], status: 'Not started', priority: 'Urgent', due: '2026-10-24' }),
+        item('Send Northside the scope document', { deal: dealId('Northside Diocese'), people: ['josh'], status: 'In progress', priority: 'High', due: '2026-10-29' }),
         item('Send pricing to Pinecrest Regional Council', { people: ['david'], status: 'Not started', priority: 'Medium', due: '2026-10-27' }),
         item('Prepare the Harbourside Ports proposal', { people: ['josh'], status: 'Stuck', priority: 'Medium', due: '2026-10-30' }),
         item('Call back Northbrook Shire Council', { people: ['josh'], status: 'Not started', priority: 'Low', due: '' }),
@@ -187,6 +189,31 @@ function boards(clientId = () => '') {
 }
 
 // `contact` is the deal owner's user id; `contactId` the outreach contact it came from.
+// The CRM profile (0012), newest first: Northside's deal has a meeting (its notes a Google Doc), a note and its proposal;
+// Westbay's history came with it when its deal was made a client (Make client), and it has a link of its own.
+function crmDemo(deals, clients) {
+  const dealOf = (name) => deals.find((dl) => dl.name === name);
+  const clientOf = (name) => clients.find((c) => c.name === name);
+  const northside = dealOf('Northside Diocese');
+  const westbayDeal = dealOf('Westbay Council');
+  const westbay = clientOf('Westbay Council');
+  const entry = (fields) => ({
+    id: id('crm'), dealId: '', clientId: '', kind: 'note', title: '', body: '', url: '', label: '', happenedOn: '', attendees: '', ...fields,
+  });
+  return [
+    entry({ dealId: northside?.id || '', kind: 'link', label: 'Proposal', title: 'Asset program proposal', url: 'https://example.com/northside-proposal', user: 'josh', createdAt: hoursAgo(20) }),
+    entry({ dealId: northside?.id || '', kind: 'meeting', title: 'Scope walkthrough', happenedOn: localYmd(new Date(now - 864e5)),
+      attendees: 'Jordan Price, Josh', url: 'https://docs.google.com/document/d/example-northside-notes/edit',
+      body: 'Wants the condition audit first, then the register. Board approves in November. Next: send the scope document.',
+      user: 'josh', createdAt: hoursAgo(22) }),
+    entry({ dealId: northside?.id || '', kind: 'note', body: 'Their board meets on the third Thursday of each month.', user: 'david', createdAt: hoursAgo(70) }),
+    entry({ clientId: westbay?.id || '', kind: 'link', label: 'Demo', title: 'Onboarding recording', url: 'https://example.com/westbay-onboarding', user: 'david', createdAt: hoursAgo(30) }),
+    entry({ dealId: westbayDeal?.id || '', clientId: westbay?.id || '', kind: 'meeting', title: 'Pilot review', happenedOn: '2026-10-02',
+      attendees: 'Alex Taylor, David', url: 'https://docs.google.com/document/d/example-westbay-notes/edit',
+      body: 'Pilot went well; signing for a year. Wants onboarding before the end of the month.', user: 'david', createdAt: hoursAgo(500) }),
+  ];
+}
+
 const deal = (name, sector, value, priority, stage, contact, next, contactId = '') => ({
   id: id('d'), name, sector, value, priority, stage, contact, next, contactId,
 });
@@ -594,7 +621,8 @@ export function createSeed() {
     // switches modules on per person in Settings → Team.
     moduleAccess: [],
     org: { ...ORG },
-    boards: boards((name) => seedClients.find((c) => c.name === name)?.id || ''),
+    boards: boards((name) => seedClients.find((c) => c.name === name)?.id || '', (name) => deals.find((dl) => dl.name === name)?.id || ''),
+    crmEntries: crmDemo(deals, seedClients),
     deals,
     clients: seedClients,
     contacts,
@@ -667,7 +695,8 @@ export function createSeed() {
   return state;
 }
 
-const COLLECTIONS = ['moduleAccess', 'todos', 'routines', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'timeEntries', 'tools'];
+const COLLECTIONS = ['moduleAccess', 'todos', 'routines', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'timeEntries', 'tools',
+  'crmEntries'];
 
 // Brings demo data saved by older builds (localStorage) up to the current shape. Safe to run more than once.
 export function migrate(data) {

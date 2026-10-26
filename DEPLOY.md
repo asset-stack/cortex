@@ -78,9 +78,10 @@ Contacted → First meetings → Demos, and Work in Progress under the deals; `d
 `0009_calendar.sql` (the team Calendar and the boards' 3-month calendar; Google meetings need section 13;
 `docs/PHASE2.md` §15), then `0010_outreach_gmail.sql` (Outreach counted from each mailbox's Gmail; section 14;
 `docs/PHASE2.md` §16), then `0011_team_access_read.sql` (everyone reads everyone's access levels, for the Team pages;
-`docs/PHASE2.md` §18).
+`docs/PHASE2.md` §18), then `0012_crm_profile.sql` (a deal's and a client's profile: meetings, notes and links;
+`docs/PHASE2.md` §19).
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0012_…`). Run each new file
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0013_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one.
 
 **0003 on a database that already has 0002**: **SQL Editor** → **+** → **Create a new snippet**, paste
@@ -168,6 +169,12 @@ until merged, take it from its branch on GitHub). It changes one read rule: ever
 module access levels (None / View / Edit), so the Team pages, the Owner picker and New task judge a teammate's access
 the same way for staff as for admins. Only the SuperAdmin still changes them. Run it **before** the new app goes live
 (the app that's live now works with it). Nobody needs to close Cortex, and it is safe to run again.
+
+**0012 on an existing database**: run it after `0011`, the same way (`supabase/migrations/0012_crm_profile.sql`;
+until merged, take it from its branch on GitHub). It adds the profile entries of deals and clients (notes, meetings
+with a link to their notes, and links), and gives a deal's entries to its client when it is made a client. Nothing
+existing changes: a client's older notes show in its timeline as they are. Run it **before** the new app goes live (the
+app that's live now works with it). Nobody needs to close Cortex, and it is safe to run again.
 
 ### Upgrading an existing project
 
@@ -638,6 +645,8 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
 | A task's drawer on someone's own page offers no **Board** to move it to | By design: tasks move between team boards, or between groups of one page, never onto or off a personal page. |
 | An admin can't see another admin's notes (*Name’s notes*, once called *Name’s Projects*) | By design: admins see their own and staff's pages; only the SuperAdmin sees everyone's. |
 | No rename or delete on someone's notes page | Personal pages come and go with their person. Only team boards are renamed or deleted (by admins). |
+| "Couldn't load your workspace … crm_entries" after an update | `0012_crm_profile.sql` hasn't run yet (section 2). |
+| A staff member reads a deal's or a client's profile but has no **Note**, **Meeting** or **Add link** | Expected with View: adding to a deal's profile needs **Pipeline** Edit, to a client's **Clients** Edit (**Settings** → **Team**). Someone else's entry is changed only by its author or an admin. |
 | On **Team**, a staff member sees fewer of a teammate's tasks than an admin does, or **New task** says a teammate can't edit a board they can | `0011_team_access_read.sql` hasn't run yet (section 2): until then staff read only their own access levels. |
 | **Projects** / **Marketing** look empty after running 0006, or it showed an error | The run stopped part-way, so tasks aren't linked to a board yet (nothing is deleted). Run the current `0006_boards.sql` again; it links them to **General** / **Posting schedule** and finishes the rest. |
 | A new group turned up on **General** or **Posting schedule** after the 0006 update | An old open tab (the app from before 0006) added it. Move its tasks where they belong, delete it, and reload that tab. |

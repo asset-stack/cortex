@@ -12,7 +12,8 @@
 // calendar sync's RPCs, a calendar on boards); then 0010_outreach_gmail.sql (each outreach mailbox's Gmail connection,
 // the Gmail sync's RPCs, cold threads and their messages, the forgetting, and the dashboard RPCs, which must give the same
 // numbers and lists as src/lib/outreach.js); then 0011_team_access_read.sql (every active teammate reads everyone's module
-// access levels, for the Team pages). Last, the sync engine's writes of every synced table (flatten() rows as
+// access levels, for the Team pages); then 0012_crm_profile.sql (deals' and clients' notes, meetings and links, who reads
+// and writes them, and how they follow a deal to its client). Last, the sync engine's writes of every synced table (flatten() rows as
 // PostgREST upserts), personal pages, Outreach and calendar events included.
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
@@ -34,6 +35,7 @@ const migration8 = await readFile(new URL('supabase/migrations/0008_pipeline_sta
 const migration9 = await readFile(new URL('supabase/migrations/0009_calendar.sql', root), 'utf8');
 const migration10 = await readFile(new URL('supabase/migrations/0010_outreach_gmail.sql', root), 'utf8');
 const migration11 = await readFile(new URL('supabase/migrations/0011_team_access_read.sql', root), 'utf8');
+const migration12 = await readFile(new URL('supabase/migrations/0012_crm_profile.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -5202,7 +5204,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
   // a normal save. Boards are new team boards here (personal pages: below), and so are Outreach's (who: below).
 
   await as(david);
-  const [grp, grp2, itm, cli, inv, pln, con, chn, rtn, stm, teamP, teamM, mbx, mbx2] = Array.from({ length: 14 }, uid);
+  const [grp, grp2, itm, cli, inv, pln, con, chn, rtn, stm, teamP, teamM, mbx, mbx2, dl] = Array.from({ length: 15 }, uid);
   const flat = flatten({
     me: david,
     users: [],
@@ -5236,9 +5238,17 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
       usage: [{ id: uid(), month: '2026-09-01', assets: 1200, sites: 4, seats: 9, credits: 1840.25, notes: 'Pilot' }],
     }],
     deals: [{
-      id: uid(), name: 'Example Client', sector: 'Utilities', value: '1,500.50', priority: 'P1', stage: 'Won', contact: alice, next: '',
+      id: dl, name: 'Example Client', sector: 'Utilities', value: '1,500.50', priority: 'P1', stage: 'Won', contact: alice, next: '',
       clientId: cli, contactId: con,
     }],
+    // A client's meeting (from its deal) and link (0012).
+    crmEntries: [
+      { id: uid(), dealId: dl, clientId: cli, kind: 'meeting', title: 'Kick-off', body: 'Agreed the pilot',
+        url: 'https://docs.google.com/document/d/example/edit', label: '', happenedOn: '2026-10-08', attendees: 'Pat', user: david,
+        createdAt: '2026-10-08T00:00:00.000Z' },
+      { id: uid(), dealId: '', clientId: cli, kind: 'link', title: 'Deck', body: '', url: 'https://example.com/deck', label: 'Deck',
+        happenedOn: '', attendees: '', user: david, createdAt: '2026-10-09T00:00:00.000Z' },
+    ],
     contacts: [{ id: con, name: 'Pat', org: 'Example Org', email: 'pat@example.com', stage: 'Won', status: 'Opened', last: '', owner: alice }],
     emails: [{ id: uid(), kind: 'sent', contactId: con, contact: 'Pat', subject: 'Hello', snippet: 'Hi', ts: '2026-10-04T00:00:00.000Z' }],
     sequences: [{ id: uid(), name: 'Intro', steps: 3, enrolled: 2, replyRate: 0.25 }],
@@ -5286,7 +5296,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
   });
   // Columns the database sets itself whatever a signed-in request sends (protect_outreach_note: a note's date is when
   // it was saved): compared without them here, and checked to be the server's below.
-  const SERVER_SET = { outreach_notes: ['created_at'] };
+  const SERVER_SET = { outreach_notes: ['created_at'], crm_entries: ['created_at'] };
   const withoutServerSet = (table, r) => {
     const x = { ...r };
     (SERVER_SET[table] || []).forEach((c) => { delete x[c]; });
@@ -5490,6 +5500,119 @@ async function phase11(ctx) {
   return ctx;
 }
 
+// ── 0012: the CRM profile (crm_entries) ───────────────────────────────────────────────────────────────────────────
+
+async function phase12(ctx) {
+  const { alice, boss, david, hello, carol } = ctx;
+
+  // 96. Runs on top of 0011, whole, again, and statement by statement.
+  await as(null);
+  const run = async () => db.exec(migration12).then(() => null, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const first = await run();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration12, { continueOnError: true });
+  const body = migration12.replace(/--.*$/gm, '').trim();
+  const published = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'crm_entries'")).n;
+  const rls = (await one("select relrowsecurity as on from pg_class where oid = 'public.crm_entries'::regclass")).on;
+  check('96. 0012 runs on top of 0011, re-runs whole and statement by statement, never mentions module_level; crm_entries has RLS on and is in realtime',
+    first === null && second === null && !splitErrors.length && /^begin;/i.test(body) && /commit;$/i.test(body) && !migration12.includes('module_level')
+      && published === 1 && rls === true, { first, second, splitErrors, published, rls });
+  if (first) return null;
+
+  // Access: Alice (staff) Pipeline edit and Clients view; Hello (staff) Pipeline view and Clients edit.
+  await as(david);
+  await db.query("delete from module_access where user_id = any($1) and module in ('pipeline', 'clients')", [[alice, hello]]);
+  await db.query(`insert into module_access (user_id, module, level) values ($1, 'pipeline', 'edit'), ($1, 'clients', 'view'),
+    ($2, 'pipeline', 'view'), ($2, 'clients', 'edit')`, [alice, hello]);
+  await as(boss);
+  const deal = (await one("insert into deals (name, stage) values ('Example Shire', 'First meetings') returning id")).id;
+  const other = (await one("insert into deals (name, stage) values ('Example Water', 'Contacted') returning id")).id;
+  const client = (await one("insert into clients (name) values ('Example Shire') returning id")).id;
+  const spare = (await one("insert into clients (name) values ('Example Rail') returning id")).id;
+
+  // 97. A deal's entries: Pipeline edit adds (as themselves, now); Pipeline view reads but doesn't add.
+  await as(alice);
+  const meeting = (await one(`insert into crm_entries (deal_id, kind, title, body, url, happened_on, attendees, user_id, created_at)
+    values ($1, 'meeting', 'First meeting', 'Wants a pilot', 'https://docs.google.com/document/d/example/edit', '2026-10-24', 'Jo Example', $2, '2020-01-01')
+    returning id, user_id, created_at`, [deal, boss]));
+  const link = (await one("insert into crm_entries (deal_id, kind, label, title, url) values ($1, 'link', 'Deck', 'Pitch deck', 'https://example.com/deck') returning id", [deal])).id;
+  const note = (await one("insert into crm_entries (deal_id, kind, body) values ($1, 'note', 'Call back Friday') returning id", [other])).id;
+  const recent = Date.now() - Date.parse(meeting.created_at) < 60_000;
+  await as(hello);
+  const helloReads = (await rows('select id from crm_entries where deal_id = $1', [deal])).length;
+  const helloAdd = await error("insert into crm_entries (deal_id, kind, body) values ($1, 'note', 'Nope')", [deal]);
+  await as(carol);
+  const inactiveReads = (await rows('select id from crm_entries')).length;
+  check('97. Pipeline edit adds notes, meetings and links to a deal (author and date are theirs, now); Pipeline view reads them but adds none; inactive sees none',
+    meeting.user_id === alice && recent && helloReads === 2 && helloAdd !== null && inactiveReads === 0,
+    { meeting, recent, helloReads, helloAdd, inactiveReads });
+
+  // 98. Their author (or an admin) changes and removes them; others with edit don't. No entry belongs to nothing.
+  await as(david);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'pipeline', 'edit') on conflict (user_id, module) do update set level = 'edit'", [hello]);
+  await as(hello);
+  const othersEdit = await affected("update crm_entries set body = 'Changed' where id = $1", [meeting.id]);
+  const othersDelete = await affected('delete from crm_entries where id = $1', [link]);
+  await as(alice);
+  const ownEdit = await affected("update crm_entries set body = 'Wants a pilot in March' where id = $1", [meeting.id]);
+  await as(boss);
+  const adminEdit = await affected("update crm_entries set title = 'Deck v2' where id = $1", [link]);
+  const orphan = await error("insert into crm_entries (kind, body) values ('note', 'Nowhere')");
+  const badKind = await error("insert into crm_entries (deal_id, kind) values ($1, 'call')", [deal]);
+  check('98. an entry’s author changes their own and an admin anyone’s; another editor can’t; every entry is on a deal or client, and of a known kind',
+    othersEdit === 0 && othersDelete === 0 && ownEdit === 1 && adminEdit === 1 && orphan !== null && badKind !== null,
+    { othersEdit, othersDelete, ownEdit, adminEdit, orphan, badKind });
+
+  // 99. The deal and client an entry belongs to don't move, and its author and date stay.
+  await as(alice);
+  await db.query('update crm_entries set deal_id = $2, client_id = $3, user_id = $4, created_at = now() - interval \'1 day\' where id = $1',
+    [meeting.id, other, spare, boss]);
+  const kept = await one('select deal_id, client_id, user_id, created_at from crm_entries where id = $1', [meeting.id]);
+  check('99. an edit can’t move an entry to another deal or onto a client, or change its author or date',
+    kept.deal_id === deal && kept.client_id === null && kept.user_id === alice && Date.parse(kept.created_at) === Date.parse(meeting.created_at), kept);
+
+  // 100. Make client: the deal's entries become the client's (whoever wrote them), and Clients view reads them.
+  await as(boss);
+  await db.query('update deals set client_id = $2 where id = $1', [deal, client]);
+  const carried = await rows('select id, deal_id, client_id from crm_entries where deal_id = $1 order by id', [deal]);
+  await as(david);
+  await db.query("update module_access set level = 'none' where user_id = $1 and module = 'pipeline'", [hello]);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'clients', 'view') on conflict (user_id, module) do update set level = 'view'", [hello]);
+  await as(hello);
+  const clientsViewReads = (await rows('select id from crm_entries where client_id = $1', [client])).length;
+  const otherDealHidden = (await rows('select id from crm_entries where id = $1', [note])).length;
+  // Now the client's: Pipeline edit alone no longer writes them; Clients edit does.
+  await as(alice);
+  const pipelineOnlyEdit = await affected("update crm_entries set body = 'x' where id = $1", [meeting.id]);
+  await as(david);
+  await db.query("update module_access set level = 'edit' where user_id = $1 and module = 'clients'", [alice]);
+  await as(alice);
+  const clientsEditEdit = await affected("update crm_entries set body = 'Pilot agreed' where id = $1", [meeting.id]);
+  const clientNote = await error("insert into crm_entries (client_id, kind, body) values ($1, 'note', 'Kick-off booked')", [client]);
+  check('100. Make client carries the deal’s entries to the client (keeping the deal); Clients view then reads them; writing them takes Clients edit',
+    carried.length === 2 && carried.every((r) => r.client_id === client && r.deal_id === deal) && clientsViewReads === 2 && otherDealHidden === 0
+      && pipelineOnlyEdit === 0 && clientsEditEdit === 1 && clientNote === null,
+    { carried, clientsViewReads, otherDealHidden, pipelineOnlyEdit, clientsEditEdit, clientNote });
+
+  // 101. Deleting a deal: its entries that never reached a client go; a client's stay (no longer on the deal).
+  await as(boss);
+  const dealGone = await affected('delete from deals where id = $1', [deal]);
+  const otherGone = await affected('delete from deals where id = $1', [other]);
+  await as(null);
+  const afterDelete = await rows('select id, deal_id, client_id from crm_entries where id = any($1) order by id', [[meeting.id, link, note]]);
+  // 102. Deleting a client takes its entries with it.
+  await as(boss);
+  const clientGone = await affected('delete from clients where id = $1', [client]);
+  await as(null);
+  const left = (await one('select count(*)::int as n from crm_entries where id = any($1)', [[meeting.id, link]])).n;
+  check('101. deleting a deal deletes its entries that never reached a client; the client’s stay, off the deal',
+    dealGone === 1 && otherGone === 1 && afterDelete.length === 2 && afterDelete.every((r) => r.deal_id === null && r.client_id === client), afterDelete);
+  check('102. deleting a client deletes its entries', clientGone === 1 && left === 0, { clientGone, left });
+  await db.query('delete from clients where id = $1', [spare]);
+  return ctx;
+}
+
 async function runSplit(dbx, sql, { continueOnError = false, skip = () => false } = {}) {
   const errors = [];
   for (const st of splitSql(sql)) {
@@ -5606,7 +5729,8 @@ try {
   const ctx9 = ctx8 && await phase9(ctx8);
   const ctx10 = ctx9 && await phase10(ctx9);
   const ctx11 = ctx10 && await phase11(ctx10);
-  if (ctx11) await syncWriteCheck(ctx11);
+  const ctx12 = ctx11 && await phase12(ctx11);
+  if (ctx12) await syncWriteCheck(ctx12);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);

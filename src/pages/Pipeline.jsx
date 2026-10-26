@@ -7,6 +7,7 @@ import { Avatar, ConfirmModal, KpiRow, Modal, PageHeader, PersonPicker } from '@
 import { compactMoney } from '@/lib/format';
 import { teamBoards } from '@/lib/boards';
 import Board from '@/components/board/Board';
+import DealProfile from '@/components/crm/DealProfile';
 import { cn } from '@/lib/cn';
 
 const PRIORITY_BG = { P1: 'bg-rose-500', P2: 'bg-amber-500', P3: 'bg-sky-500' };
@@ -161,6 +162,7 @@ export default function Pipeline() {
   const [over, setOver] = useState(null);
   const [form, setForm] = useState(null); // null | 'new' | the deal being edited
   const [making, setMaking] = useState(null); // id of the deal Make client asks about
+  const [profile, setProfile] = useState(null); // id of the deal whose profile is open
   // A deal moved by its stage select lands in another column: keep focus on its select there.
   const refocusStage = (dealId) => window.setTimeout(() => {
     document.querySelector(`[data-deal="${CSS.escape(dealId)}"] select`)?.focus({ preventScroll: true });
@@ -204,7 +206,9 @@ export default function Pipeline() {
                       className={cn('float rounded-[18px] chip p-3.5', editable && 'cursor-grab active:cursor-grabbing')}>
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex min-w-0 items-center gap-1.5 font-bold">
-                          <span className="min-w-0">{d.name}</span>{d.contactId && <FromContact contactId={d.contactId} />}
+                          <button type="button" onClick={() => setProfile(d.id)} draggable={false} onMouseDown={(e) => e.stopPropagation()}
+                            className="min-w-0 text-left hover:underline" aria-label={`Open ${d.name}`}>{d.name}</button>
+                          {d.contactId && <FromContact contactId={d.contactId} />}
                         </div>
                         <span className="flex shrink-0 items-center gap-1">
                           {editable && (
@@ -251,6 +255,7 @@ export default function Pipeline() {
       {editable && form && (
         <DealForm key={form === 'new' ? 'new' : form.id} deal={form === 'new' ? null : form} canConvert={canConvert} onClose={closeForm} />
       )}
+      <DealProfile dealId={profile} onClose={() => setProfile(null)} onEdit={(deal) => setForm(deal)} />
       {makingDeal && (
         <ConfirmMakeClient name={makingDeal.name} open onClose={() => setMaking(null)}
           onConfirm={() => { actions.convertDeal(makingDeal.id); refocus(null); }} />

@@ -1,7 +1,8 @@
 // Board schemas: column definitions and label colours for the Monday-style boards, plus the other label sets.
-// Column types: owner (one person) | people | client | status | label | date | text. `owner` and `people` are both
+// Column types: owner (one person) | people | client | deal | status | label | date | text. `owner` and `people` are both
 // kept in `values.people` (user ids): an owner column holds one, so a task has one person answerable for it
-// (docs/PHASE2.md §17). `client` holds a client id in `values.client`.
+// (docs/PHASE2.md §17). `client` holds a client id in `values.client`, `deal` a deal id in `values.deal` (a next step on
+// a deal's profile, §19).
 
 export const STATUS = {
   'Not started': '#9aa3b5',
@@ -49,12 +50,13 @@ export const BOARD_SCHEMAS = {
       { key: 'due', label: 'Due', type: 'date' },
     ],
   },
-  // Outreach's boards (Sales Tasks …) have the standard task columns, as Projects; Clients' (Demos, Previews …) also say
-  // which client a task is for.
+  // Outreach's boards (Sales Tasks …) have the standard task columns, as Projects, and say which deal a task is for (a
+  // next step on its profile); Clients' (Demos, Previews …) say which client.
   outreach: {
     title: 'Outreach',
     icon: 'Mail',
     columns: [
+      { key: 'deal', label: 'Deal', type: 'deal' },
       OWNER,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },
       PRIORITY_COLUMN,

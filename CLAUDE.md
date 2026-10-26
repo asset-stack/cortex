@@ -43,6 +43,12 @@ setup steps are in `DEPLOY.md`.
   in `src/lib/work.js` (only `nextValues()` / `acceptedValues()` set `assignedBy` / `assignedAt` / `acceptedAt`). An
   `@Name` in an update never changes who is on a task. The Projects module is shown as **Operations** (`MODULE_LABELS`);
   its key stays `projects`.
+- **CRM profile (0012)**: a deal's or client's notes, meetings and links are `crm_entries` (`state.crmEntries`; rules in
+  `src/lib/crm.js` ⇄ 0012's policies and triggers). An entry on a client follows Clients access, one on a deal that isn't
+  a client yet Pipeline's; its author or an admin changes it. Make client gives a deal's entries its client in the
+  database (`crm_carry_to_client`; `carryDealEntriesLocal()` in demo mode, never client-side in live mode). A meeting
+  keeps a link to its notes and a summary: Cortex never reads the Doc. Next steps are board tasks (`values.deal` /
+  `values.client`, `dealTasks()` / `clientTasks()`), never entries.
 - **A new module gets a module key**: add it to `MODULES` and `STAFF_DEFAULTS` in `src/lib/access.js`, to the
   `module_access.module` check and the defaults in `public.module_level()` (in a new migration), give its tables
   `can_view` / `can_edit` policies on that key, and set `module` on its `NAV` entry in `Sidebar.jsx`.

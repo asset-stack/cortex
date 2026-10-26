@@ -121,6 +121,11 @@ const COLUMNS = {
   calendar_events: {
     id: 'id', kind: t, title: t, day: 'date', end_day: 'date', starts_at: 'ts', ends_at: 'ts', people: 'uuids', created_by: 'fk',
   },
+  // The CRM profile (0012): a deal's or client's notes, meetings and links (Make client carries a deal's to its client).
+  crm_entries: {
+    id: 'id', deal_id: 'fk', client_id: 'fk', kind: t, title: t, body: t, url: t, label: t, happened_on: 'date', attendees: t,
+    user_id: 'fk', created_at: 'ts',
+  },
   // Outreach (0007). outreach_emails is not here: the app reads it on demand (store.outreach) and never writes it.
   outreach_mailboxes: { id: 'id', name: t, addresses: 'texts', owner_id: 'fk', active: 'bool', position: 'int' },
   outreach_notes: { id: 'id', mailbox_id: 'fk', pinned: 'bool', body: t, author_id: 'fk', created_at: 'ts' },
@@ -149,6 +154,9 @@ export const TABLES = [
   { name: 'contacts', key: byId, setNull: { owner_id: 'profiles' } }, // before deals (deals.contact_id)
   { name: 'deals', key: byId, setNull: { client_id: 'clients', contact_id: 'contacts' } },
   { name: 'client_notes', key: byId, parent: ['clients', 'client_id'] },
+  // After deals and clients. A client deleted takes its entries (on delete cascade; the store drops them too); a deal
+  // deleted takes the ones that never reached a client and leaves the others off it (0012's trigger, then set null).
+  { name: 'crm_entries', key: byId, setNull: { deal_id: 'deals', user_id: 'profiles' } },
   { name: 'client_tasks', key: byId, parent: ['clients', 'client_id'] },
   { name: 'billing_plans', key: byId, parent: ['clients', 'client_id'] }, // before invoices (invoices.plan_id)
   { name: 'invoices', key: byId, parent: ['clients', 'client_id'], setNull: { plan_id: 'billing_plans' } },
@@ -373,6 +381,10 @@ export function flatten(state) {
     id: x.id, mailbox_id: x.mailbox || null, pinned: x.pinned, body: x.body, author_id: x.author || null, created_at: x.createdAt,
   }));
   if (typeof state.outreachSheet === 'string') put('outreach_settings', { id: 1, sheet_url: state.outreachSheet });
+  (state.crmEntries || []).forEach((x) => put('crm_entries', {
+    id: x.id, deal_id: x.dealId || null, client_id: x.clientId || null, kind: x.kind, title: x.title, body: x.body, url: x.url,
+    label: x.label, happened_on: x.happenedOn || null, attendees: x.attendees, user_id: x.user || null, created_at: x.createdAt,
+  }));
   (state.calendarEvents || []).forEach((x) => put('calendar_events', {
     id: x.id, kind: x.kind, title: x.title, day: x.day, end_day: x.endDay, starts_at: x.startsAt, ends_at: x.endsAt, people: x.people,
     created_by: x.createdBy,
@@ -534,6 +546,11 @@ export function assemble(rowsByTable, { me } = {}) {
     // Newest first (the page puts pinned ones on top).
     outreachNotes: all('outreach_notes').sort(newest('created_at')).map((x) => ({
       id: x.id, mailbox: x.mailbox_id ?? '', pinned: x.pinned, body: x.body, author: x.author_id ?? '', createdAt: x.created_at ?? '',
+    })),
+    // Newest first.
+    crmEntries: all('crm_entries').sort(newest('created_at')).map((x) => ({
+      id: x.id, dealId: x.deal_id ?? '', clientId: x.client_id ?? '', kind: x.kind, title: x.title, body: x.body, url: x.url,
+      label: x.label, happenedOn: x.happened_on ?? '', attendees: x.attendees, user: x.user_id ?? '', createdAt: x.created_at ?? '',
     })),
     // By day, then start time (all-day first).
     calendarEvents: all('calendar_events').sort((a, b) => cmp(a.day || '', b.day || '') || cmp(a.starts_at || '', b.starts_at || '')

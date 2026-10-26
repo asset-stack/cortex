@@ -3,23 +3,24 @@ import { useStore } from '@/data/store';
 import { PRIORITY, PRIORITY_HINTS } from '@/data/boards';
 import { canEditBoard, useAccess } from '@/lib/access';
 import { BOARD_MODULES, MODULE_LABELS, boardTitle } from '@/lib/boards';
-import { hasClient, hasOwner } from '@/lib/work';
-import { ClientPicker, LabelPicker, Modal, OwnerPicker } from '@/components/ui';
+import { hasClient, hasDeal, hasOwner } from '@/lib/work';
+import { ClientPicker, DealPicker, LabelPicker, Modal, OwnerPicker } from '@/components/ui';
 
 /**
  * New task from anywhere (docs/PHASE2.md §18): its name, where it lives (a board you can edit, by department: team boards
  * and your own notes, not Work in Progress), its client (Clients boards), owner, priority and due date. A task made for
- * someone else waits on them to accept it. `owner` / `clientId` preset those (a Team page, a client); `modules` narrows
- * where it can go (a client: Clients boards). Closes when it's added.
+ * someone else waits on them to accept it. `owner` / `clientId` / `dealId` preset those (a Team page, a client, a deal's
+ * next step); `modules` narrows where it can go (a client: Clients boards; a deal: Outreach boards). `title`: the
+ * dialog's. Closes when it's added.
  */
-export default function NewTaskModal({ onClose, owner: forOwner = '', clientId = '', modules = null }) {
+export default function NewTaskModal({ onClose, owner: forOwner = '', clientId = '', dealId = '', modules = null, title = 'New task' }) {
   const { state, actions } = useStore();
   const access = useAccess();
   const targets = state.boards.filter((b) => hasOwner(b) && access.canEditBoard(b) && (!b.owner || b.owner === state.me)
     && (!modules || modules.includes(b.module)));
   // To start with: a team board the preset owner can take on, else the first team board, else your notes.
   const first = targets.find((b) => !b.owner && (!forOwner || canEditBoard(state, b, forOwner))) || targets.find((b) => !b.owner) || targets[0];
-  const [f, setF] = useState({ name: '', board: first?.id || '', owner: forOwner || state.me, priority: 'Medium', due: '', client: clientId });
+  const [f, setF] = useState({ name: '', board: first?.id || '', owner: forOwner || state.me, priority: 'Medium', due: '', client: clientId, deal: dealId });
   const [err, setErr] = useState('');
   const board = targets.find((b) => b.id === f.board) || null;
   const set = (k, v) => { setErr(''); setF((x) => ({ ...x, [k]: v })); };
@@ -30,13 +31,13 @@ export default function NewTaskModal({ onClose, owner: forOwner = '', clientId =
     if (!f.name.trim()) { setErr('Add a name'); return; }
     if (!board) { setErr('Pick where it goes'); return; }
     if (f.owner && !canEditBoard(state, board, f.owner)) { setErr(`${ownerName} can’t edit ${boardTitle(state, board)}: pick another owner or board`); return; }
-    const values = { owner: f.owner, priority: f.priority, due: f.due, ...(hasClient(board) ? { client: f.client } : {}) };
+    const values = { owner: f.owner, priority: f.priority, due: f.due, ...(hasClient(board) ? { client: f.client } : {}), ...(hasDeal(board) ? { deal: f.deal } : {}) };
     if (!actions.addItem(board.id, null, f.name, values)) { setErr('Couldn’t add this task'); return; }
     onClose();
   };
 
   return (
-    <Modal open onClose={onClose} title="New task" width={480}>
+    <Modal open onClose={onClose} title={title} width={480}>
       {targets.length === 0 ? <p className="dim">There’s no board here you can add to.</p> : (
         <form className="flex flex-col gap-3" onSubmit={submit}>
           <input className="field" placeholder="Task" aria-label="Task" value={f.name} onChange={(e) => set('name', e.target.value)} maxLength={300} autoFocus />
@@ -53,6 +54,11 @@ export default function NewTaskModal({ onClose, owner: forOwner = '', clientId =
           {board && hasClient(board) && (
             <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Client</span>
               <ClientPicker value={f.client} label="Client" onChange={(v) => set('client', v)} />
+            </label>
+          )}
+          {board && hasDeal(board) && (
+            <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Deal</span>
+              <DealPicker value={f.deal} label="Deal" onChange={(v) => set('deal', v)} />
             </label>
           )}
           <div className="grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] items-end gap-3">

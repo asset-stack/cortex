@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ChevronDown, GripVertical, MessageCircle, MoreHoriz
 import { useStore } from '@/data/store';
 import { findBoard } from '@/lib/boards';
 import { itemWord } from '@/data/boards';
-import { ClientPicker, ConfirmModal, InlineRename, LabelPicker, OwnerPicker, PeoplePicker, Popover } from '@/components/ui';
+import { ClientPicker, ConfirmModal, DealPicker, InlineRename, LabelPicker, OwnerPicker, PeoplePicker, Popover } from '@/components/ui';
 import { shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
@@ -222,7 +222,7 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                         <th className="text-left p-3 font-medium">{itemWord(schema)}</th>
                         <th className="w-10"><span className="sr-only">Updates</span></th>
                         {schema.columns.map((c) => (
-                          <th key={c.key} className={cn('p-3 font-medium', c.type === 'text' ? 'min-w-[220px] text-left' : c.type === 'client' ? 'w-[176px]' : 'w-[124px]')}>{c.label}</th>
+                          <th key={c.key} className={cn('p-3 font-medium', c.type === 'text' ? 'min-w-[220px] text-left' : c.type === 'client' || c.type === 'deal' ? 'w-[176px]' : 'w-[124px]')}>{c.label}</th>
                         ))}
                         {!readOnly && <th className="w-[80px]"><span className="sr-only">Actions</span></th>}
                       </tr>
@@ -292,11 +292,12 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                                   </td>
                                 );
                               }
-                              if (c.type === 'client') {
+                              if (c.type === 'client' || c.type === 'deal') {
+                                const Picker = c.type === 'client' ? ClientPicker : DealPicker;
                                 return (
                                   <td key={c.key} className="px-1.5">
-                                    <ClientPicker value={val} label={`${c.label} for ${it.name}`} readOnly={readOnly} className="w-full text-[13px]"
-                                      onChange={(v) => actions.updateItem(boardId, it.id, { values: { client: v } })} />
+                                    <Picker value={val} label={`${c.label} for ${it.name}`} readOnly={readOnly} className="w-full text-[13px]"
+                                      onChange={(v) => actions.updateItem(boardId, it.id, { values: { [c.key]: v } })} />
                                   </td>
                                 );
                               }

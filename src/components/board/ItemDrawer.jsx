@@ -4,7 +4,7 @@ import { useStore, useUsers } from '@/data/store';
 import { useAccess } from '@/lib/access';
 import { boardHref, boardTitle, findBoard, sameAudience } from '@/lib/boards';
 import { itemWord } from '@/data/boards';
-import { Avatar, ClientPicker, ConfirmModal, Drawer, InlineRename, LabelPicker, OwnerPicker, PeoplePicker, QuickAdd } from '@/components/ui';
+import { Avatar, ClientPicker, ConfirmModal, DealPicker, Drawer, InlineRename, LabelPicker, OwnerPicker, PeoplePicker, QuickAdd } from '@/components/ui';
 import { MessageText } from '@/lib/mentions';
 import { ago, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
@@ -93,6 +93,10 @@ export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly 
                 )}
                 {c.type === 'client' && (
                   <ClientPicker value={item.values[c.key] || ''} label={c.label} readOnly={readOnly}
+                    onChange={(v) => actions.updateItem(boardId, item.id, { values: { [c.key]: v } })} />
+                )}
+                {c.type === 'deal' && (
+                  <DealPicker value={item.values[c.key] || ''} label={c.label} readOnly={readOnly}
                     onChange={(v) => actions.updateItem(boardId, item.id, { values: { [c.key]: v } })} />
                 )}
                 {c.type === 'text' && (readOnly

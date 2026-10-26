@@ -18,6 +18,7 @@ import {
 } from '@/lib/automations';
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
 import { acceptedValues, itemRef, newTaskValues, nextValues, todoForItem, todoItemId } from '@/lib/work';
+import { canAddEntry, canChangeEntry, carryDealEntriesLocal, cleanEntry, dropDealEntriesLocal } from '@/lib/crm';
 import { BOARD_CATEGORY } from '@/lib/timesheet';
 import { cleanTool } from '@/lib/tools';
 import { cleanCalendarEvent } from '@/lib/calendar';
@@ -794,6 +795,7 @@ function createActions(mutate, mode) {
     removeDeal: (dealId) => editing('pipeline', (d) => {
       if (!d.deals.some((v) => v.id === dealId)) return false;
       d.deals = d.deals.filter((v) => v.id !== dealId);
+      if (!mode.live) dropDealEntriesLocal(d, dealId); // live: 0012's crm_drop_deal_entries trigger and on delete set null
       return true;
     }),
     // Needs edit access to the pipeline and to clients. → client id
@@ -802,7 +804,11 @@ function createActions(mutate, mode) {
       const deal = d.deals.find((v) => v.id === dealId);
       if (!deal || deal.clientId || !canEdit(d, 'pipeline') || !canEdit(d, 'clients')) return false;
       const existing = d.clients.find((c) => normName(c.name) === normName(deal.name));
-      if (existing) { deal.clientId = existing.id; return existing.id; }
+      if (existing) {
+        deal.clientId = existing.id;
+        if (!mode.live) carryDealEntriesLocal(d, deal.id, existing.id); // live: 0012's crm_carry_to_client trigger
+        return existing.id;
+      }
       // The deal owner keeps the client; fall back to whoever converts it.
       const owner = userExists(d, deal.contact) ? deal.contact : d.me;
       // The outreach contact the deal came from becomes the client's first, billing contact.
@@ -814,8 +820,41 @@ function createActions(mutate, mode) {
       });
       d.clients.unshift(client);
       deal.clientId = client.id;
-      if (!mode.live) clientCreatedLocal(d, client.id); // live: the client_contract_todo trigger
+      if (!mode.live) {
+        clientCreatedLocal(d, client.id); // live: the client_contract_todo trigger
+        carryDealEntriesLocal(d, deal.id, client.id); // live: 0012's crm_carry_to_client trigger
+      }
       return client.id;
+    }),
+
+    // ── CRM profile (0012): a deal's or client's notes, meetings and links (src/lib/crm.js) ──
+
+    // On a deal (Pipeline edit) or a client (Clients edit), as yourself, now. One on a deal already made a client is the
+    // client's too. → id
+    addEntry: (fields = {}) => mutate((d) => {
+      const deal = fields.dealId ? d.deals.find((x) => x.id === fields.dealId) : null;
+      const dealId = deal?.id || '';
+      const clientId = (fields.clientId && d.clients.some((x) => x.id === fields.clientId) ? fields.clientId : '') || deal?.clientId || '';
+      const clean = cleanEntry(fields);
+      if (!clean || !canAddEntry(d, { dealId, clientId })) return false;
+      const e = { id: uid(), dealId, clientId, ...clean, user: d.me, createdAt: nowIso() };
+      (d.crmEntries ||= []).unshift(e);
+      return e.id;
+    }),
+    // Its author, or an admin; its kind, deal and client stay.
+    updateEntry: (id, patch = {}) => mutate((d) => {
+      const e = (d.crmEntries || []).find((x) => x.id === id);
+      if (!canChangeEntry(d, e)) return false;
+      const clean = cleanEntry({ ...e, ...patch, kind: e.kind });
+      if (!clean) return false;
+      Object.assign(e, clean);
+      return true;
+    }),
+    removeEntry: (id) => mutate((d) => {
+      const e = (d.crmEntries || []).find((x) => x.id === id);
+      if (!canChangeEntry(d, e)) return false;
+      d.crmEntries = d.crmEntries.filter((x) => x !== e);
+      return true;
     }),
 
     // ── Clients: edit access to clients ──

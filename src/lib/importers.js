@@ -394,7 +394,7 @@ export function normalise(kind, row, mapping, { users = [], me = '', board, now 
       const values = { people: matchUsers(get('people'), users), status };
       const cols = BOARD_SCHEMAS[board]?.columns || [{ key: 'priority', type: 'label', options: PRIORITY }, { key: 'due', type: 'date' }];
       cols.forEach((c) => {
-        if (c.key === 'people' || c.key === 'status' || ['owner', 'people', 'status', 'client'].includes(c.type)) return; // no Client column to import
+        if (c.key === 'people' || c.key === 'status' || ['owner', 'people', 'status', 'client', 'deal'].includes(c.type)) return; // no Client or Deal column to import
         if (c.key === 'priority') values.priority = taskPriority(get('priority'));
         else if (c.type === 'date') values[c.key] = toYmd(get(c.key));
         else if (c.type === 'label') values[c.key] = label(get(c.key), c.options);

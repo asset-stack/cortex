@@ -37,6 +37,17 @@ Anyone can set the owner and the priority. If two things feel Urgent, ask an adm
 6. **My notes**, at the bottom, is your own page. It never shows on the Team page, but admins can open staff notes (and
    the SuperAdmin everyone's).
 
+## After a meeting with a prospect or client
+Open the deal (**Pipeline**, click its name) or the client (**Clients**) and, on its profile:
+1. **Meeting**: the date, who attended, the link to your meeting notes (the Google Doc) and a short summary of what was
+   agreed. Anyone on the team who opens the profile can open the notes from there (share the Doc with the team).
+2. **Add next step** for each follow-up: a task with an owner, a priority and a due date. It waits on its owner's
+   Dashboard like any other task.
+3. **Add link** for anything else worth keeping: a demo, deck, proposal or recording.
+
+When a deal is made a client, its profile comes with it. Adding needs **Edit** on Pipeline (deals) or Clients (clients);
+ask an admin if you only have View.
+
 ## Where work goes
 - **Operations**: running the business: BAU, finance, development and internal projects.
 - **Marketing**: posts, campaigns and events.

@@ -299,6 +299,24 @@ export function ClientPicker({ value, onChange, label = 'Client', className, rea
   );
 }
 
+/** Which deal a task is a next step on (Outreach boards' Deal column): the open deals by name (and the one it's on, if
+ *  that's been made a client). `readOnly` shows the name. */
+export function DealPicker({ value, onChange, label = 'Deal', className, readOnly = false }) {
+  const { state } = useStore();
+  const deals = (state.deals || []).filter((d) => !d.clientId || d.id === value).sort((a, b) => a.name.localeCompare(b.name));
+  const current = deals.find((d) => d.id === value);
+  if (readOnly) {
+    return <span className={cn('block truncate py-1.5', !current && 'dimmer', className)}><span className="sr-only">{label}: </span>{current?.name || '—'}</span>;
+  }
+  return (
+    <select value={current ? value : ''} aria-label={label} onChange={(e) => onChange(e.target.value)} onClick={(e) => e.stopPropagation()}
+      className={cn('field !py-1.5 truncate', className)}>
+      <option value="">No deal</option>
+      {deals.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+    </select>
+  );
+}
+
 /** Toggle-button group (not tabs: there are no tab panels or arrow-key roving). */
 export function Segmented({ options, value, onChange, label }) {
   return (

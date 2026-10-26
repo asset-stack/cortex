@@ -122,6 +122,10 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
   // them through useStore().calendar (calendar_meetings in live mode).
   calendarEvents: [{ id, kind /* meeting | event | reminder */, title, day, endDay /* all day, '' = one day */,
                      startsAt, endsAt /* ISO instants, '' for all day */, people: [userId], createdBy }],
+  // 0012 (docs/PHASE2.md §19): a deal's or client's CRM profile (notes, meetings, links), newest first. A deal's
+  // entries become its client's too at Make client (dealId kept).
+  crmEntries: [{ id, dealId, clientId, kind /* note | meeting | link */, title, body, url, label, happenedOn /* meeting */,
+                 attendees, user, createdAt }],
   // phase 2: moduleAccess, todos, routines, payments, bankStatements, expenses, subscriptions, timeEntries,
   // clients[].plans and clients[].usage (docs/PHASE2.md §2)
 }
@@ -153,6 +157,7 @@ maintained by a `touch()` trigger (the sync engine never sends these two columns
 | `clients` | `name, group_name, status, priority, next_step, sector text`, `contact_id uuid null → profiles`, `team uuid[] not null default '{}'`, `last_contact date null`, `demo, key_contact, email, demo_url, avatar, abn, billing_address text not null default ''`, `position int`; 0004: `platform_url text`, and `key_contact` / `email` are no longer synced (moved into `client_contacts`) | `clients[]` |
 | `deals` | `name, sector, priority, stage, next_step text`, `value numeric not null default 0`, `owner_id uuid null → profiles`, `client_id uuid null → clients on delete set null`, `contact_id uuid null → contacts on delete set null` (0002), `position int` | `deals[]` |
 | `client_notes` | `client_id → clients cascade`, `user_id → profiles`, `text text`, `created_at timestamptz` | `clients[].notes[]` (newest first) |
+| `crm_entries` (0012) | `deal_id uuid null → deals on delete set null`, `client_id uuid null → clients cascade` (one or both), `kind text check in ('note','meeting','link')`, `title, body, url, label, attendees text`, `happened_on date null`, `user_id → profiles on delete set null`, `created_at timestamptz` | `crmEntries[]` (newest first) |
 | `client_tasks` | `client_id cascade`, `position int`, `text text`, `done bool` | `clients[].tasks[]` |
 | `invoices` | `client_id cascade`, `number text not null unique`, `issued date`, `due date`, `status text`, `position int`; 0002: `plan_id uuid null → billing_plans on delete set null`, `sent_at timestamptz null`, `paid_on date null` | `clients[].invoices[]` |
 | `invoice_lines` | `invoice_id → invoices cascade`, `position int`, `description text`, `qty text`, `rate text` (kept as typed, e.g. `'1,000'`) | `invoices[].lines[]` |
@@ -213,6 +218,11 @@ Text columns default to `''` and are `not null` unless noted, so the state never
 - `channel_members`: select when `is_staff()` and (`user_id = auth.uid()` or `is_member(channel_id)` or the caller created the channel); insert when `is_staff()` and (`is_member(channel_id)` or the caller created the channel); delete own row or `is_admin()`. (Select needs the creator clause because PostgREST writes use `RETURNING`: a new channel's memberships go up in one upsert, before the creator counts as a member.)
 - `messages`: select `is_member(channel_id)`; insert `is_member(channel_id)` and `user_id = auth.uid()`; update/delete own.
 - `item_updates`, `client_notes`: select `can_view` of their module (updates: of their board since 0006); insert `user_id = auth.uid()`; update/delete own or admin; every write also needs `can_edit` of the module (0002; updates: `can_edit_board` since 0006).
+- `crm_entries` (0012): select `is_staff()` and (a client's with `can_view('clients')`, or a deal's with
+  `can_view('pipeline')`); insert, update and delete need `can_edit('clients')` for a client's and `can_edit('pipeline')`
+  for a deal's that isn't a client yet, and update/delete are the author's or an admin's. Triggers keep the author, the
+  date and the entry's deal and client (`protect_crm_entry`), give a deal's entries its client at Make client
+  (`crm_carry_to_client`) and delete those that never reached a client with their deal (`crm_drop_deal_entries`).
 - `read_state`: all operations only where `user_id = auth.uid()`.
 - `admin_emails`: no policies (not readable by clients).
 
