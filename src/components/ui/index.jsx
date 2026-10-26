@@ -29,6 +29,16 @@ export function Avatar({ userId, size = 28, ring = true, className }) {
 const FOCUSABLE = 'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 const focusAnchor = (anchor) => (anchor?.matches?.(FOCUSABLE) ? anchor : anchor?.querySelector?.(FOCUSABLE))?.focus({ preventScroll: true });
 
+// A popover taller than the window scrolls: keep the option keyboard focus moved to inside its visible part (the page
+// itself never scrolls for it: focus uses preventScroll).
+function reveal(box, el) {
+  if (!box || !el) return;
+  const a = el.getBoundingClientRect();
+  const b = box.getBoundingClientRect();
+  if (a.bottom > b.bottom) box.scrollTop += a.bottom - b.bottom + 8;
+  else if (a.top < b.top) box.scrollTop -= b.top - a.top + 8;
+}
+
 /** Popover rendered in a portal with fixed positioning, so table scroll containers can't clip it.
  *  Inside a Drawer/Modal it portals into that dialog, so it stays in the aria-modal subtree. */
 export function Popover({ anchor, open, onClose, children, width = 200, align = 'center' }) {
@@ -44,7 +54,7 @@ export function Popover({ anchor, open, onClose, children, width = 200, align = 
       left = Math.max(12, Math.min(left, window.innerWidth - width - 12));
       const below = r.bottom + 6;
       const top = below + h + 12 > window.innerHeight ? Math.max(12, r.top - 6 - h) : below;
-      setPos({ left, top });
+      setPos({ left, top, max: window.innerHeight - 24 }); // taller than the window: it scrolls
     };
     update();
     const onScroll = (e) => { if (!ref.current?.contains(e.target)) update(); };
@@ -67,14 +77,21 @@ export function Popover({ anchor, open, onClose, children, width = 200, align = 
   useEffect(() => {
     if (!open || !placed) return;
     const el = ref.current;
-    (el?.querySelector('[aria-selected="true"], [aria-pressed="true"]') || el?.querySelector(FOCUSABLE))?.focus({ preventScroll: true });
+    const first = el?.querySelector('[aria-selected="true"], [aria-pressed="true"]') || el?.querySelector(FOCUSABLE);
+    first?.focus({ preventScroll: true });
+    reveal(el, first);
     return () => { if (!document.activeElement || document.activeElement === document.body) focusAnchor(anchor); };
   }, [open, placed, anchor]);
   // Arrow keys, Home and End move between options; Tab closes and carries on from the anchor.
   const onKeyDown = (e) => {
     const items = [...ref.current.querySelectorAll(FOCUSABLE)];
     const i = items.indexOf(document.activeElement);
-    const move = (k) => { e.preventDefault(); items[(k + items.length) % items.length]?.focus({ preventScroll: true }); };
+    const move = (k) => {
+      e.preventDefault();
+      const to = items[(k + items.length) % items.length];
+      to?.focus({ preventScroll: true });
+      reveal(ref.current, to);
+    };
     if (e.key === 'ArrowDown') move(i + 1);
     else if (e.key === 'ArrowUp') move(i < 0 ? -1 : i - 1);
     else if (e.key === 'Home') move(0);
@@ -84,7 +101,7 @@ export function Popover({ anchor, open, onClose, children, width = 200, align = 
   if (!open) return null;
   return createPortal(
     <div ref={ref} onKeyDown={onKeyDown} className="glass-dark fixed z-[80] overflow-y-auto overscroll-contain rounded-2xl p-2 scroll-thin"
-      style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, width, maxHeight: 'calc(100vh - 24px)', visibility: pos ? 'visible' : 'hidden' }}>
+      style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, width, maxHeight: pos?.max, visibility: pos ? 'visible' : 'hidden' }}>
       {children}
     </div>,
     anchor?.closest?.('[role="dialog"]') || document.body,

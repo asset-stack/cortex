@@ -191,3 +191,13 @@ select option { color: #111; }
   .tax-invoice .ti-pay { margin-top: 10mm; padding-top: 4mm; border-top: .75pt solid #000; break-inside: avoid; }
   .tax-invoice .ti-pay .ti-meta { grid-template-columns: max-content auto; justify-content: start; }
 }
+
+/* My tasks rows (src/components/work/MyTasks.jsx): on one line when their card is wide enough, by the card's own width
+   (the Dashboard's column is narrow beside its sidebar on a laptop), else the name gets a line to itself. After the
+   utilities, so it wins over the row's flex-wrap. */
+.task-cards { container-type: inline-size; }
+@container (min-width: 640px) {
+  .task-row { flex-wrap: nowrap; }
+  .task-row .task-name { flex-basis: auto; }
+  .task-row .task-push { margin-left: 0; }
+}

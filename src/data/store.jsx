@@ -43,9 +43,15 @@ const normName = (s) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' '
 const nowIso = () => new Date().toISOString();
 const fresh = (list) => (list || []).map((x) => ({ ...x, id: uid() }));
 const userExists = (d, userId) => d.users.some((u) => u.id === userId);
-// Values with Also on (§20) kept to teammates who can see the board (src/lib/work.js taggable offers no one else).
-const seeing = (d, b, values) => (values && 'also' in values
-  ? { ...values, also: (Array.isArray(values.also) ? values.also : []).filter((id) => userExists(d, id) && canViewBoard(d, b, id)) } : values);
+// A task's values with Also on (§20) kept to teammates who can see the board (src/lib/work.js taggable offers no one
+// else), the key gone when that leaves no one. Applied to the values as saved, after nextValues() (which may move the
+// other people of a several-people task there).
+function seeing(d, b, values) {
+  if (!values || !('also' in values)) return values;
+  const { also, ...rest } = values;
+  const kept = (Array.isArray(also) ? also : []).filter((id) => userExists(d, id) && canViewBoard(d, b, id));
+  return kept.length ? { ...rest, also: kept } : rest;
+}
 
 // Money and counts are numbers in state: '1,200' → 1200, anything unparseable → 0 (or the fallback).
 const toNum = (v) => { const n = typeof v === 'number' ? v : parseAmount(v); return Number.isFinite(n) ? n : 0; };
@@ -396,7 +402,7 @@ function createActions(mutate, mode) {
       const g = b.groups.find((x) => x.id === groupId) || b.groups[0];
       const item = newItem({ name: textOf(name).trim() || 'New task', values: {} }, [d.me]);
       if (values) {
-        item.values = boardValues(b, newTaskValues(seeing(d, b, values), { me: d.me, now: nowIso() }));
+        item.values = boardValues(b, seeing(d, b, newTaskValues(values, { me: d.me, now: nowIso() })));
         item.done = item.values.status === 'Done';
       }
       g.items.push(item);
@@ -415,12 +421,11 @@ function createActions(mutate, mode) {
     updateItem: (boardId, itemId, patch = {}) => onBoard(boardId, (d, b) => {
       const { item } = findItem(d, boardId, itemId);
       if (!item) return false;
-      const { values: changed, id: _id, updates: _updates, subtasks: _subtasks, ...rest } = patch;
+      const { values, id: _id, updates: _updates, subtasks: _subtasks, ...rest } = patch;
       if ('name' in rest && !textOf(rest.name).trim()) delete rest.name; // a task always has a name
       Object.assign(item, rest);
-      const values = changed && seeing(d, b, changed);
       if (values) {
-        item.values = boardValues(b, nextValues(item.values, values, { me: d.me, now: nowIso() })); // handing it over records who and when
+        item.values = boardValues(b, seeing(d, b, nextValues(item.values, values, { me: d.me, now: nowIso() }))); // handing it over records who and when
         if ('status' in values) item.done = item.values.status === 'Done'; // done always follows status
       }
       return true;

@@ -86,7 +86,7 @@ function TaskRow({ row, personId, waiting, act, dnd, place }) {
 
   return (
     <li data-task={item.id} {...(moves ? dnd.row(place.group, place.ids, item.id) : {})}
-      className={cn('group/row relative flex flex-wrap items-center gap-x-3 gap-y-2 border-t rowline py-2.5 pl-5 pr-3 lg:flex-nowrap',
+      className={cn('task-row group/row relative flex flex-wrap items-center gap-x-3 gap-y-2 border-t rowline py-2.5 pl-5 pr-3',
         dnd?.drag === item.id && 'opacity-50', dnd?.over?.row === item.id && (dnd.over.place === 'before' ? LINE_ABOVE : LINE_BELOW))}>
       {moves && !renaming && (
         <span {...dnd.handle(item.id)} aria-hidden="true" title="Drag to move"
@@ -107,7 +107,7 @@ function TaskRow({ row, personId, waiting, act, dnd, place }) {
           )}
         </span>
       )}
-      <div className={cn('min-w-0 flex-1 lg:basis-auto', prioritised ? 'basis-[calc(100%-80px)]' : 'basis-full')}>
+      <div className={cn('task-name min-w-0 flex-1', prioritised ? 'basis-[calc(100%-80px)]' : 'basis-full')}>
         {renaming ? (
           <InlineRename value={item.name} label="Task name" className="!py-1 !px-2 font-semibold"
             onSave={(v) => actions.updateItem(board.id, item.id, { name: v })}
@@ -129,7 +129,7 @@ function TaskRow({ row, personId, waiting, act, dnd, place }) {
         )}
       </span>
       {dated && (editable && !waiting ? (
-        <label className={cn('relative ml-auto inline-block min-w-[52px] shrink-0 cursor-pointer whitespace-nowrap rounded-[10px] px-1 text-right text-[12.5px] tnum hover:text-white lg:ml-0',
+        <label className={cn('task-push relative ml-auto inline-block min-w-[52px] shrink-0 cursor-pointer whitespace-nowrap rounded-[10px] px-1 text-right text-[12.5px] tnum hover:text-white',
           'has-[:focus-visible]:text-white has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-white',
           overdue ? 'font-semibold text-rose-300' : 'dim')}>
           {shortDate(due)}{overdue && <span className="sr-only"> (overdue)</span>}
@@ -137,7 +137,7 @@ function TaskRow({ row, personId, waiting, act, dnd, place }) {
             className="absolute inset-0 cursor-pointer opacity-0" />
         </label>
       ) : (
-        <span className={cn('ml-auto min-w-[52px] shrink-0 whitespace-nowrap text-right text-[12.5px] tnum lg:ml-0', overdue ? 'font-semibold text-rose-300' : 'dim')}>
+        <span className={cn('task-push ml-auto min-w-[52px] shrink-0 whitespace-nowrap text-right text-[12.5px] tnum', overdue ? 'font-semibold text-rose-300' : 'dim')}>
           {shortDate(due)}{overdue && <span className="sr-only"> (overdue)</span>}
         </span>
       ))}
@@ -152,7 +152,7 @@ function TaskRow({ row, personId, waiting, act, dnd, place }) {
         // One button either way, so focus stays on it once the task is on today.
         <button type="button" aria-disabled={onToday ? 'true' : undefined} aria-label={onToday ? `${name} is on today` : `Do ${name} today`}
           onClick={() => { if (!onToday) actions.addTodoForItem(board.id, item.id, { assignee: personId }); }}
-          className={cn(ACTION, 'chip', !dated && 'ml-auto lg:ml-0', onToday ? 'cursor-default dimmer' : 'hover:bg-white/15')}>
+          className={cn(ACTION, 'chip', !dated && 'task-push ml-auto', onToday ? 'cursor-default dimmer' : 'hover:bg-white/15')}>
           {onToday ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Plus className="h-3.5 w-3.5" aria-hidden="true" />}
           {onToday ? 'On today' : 'Do today'}
         </button>
@@ -187,7 +187,7 @@ function TaskRow({ row, personId, waiting, act, dnd, place }) {
 function BoardCard({ card, personId, act }) {
   const { state, actions } = useStore();
   const access = useAccess();
-  const [moved, setMoved] = useState('');
+  const [moved, setMoved] = useState({ n: 0, said: '' }); // a new node per move, so each one is announced
   const { board, groups } = card;
   const editable = access.canEditBoard(board);
   const dnd = useTaskDrag({ boardId: board.id, groups: board.groups, readOnly: !editable });
@@ -195,9 +195,7 @@ function BoardCard({ card, personId, act }) {
   const move = (itemId, dir) => {
     const to = stepPlace(board.groups, itemId, shown, dir);
     if (!to || actions.placeItem(board.id, itemId, to.groupId, to.beforeId) === false) return;
-    // Each time differently (a trailing space), so a screen reader says it again on the next move the same way.
-    const said = dir < 0 ? 'Moved up' : 'Moved down';
-    setMoved((m) => (m === said ? `${said} ` : said));
+    setMoved((m) => ({ n: m.n + 1, said: dir < 0 ? 'Moved up' : 'Moved down' }));
     refocus(itemId, '[data-pick="menu"] button', `#card-${CSS.escape(board.id)} a`);
   };
   const title = whereOf(state, board).join(' › ');
@@ -231,7 +229,7 @@ function BoardCard({ card, personId, act }) {
           );
         })}
       </div>
-      <span aria-live="polite" className="sr-only">{moved}</span>
+      <span aria-live="polite" className="sr-only">{moved.said && <span key={moved.n}>{moved.said}</span>}</span>
     </section>
   );
 }
@@ -259,7 +257,7 @@ export default function MyTasks({ rows, personId, waiting = false, act = false, 
 
   if (waiting) {
     return (
-      <section aria-label={heading} className="glass glass-rim rounded-[24px] ring-1 ring-amber-300/40">
+      <section aria-label={heading} className="task-cards glass glass-rim rounded-[24px] ring-1 ring-amber-300/40">
         {head}
         {rows.length === 0 ? <p className="border-t rowline px-5 py-3 dimmer">{empty || 'Nothing assigned.'}</p>
           : <ol className="min-w-0">{rows.map((r) => <TaskRow key={r.item.id} row={r} personId={personId} waiting act={act} />)}</ol>}
@@ -267,7 +265,7 @@ export default function MyTasks({ rows, personId, waiting = false, act = false, 
     );
   }
   return (
-    <section aria-label={heading} data-mytasks="">
+    <section aria-label={heading} data-mytasks="" className="task-cards">
       {head}
       {notes.length > 0 && (
         <p className="mt-3 rounded-2xl bg-amber-500/20 px-3 py-2 text-[13px] text-amber-100">{notes.join(' ')}</p>
