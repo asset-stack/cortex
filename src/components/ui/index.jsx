@@ -353,7 +353,7 @@ export function SearchField({ value, onChange, placeholder = 'Search' }) {
 export function PageHeader({ title, action, onAction }) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <h1 className="page-title text-[34px] md:text-[44px] leading-none">{title}</h1>
+      <h1 tabIndex={-1} className="page-title text-[34px] md:text-[44px] leading-none outline-none">{title}</h1>
       {action && (
         <button type="button" onClick={onAction} className="btn-primary inline-flex items-center gap-2 rounded-full px-5 h-11 font-semibold shrink-0">
           <Plus className="h-4 w-4" />{action}

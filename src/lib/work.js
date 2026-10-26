@@ -1,7 +1,7 @@
 // Who owns a board task and what comes first (docs/PHASE2.md §17, §18): a task's owner, handing it over and accepting
 // it, the Dashboard's task lists, the Team pages, the admins' Needs attention list, @mentions in task updates, where a
 // task lives, a client's linked tasks and Do today. Pure, with relative imports, so scripts/test-sync.mjs runs it in Node.
-import { canEditBoard, canViewBoard } from './access.js';
+import { canEditBoard, canView, canViewBoard } from './access.js';
 import { MODULE_LABELS, boardTitle } from './boards.js';
 import { mentionedUserIds } from './mentionText.js';
 import { BOARD_SCHEMAS, PRIORITY, withPeople } from '../data/boards.js';
@@ -184,10 +184,11 @@ export function taskMentions(state, person, { viewer = state?.me } = {}) {
 }
 
 /** A client's open next steps on the boards the viewer sees, in board order: tasks linked to it (`values.client`, Clients
- *  boards) and to the deals it came from (`values.deal`, Outreach boards). → [{ item, board }] */
+ *  boards) and to the deals it came from (`values.deal`, Outreach boards; deals are Pipeline's, so only for a Pipeline
+ *  viewer, as live mode, where nobody else reads them). → [{ item, board }] */
 export function clientTasks(state, clientId, { viewer = state?.me } = {}) {
   if (!clientId) return [];
-  const deals = new Set((state?.deals || []).filter((d) => d.clientId === clientId).map((d) => d.id));
+  const deals = new Set(canView(state, 'pipeline', viewer) ? (state?.deals || []).filter((d) => d.clientId === clientId).map((d) => d.id) : []);
   return (state?.boards || []).filter((b) => (hasClient(b) || (deals.size && hasDeal(b))) && canViewBoard(state, b, viewer))
     .flatMap((board) => board.groups.flatMap((g) => g.items
       .filter((item) => !item.done && ((hasClient(board) && item.values?.client === clientId) || (hasDeal(board) && deals.has(item.values?.deal))))

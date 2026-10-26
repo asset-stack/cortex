@@ -2196,6 +2196,10 @@ await check('crm: next steps are tasks — a deal’s (Outreach boards’ Deal c
   st.deals.push({ id: 'd-3', name: 'Example deal', clientId: 'c-1' });
   sales.groups[0].items.push({ id: 'o-5', name: 'Phase 2 quote', values: { people: ['ann'], deal: 'd-3' }, done: false, updates: [], subtasks: [] });
   assert.deepEqual(work.clientTasks(st, 'c-1').map((r) => r.item.id), ['o-3', 'o-5', 'd-1'], 'both deals’ next steps');
+  // Deals are Pipeline's: without Pipeline view (live mode reads none) only the client's own tasks.
+  const blind = { ...st, moduleAccess: [...(st.moduleAccess || []), { userId: 'stu', module: 'pipeline', level: 'none' }, { userId: 'stu', module: 'outreach', level: 'view' }] };
+  assert.deepEqual([work.clientTasks(blind, 'c-1', { viewer: 'stu' }).map((r) => r.item.id), work.dealTasks(blind, 'd-3', { viewer: 'stu' }).map((r) => r.item.id)],
+    [['d-1'], ['o-5']], 'the deal’s next steps stay on the Outreach board, not on the client');
   assert.deepEqual([work.dealTasks(st, ''), work.hasDeal({ module: 'outreach' }), work.hasDeal({ module: 'clients' })], [[], true, false]);
 });
 

@@ -5641,6 +5641,28 @@ async function phase12(ctx) {
     lateByPipeline !== null && lateByClients === null && lateRow?.client_id === port && smuggled !== null
       && relinked === 1 && openRow.client_id === null && openRow.deal_id === open,
     { lateByPipeline, lateByClients, lateRow, smuggled, relinked, openRow });
+
+  // 104. The app saves edits as upserts (the whole row, as flatten() makes it): an edit is judged as the entry stands,
+  // even when its deal's client has changed since or the deal is gone, and never moves it.
+  const entryRow = async (id) => one(`select id, deal_id, client_id, kind, title, body, url, label, happened_on, attendees, user_id, created_at
+    from crm_entries where id = $1`, [id]);
+  const save = (r, patch) => postgrestUpsert('crm_entries', [{ ...r, ...patch }]);
+  await as(hello); // Clients edit, Pipeline view: the author of the client's Kick-off notes
+  const kickoff = await entryRow((await one("select id from crm_entries where body = 'Kick-off notes'")).id);
+  await as(alice); // a Pipeline editor takes the deal off its client (REST, or a stale full-row save)
+  await db.query('update deals set client_id = null where id = $1', [won]);
+  await as(hello);
+  const unlinkedSave = await save(kickoff, { body: 'Kick-off on the 4th' });
+  await as(alice); // her own entry on the open deal, whose client was set without Clients edit (nothing carried)
+  const aliceSave = await save(await entryRow(openNote), { body: 'Still open' });
+  await as(boss);
+  const adminSave = await save(await entryRow(openNote), { title: 'Checked' });
+  await as(null);
+  const afterSaves = await rows('select body, client_id from crm_entries where id = any($1) order by body', [[kickoff.id, openNote]]);
+  check('104. an edit saved as an upsert is judged as the entry stands (its client’s rules, or its deal’s) and never moves it, whatever its deal’s client is now',
+    unlinkedSave === null && aliceSave === null && adminSave === null
+      && stable(afterSaves) === stable([{ body: 'Kick-off on the 4th', client_id: port }, { body: 'Still open', client_id: null }]),
+    { unlinkedSave, aliceSave, adminSave, afterSaves });
   await as(boss);
   await db.query('delete from deals where id = any($1)', [[won, open]]);
   await db.query('delete from clients where id = any($1)', [[port, unrelated]]);

@@ -29,12 +29,12 @@ const formOf = (deal) => ({
 });
 
 // After a dialog closes, keyboard focus goes back to the deal's Edit button (its card may have moved column), else to
-// New deal (it was deleted or made a client).
+// New deal (it was deleted or made a client), else (Pipeline view: no New deal) to the page's title.
 function refocus(dealId) {
   window.setTimeout(() => {
     const edit = dealId && document.querySelector(`[data-deal="${CSS.escape(dealId)}"] button[data-edit]`);
     const fallback = [...document.querySelectorAll('main button')].find((x) => x.textContent.trim() === 'New deal');
-    (edit || fallback)?.focus({ preventScroll: true });
+    (edit || fallback || document.querySelector('main h1'))?.focus({ preventScroll: true });
   }, 0);
 }
 

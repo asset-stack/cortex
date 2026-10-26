@@ -114,7 +114,7 @@ function LinkField({ label, value, readOnly, onChange, placeholder }) {
 function FromDeal({ c }) {
   const { state } = useStore();
   const access = useAccess();
-  const deals = dealsOfClient(state, c.id);
+  const deals = access.canView('pipeline') ? dealsOfClient(state, c.id) : []; // deals are Pipeline's (as RLS)
   if (!deals.length) return null;
   return (
     <div className="-mt-3 text-[13px] dim">

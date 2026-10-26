@@ -1050,12 +1050,14 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   (`protect_crm_entry`) keeps the author and date, and an entry's deal and client: an edit never moves it (only deleting
   the deal takes it off the deal). An entry added to a deal takes the deal's client, if it has one, whatever the writer
   sends: adding to a deal that is already a client adds to the client (with Clients edit), and nobody files a deal's
-  entry under another client.
+  entry under another client. The app saves an edit as an upsert, whose insert half keeps a stored entry's deal and
+  client, so an edit is judged as the entry stands.
 - **Make client** (`crm_carry_to_client`, after `deals.client_id` is set; `carryDealEntriesLocal()` in demo mode): the
   deal's entries become the client's too (they keep the deal), so the client's profile starts with the deal's history;
   from then on they follow the Clients rules. The database carries them only for someone with Clients edit (the app's
   Make client needs it; the REST API alone doesn't stop a Pipeline editor setting a deal's client). A second deal for the
-  same organisation joins the same client, and its history and next steps show there too. Deleting a
+  same organisation joins the same client, and its history and next steps show there too (the *From deal* line and the
+  deals' next steps only for Pipeline viewers: deals are Pipeline's, and live mode reads none without it). Deleting a
   deal (`crm_drop_deal_entries`; `dropDealEntriesLocal()`) deletes the entries that never reached a client; the others
   stay with their client.
 - **Next steps** (no schema change): Outreach boards get a **Deal** column (`values.deal`, `DealPicker`; open deals);
@@ -1081,7 +1083,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   and add them with Outreach Edit (the default is None).
 - **Tests**: `scripts/test-db.mjs` phase 12 (re-runs, read and write by access, author or admin, the protect trigger,
   Make client, deleting a deal or a client, an entry added after Make client, a client id that isn't the deal's, Make
-  client without Clients edit, the sync write); `scripts/test-sync.mjs` (the mapping, the access rules, `cleanEntry()`
+  client without Clients edit, edits saved as upserts after the deal's client changed, the sync write); `scripts/test-sync.mjs` (the mapping, the access rules, `cleanEntry()`
   and link lengths, `timelineOf()` / `linksOf()` with two deals and by the local day, the demo carry-over and delete,
   next steps through a deal or two, the seed).
 - **Later, not built**: reading the Doc itself (a Drive permission for everyone), meeting recordings and transcripts,

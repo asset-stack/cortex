@@ -43,8 +43,10 @@ create index if not exists crm_entries_client_idx on public.crm_entries (client_
 -- An entry's author and date are whoever added it, when (the SQL editor and the secret key, with no signed-in user, may
 -- set them). One added to a deal is its deal's client's when the deal has one (and on no client when it hasn't), so it
 -- follows the same rules as the rest of the deal's history. Its deal never changes (only deleting the deal clears it);
--- its client is set only once, to its deal's client (Make client), and never moved or cleared by an edit. Security
--- definer: the deal is looked up whatever the writer may read.
+-- its client is set only once, to its deal's client (Make client), and never moved or cleared by an edit. The app saves
+-- an edit as an upsert (insert … on conflict do update), which runs the insert branch and the insert policy first: an id
+-- that exists keeps its own deal and client there, so the edit is judged as the entry stands. Security definer: the deal
+-- and the stored entry are looked up whatever the writer may read.
 create or replace function public.protect_crm_entry() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
@@ -57,8 +59,12 @@ begin
       new.created_at := old.created_at;
     end if;
   end if;
-  if tg_op = 'INSERT' and new.deal_id is not null then
-    new.client_id := (select d.client_id from public.deals d where d.id = new.deal_id);
+  if tg_op = 'INSERT' then
+    if exists (select 1 from public.crm_entries e where e.id = new.id) then
+      select e.deal_id, e.client_id into new.deal_id, new.client_id from public.crm_entries e where e.id = new.id;
+    elsif new.deal_id is not null then
+      new.client_id := (select d.client_id from public.deals d where d.id = new.deal_id);
+    end if;
   end if;
   if tg_op = 'UPDATE' then
     if new.deal_id is not null
