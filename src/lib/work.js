@@ -22,7 +22,8 @@ const ymd = (v) => { const s = String(v ?? ''); return /^\d{4}-\d{2}-\d{2}/.test
 const columns = (board) => BOARD_SCHEMAS[board?.module]?.columns || [];
 /** Whether a board's tasks have one owner (an `owner` column) rather than a list of people. */
 export const hasOwner = (board) => columns(board).some((c) => c.type === 'owner');
-const hasPriority = (board) => columns(board).some((c) => c.key === 'priority');
+/** Whether a board's tasks have a priority (a Priority column; not Work in Progress). */
+export const hasPriority = (board) => columns(board).some((c) => c.key === 'priority');
 /** Whether a board's tasks can be linked to a client (a `client` column: the Clients boards). */
 export const hasClient = (board) => columns(board).some((c) => c.type === 'client');
 const dateKey = (board) => columns(board).find((c) => c.type === 'date')?.key || 'due';

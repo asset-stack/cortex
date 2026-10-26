@@ -5,20 +5,21 @@ import { PRIORITY, PRIORITY_HINTS, STATUS } from '@/data/boards';
 import { LabelPicker } from '@/components/ui';
 import { useAccess } from '@/lib/access';
 import { boardHref, firstName } from '@/lib/boards';
-import { MAX_IN_PROGRESS, MAX_URGENT, byStage, todoForItem, whereOf } from '@/lib/work';
+import { MAX_IN_PROGRESS, MAX_URGENT, byStage, hasPriority, stageOf, todoForItem, whereOf } from '@/lib/work';
 import { ago, localYmd, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
 const ACTION = 'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-semibold';
 const SMALL = '!h-[24px] !px-2 !text-[11.5px]';
 
-// After a pick moves a row to another section, its pickers are new elements: put focus back on the same picker there
-// (or on the section's toggle when it went into a closed one; nowhere when it's done and gone).
-const refocus = (itemId, which) => requestAnimationFrame(() => {
-  const el = document.querySelector(`li[data-task="${CSS.escape(itemId)}"] [data-pick="${which}"] button`)
-    || document.querySelector(`li[data-task="${CSS.escape(itemId)}"] [data-pick="${which}"]`);
-  el?.focus();
+// After a pick (or Accept) moves a row to another section, its controls are new elements: put focus back on `target`
+// there (a picker's button, or the task's link), else on the section's toggle when it went into a closed one; nowhere
+// when it's done and gone.
+const refocus = (itemId, target, stage) => requestAnimationFrame(() => {
+  const row = `li[data-task="${CSS.escape(itemId)}"]`;
+  (document.querySelector(`${row} ${target}`) || (stage && document.querySelector(`button[data-stage="${CSS.escape(stage)}"]`)))?.focus();
 });
+const PICK = (which) => `[data-pick="${which}"] button`;
 
 /** One task: priority, name, where it lives (and who handed it over), status, due, and Accept or Do today. Priority and
  *  status are pickers for those who can edit its board. */
@@ -36,12 +37,22 @@ function TaskRow({ row, personId, waiting, act }) {
   const onToday = !waiting && todoForItem(state.todos, item.id, personId, today);
   const canAccept = waiting && act && self && editable;
   const canPlan = !waiting && act && (self || access.isAdmin);
-  const setPriority = (v) => { actions.updateItem(board.id, item.id, { values: { priority: v } }); refocus(item.id, 'priority'); };
-  const setStatus = (v) => { actions.updateItem(board.id, item.id, { values: { status: v }, done: v === 'Done' }); refocus(item.id, 'status'); };
+  const prioritised = hasPriority(board); // Work in Progress rows have no priority
+  const setPriority = (v) => {
+    if (v === priority) return;
+    actions.updateItem(board.id, item.id, { values: { priority: v } });
+    refocus(item.id, PICK('priority'), stageOf({ item, priority: v }));
+  };
+  // Picking the status it already has changes nothing (it would otherwise count as starting, i.e. accepting, it).
+  const setStatus = (v) => {
+    if (v === status) return;
+    actions.updateItem(board.id, item.id, { values: { status: v }, done: v === 'Done' });
+    if (v !== 'Done') refocus(item.id, PICK('status'), stageOf({ item: { ...item, values: { ...item.values, status: v } }, priority }));
+  };
   return (
     <li data-task={item.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t rowline py-2.5 pl-5 pr-4 sm:flex-nowrap">
       <span data-pick="priority" className="w-[68px] shrink-0">
-        {editable ? (
+        {editable && prioritised ? (
           <LabelPicker label={`Priority for ${name}`} value={priority} options={PRIORITY} hints={PRIORITY_HINTS} placeholder="Set" onChange={setPriority}
             className={cn(SMALL, !priority && 'dimmer')} />
         ) : (
@@ -71,7 +82,7 @@ function TaskRow({ row, personId, waiting, act }) {
       {canAccept && (
         // Accepted, it moves to My tasks: focus follows it there rather than falling to the page.
         <button type="button" aria-label={`Accept ${name}`} className={cn(ACTION, 'btn-primary')}
-          onClick={() => { if (actions.acceptItem(board.id, item.id)) requestAnimationFrame(() => document.getElementById(`task-${item.id}`)?.focus()); }}>
+          onClick={() => { if (actions.acceptItem(board.id, item.id)) refocus(item.id, `#${CSS.escape(`task-${item.id}`)}`, stageOf(row)); }}>
           <Check className="h-3.5 w-3.5" aria-hidden="true" />Accept
         </button>
       )}
