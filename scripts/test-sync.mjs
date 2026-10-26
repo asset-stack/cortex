@@ -2116,17 +2116,24 @@ await check('§20 Also on in the task lists: the tagged person sees it (marked w
   assert.equal(work.prioritiesFor(wip, 'ann').filter((r) => r.item.id === 'wip-1').length, 0, 'Work in Progress has no Also on');
 });
 
-await check('§20 by board: a card per board in menu order (Operations first, personal pages last), its rows in the board’s own order, split by group', () => {
+await check('§20 by board: a card per board in menu order (Operations first; within a module, team boards in their order, then personal pages), its rows in the board’s own order, split by group', () => {
   const st = taskState();
   const web = st.boards.find((b) => b.id === 'web');
   web.groups.push({ id: 'g-web-2', name: 'Backlog', items: [{ id: 'w-back', name: 'w-back', values: { people: ['stu'] }, done: false, updates: [], subtasks: [] }] });
-  const cards = work.byBoard(work.prioritiesFor(st, 'stu', { today: '2026-10-25' }));
+  const cards = work.byBoard(work.prioritiesFor(st, 'stu', { today: '2026-10-25' }), st.boards);
   assert.deepEqual(cards.map((c) => c.board.id), ['web', 'p-stu', 'post', 'demos', 'wip'],
     'modules in order (no Sales Tasks: Stu has no Outreach); team boards before personal pages');
   const webCard = cards[0];
   assert.deepEqual(webCard.rows.map((r) => r.item.id), ['w-none', 'w-high-late', 'w-high-soon', 'w-urgent', 'w-back'], 'the board’s order, not Urgent first');
   assert.deepEqual(webCard.groups.map((g) => [g.group.id, g.rows.length]), [['g-web', 4], ['g-web-2', 1]]);
   assert.deepEqual([work.byBoard([]), work.byBoard(null)], [[], []]);
+  // Two team boards of a module: in the boards' order, not the order their tasks' priorities put them in (and editing
+  // a priority never moves a card).
+  const two = taskState();
+  const it2 = (id, values) => ({ id, name: id, values, done: false, updates: [], subtasks: [] });
+  two.boards.splice(4, 0, { id: 'tender', module: 'projects', name: 'tender', owner: '', groups: [{ id: 'g-t', name: 'Active', items: [it2('t-urgent', { people: ['stu'], priority: 'Urgent' })] }] });
+  const ops = work.byBoard(work.prioritiesFor(two, 'stu', { today: '2026-10-25' }), two.boards).filter((c) => c.board.module === 'projects' && !c.board.owner);
+  assert.deepEqual(ops.map((c) => c.board.id), ['web', 'tender'], 'web comes first in the boards, though tender has the Urgent task');
 });
 
 await check('§20 dropPlace: a drop against the board’s full order, past hidden tasks; no move when it lands where it is', () => {
@@ -2173,7 +2180,7 @@ await check('§20 board filters: the person filter finds Also on; the Department
   assert.equal(work.itemMatches({ module: 'pipeline' }, { name: 'x', values: { people: [], also: ['stu'] } }, { person: 'stu' }), false, 'no Also on there');
 });
 
-await check('§20 a task’s time and Do today go under its department; calendar entries carry Also on; imports start in their board’s department', async () => {
+await check('§20 categoryOf (Do today’s and a timesheet’s category) follows the department; calendar entries carry Also on; imports start in their board’s department', async () => {
   const ts = await import('../src/lib/timesheet.js');
   const ops = { module: 'projects', owner: '' };
   assert.deepEqual([ts.categoryOf(ops, { values: {} }), ts.categoryOf(ops, { values: { department: 'marketing' } }),

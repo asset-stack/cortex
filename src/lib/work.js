@@ -188,20 +188,24 @@ export const topTasks = (rows, n = 3) => byStage((rows || []).filter((r) => !r.a
   .filter((g) => g.stage !== 'No priority').flatMap((g) => g.rows).slice(0, n);
 
 /**
- * Someone's task list by board (§20: My tasks): a card per board, Operations first (BOARD_MODULES order; team boards
- * in their order, then personal pages), each with its rows in the board's own order (its groups in order, each group's
- * tasks in order), split by group. Boards and groups with none of the rows are left out.
- * → [{ board, rows, groups: [{ group, rows }] }]
+ * Someone's task list by board (§20: My tasks): a card per board, Operations first (BOARD_MODULES order; within a
+ * module, team boards in their order (`boards`: state.boards), then personal pages), each with its rows in the board's
+ * own order (its groups in order, each group's tasks in order), split by group. Boards and groups with none of the rows
+ * are left out. → [{ board, rows, groups: [{ group, rows }] }]
  */
-export function byBoard(rows) {
+export function byBoard(rows, boards = []) {
   const cards = new Map();
   (rows || []).forEach((r) => {
     if (!cards.has(r.board)) cards.set(r.board, []);
     cards.get(r.board).push(r);
   });
   const order = (b) => [BOARD_MODULES.indexOf(b.module), b.owner ? 1 : 0];
+  const at = (b) => { const k = (boards || []).indexOf(b); return k < 0 ? Infinity : k; };
   return [...cards.entries()].map(([board, list], n) => ({ board, list, n }))
-    .sort((a, b) => { const [x, y] = [order(a.board), order(b.board)]; return x[0] - y[0] || x[1] - y[1] || a.n - b.n; })
+    .sort((a, b) => {
+      const [x, y] = [order(a.board), order(b.board)];
+      return x[0] - y[0] || x[1] - y[1] || (at(a.board) - at(b.board) || 0) || a.n - b.n;
+    })
     .map(({ board, list }) => {
       const groups = board.groups.map((group) => ({
         group, rows: group.items.map((it) => list.find((r) => r.item === it)).filter(Boolean),

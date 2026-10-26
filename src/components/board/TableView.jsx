@@ -140,8 +140,9 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
   // group (its end), placed against the board's full order.
   const dnd = useTaskDrag({ boardId, groups: all, readOnly });
   const { drag, over } = dnd;
-  // Wide enough for every column: the Done, task, updates and actions columns, then 124px a column.
-  const minWidth = Math.max(820, 340 + schema.columns.length * 124);
+  // Wide enough for every column at its width (as the headings set them), with the Task column at least ~200px.
+  const colWidth = (c) => (c.type === 'text' ? 220 : c.type === 'client' || c.type === 'deal' ? 176 : 124);
+  const minWidth = Math.max(820, 340 + schema.columns.reduce((t, c) => t + colWidth(c), 0));
 
   const addGroup = () => {
     const id = actions.addGroup(boardId, 'New group');
@@ -175,7 +176,7 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                     <thead>
                       <tr {...dnd.top(g.id, shown)} className={cn('text-[12px] dimmer', over?.group === g.id && over.top && LINE_BELOW)}>
                         <th className={cn('w-12 p-3', !readOnly && 'md:w-16')}><span className="sr-only">Done</span></th>
-                        <th className="text-left p-3 font-medium">{itemWord(schema)}</th>
+                        <th className="min-w-[200px] p-3 text-left font-medium">{itemWord(schema)}</th>
                         <th className="w-10"><span className="sr-only">Updates</span></th>
                         {schema.columns.map((c) => (
                           <th key={c.key} className={cn('p-3 font-medium', c.type === 'text' ? 'min-w-[220px] text-left' : c.type === 'client' || c.type === 'deal' ? 'w-[176px]' : 'w-[124px]')}>{c.label}</th>

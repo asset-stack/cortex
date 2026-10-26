@@ -26,6 +26,9 @@ export default function NewTaskModal({ onClose, owner: forOwner = '', clientId =
   });
   const [err, setErr] = useState('');
   const board = targets.find((b) => b.id === f.board) || null;
+  // Also on: teammates who can see the chosen board (not the owner); picks the new board doesn't allow drop off.
+  const tag = board ? taggable(state, board, { values: { people: f.owner ? [f.owner] : [] } }) : [];
+  const also = f.also.filter((id) => tag.includes(id));
   const set = (k, v) => { setErr(''); setF((x) => ({ ...x, [k]: v })); };
   const ownerName = state.users.find((u) => u.id === f.owner)?.name || '';
 
@@ -36,7 +39,7 @@ export default function NewTaskModal({ onClose, owner: forOwner = '', clientId =
     if (f.owner && !canEditBoard(state, board, f.owner)) { setErr(`${ownerName} can’t edit ${boardTitle(state, board)}: pick another owner or board`); return; }
     const values = {
       owner: f.owner, priority: f.priority, due: f.due, ...(hasClient(board) ? { client: f.client } : {}), ...(hasDeal(board) ? { deal: f.deal } : {}),
-      ...(hasAlso(board) ? { also: f.also.filter((id) => id !== f.owner) } : {}),
+      ...(hasAlso(board) ? { also } : {}),
       ...(hasDepartment(board) ? { department: departmentValue(board, f.department) } : {}),
     };
     if (!actions.addItem(board.id, null, f.name, values)) { setErr('Couldn’t add this task'); return; }
@@ -84,15 +87,15 @@ export default function NewTaskModal({ onClose, owner: forOwner = '', clientId =
               {hasAlso(board) && (
                 <div className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Also on</span>
                   <div className="flex h-[42px] items-center">
-                    <PeoplePicker value={f.also} allow={taggable(state, board, { values: { people: f.owner ? [f.owner] : [] } })} label="Also on" empty="Nobody"
-                      size={32} max={4} onChange={(v) => set('also', v)} />
+                    <PeoplePicker value={also} allow={tag} label="Also on" empty="Nobody" size={32} max={4} onChange={(v) => set('also', v)} />
                   </div>
                 </div>
               )}
               {hasDepartment(board) && (
                 <div className="col-start-2 flex flex-col gap-1.5"><span className="text-[12px] dimmer">Department</span>
                   <LabelPicker label="Department" value={departmentOf(board, { values: { department: f.department } })} options={DEPARTMENTS} labels={MODULE_LABELS}
-                    muted={!departmentValue(board, f.department)} allowEmpty={false} onChange={(v) => set('department', v)} className="!h-[42px]" />
+                    muted={!departmentValue(board, f.department)} allowEmpty={false} className="!h-[42px]"
+                    onChange={(v) => set('department', departmentValue(board, v))} />
                 </div>
               )}
             </div>

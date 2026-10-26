@@ -62,6 +62,8 @@ function TaskRow({ row, personId, waiting, act, dnd, place }) {
       next = (lis[k + 1] || lis[k - 1])?.dataset.task || null;
     }
     update({ status: v }, { done: v === 'Done' });
+    // In Waiting on you, starting it accepts it: it moves to its board's card, and focus goes with it.
+    if (v !== 'Done' && waiting) refocus(item.id, '[data-pick="status"] button', '[data-mytasks] h2');
     if (v === 'Done') {
       requestAnimationFrame(() => {
         (next && document.querySelector(`li[data-task="${CSS.escape(next)}"] [data-pick="status"] button`)
@@ -84,7 +86,7 @@ function TaskRow({ row, personId, waiting, act, dnd, place }) {
 
   return (
     <li data-task={item.id} {...(moves ? dnd.row(place.group, place.ids, item.id) : {})}
-      className={cn('group/row relative flex flex-wrap items-center gap-x-3 gap-y-2 border-t rowline py-2.5 pl-5 pr-3 sm:flex-nowrap',
+      className={cn('group/row relative flex flex-wrap items-center gap-x-3 gap-y-2 border-t rowline py-2.5 pl-5 pr-3 lg:flex-nowrap',
         dnd?.drag === item.id && 'opacity-50', dnd?.over?.row === item.id && (dnd.over.place === 'before' ? LINE_ABOVE : LINE_BELOW))}>
       {moves && !renaming && (
         <span {...dnd.handle(item.id)} aria-hidden="true" title="Drag to move"
@@ -105,7 +107,7 @@ function TaskRow({ row, personId, waiting, act, dnd, place }) {
           )}
         </span>
       )}
-      <div className={cn('min-w-0 flex-1 sm:basis-auto', prioritised ? 'basis-[calc(100%-80px)]' : 'basis-full')}>
+      <div className={cn('min-w-0 flex-1 lg:basis-auto', prioritised ? 'basis-[calc(100%-80px)]' : 'basis-full')}>
         {renaming ? (
           <InlineRename value={item.name} label="Task name" className="!py-1 !px-2 font-semibold"
             onSave={(v) => actions.updateItem(board.id, item.id, { name: v })}
@@ -127,7 +129,7 @@ function TaskRow({ row, personId, waiting, act, dnd, place }) {
         )}
       </span>
       {dated && (editable && !waiting ? (
-        <label className={cn('relative ml-auto inline-block min-w-[52px] shrink-0 cursor-pointer whitespace-nowrap rounded-[10px] px-1 text-right text-[12.5px] tnum hover:text-white sm:ml-0',
+        <label className={cn('relative ml-auto inline-block min-w-[52px] shrink-0 cursor-pointer whitespace-nowrap rounded-[10px] px-1 text-right text-[12.5px] tnum hover:text-white lg:ml-0',
           'has-[:focus-visible]:text-white has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-white',
           overdue ? 'font-semibold text-rose-300' : 'dim')}>
           {shortDate(due)}{overdue && <span className="sr-only"> (overdue)</span>}
@@ -135,7 +137,7 @@ function TaskRow({ row, personId, waiting, act, dnd, place }) {
             className="absolute inset-0 cursor-pointer opacity-0" />
         </label>
       ) : (
-        <span className={cn('ml-auto min-w-[52px] shrink-0 whitespace-nowrap text-right text-[12.5px] tnum sm:ml-0', overdue ? 'font-semibold text-rose-300' : 'dim')}>
+        <span className={cn('ml-auto min-w-[52px] shrink-0 whitespace-nowrap text-right text-[12.5px] tnum lg:ml-0', overdue ? 'font-semibold text-rose-300' : 'dim')}>
           {shortDate(due)}{overdue && <span className="sr-only"> (overdue)</span>}
         </span>
       ))}
@@ -150,7 +152,7 @@ function TaskRow({ row, personId, waiting, act, dnd, place }) {
         // One button either way, so focus stays on it once the task is on today.
         <button type="button" aria-disabled={onToday ? 'true' : undefined} aria-label={onToday ? `${name} is on today` : `Do ${name} today`}
           onClick={() => { if (!onToday) actions.addTodoForItem(board.id, item.id, { assignee: personId }); }}
-          className={cn(ACTION, 'chip', !dated && 'ml-auto sm:ml-0', onToday ? 'cursor-default dimmer' : 'hover:bg-white/15')}>
+          className={cn(ACTION, 'chip', !dated && 'ml-auto lg:ml-0', onToday ? 'cursor-default dimmer' : 'hover:bg-white/15')}>
           {onToday ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Plus className="h-3.5 w-3.5" aria-hidden="true" />}
           {onToday ? 'On today' : 'Do today'}
         </button>
@@ -193,7 +195,9 @@ function BoardCard({ card, personId, act }) {
   const move = (itemId, dir) => {
     const to = stepPlace(board.groups, itemId, shown, dir);
     if (!to || actions.placeItem(board.id, itemId, to.groupId, to.beforeId) === false) return;
-    setMoved(`${dir < 0 ? 'Moved up' : 'Moved down'}`);
+    // Each time differently (a trailing space), so a screen reader says it again on the next move the same way.
+    const said = dir < 0 ? 'Moved up' : 'Moved down';
+    setMoved((m) => (m === said ? `${said} ` : said));
     refocus(itemId, '[data-pick="menu"] button', `#card-${CSS.escape(board.id)} a`);
   };
   const title = whereOf(state, board).join(' › ');
@@ -240,6 +244,7 @@ function BoardCard({ card, personId, act }) {
  * the heading. `load` (workload()) adds the team-rule note to My tasks.
  */
 export default function MyTasks({ rows, personId, waiting = false, act = false, title, load, empty }) {
+  const { state } = useStore();
   const notes = load ? [
     load.urgent > MAX_URGENT && `${load.urgent} Urgent: one at a time. Move the rest to High.`,
     load.inProgress > MAX_IN_PROGRESS && `${load.inProgress} In progress: finish or pause one (${MAX_IN_PROGRESS} at a time).`,
@@ -269,7 +274,7 @@ export default function MyTasks({ rows, personId, waiting = false, act = false, 
       )}
       {rows.length === 0 ? <p className="mt-3 rounded-[24px] glass px-5 py-3 dimmer">{empty || 'Nothing assigned.'}</p> : (
         <div className="mt-4 flex flex-col gap-8">
-          {byBoard(rows).map((card) => <BoardCard key={card.board.id} card={card} personId={personId} act={act} />)}
+          {byBoard(rows, state.boards).map((card) => <BoardCard key={card.board.id} card={card} personId={personId} act={act} />)}
         </div>
       )}
     </section>

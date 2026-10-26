@@ -58,7 +58,7 @@ function PersonCard({ user }) {
             </a>
           </li>
         ))}
-        {top.length === 0 && <li className="dimmer">{rows.length ? 'Nothing prioritised yet.' : 'Nothing assigned.'}</li>}
+        {top.length === 0 && <li className="dimmer">{rows.some((r) => !r.also) ? 'Nothing prioritised yet.' : 'Nothing assigned.'}</li>}
       </ol>
       {rows.length > top.length && <a href={href} className="mt-2 self-start text-[13px] font-semibold underline underline-offset-2">See all</a>}
     </section>

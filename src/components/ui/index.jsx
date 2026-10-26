@@ -83,8 +83,8 @@ export function Popover({ anchor, open, onClose, children, width = 200, align = 
   };
   if (!open) return null;
   return createPortal(
-    <div ref={ref} onKeyDown={onKeyDown} className="glass-dark fixed z-[80] rounded-2xl p-2"
-      style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, width, visibility: pos ? 'visible' : 'hidden' }}>
+    <div ref={ref} onKeyDown={onKeyDown} className="glass-dark fixed z-[80] overflow-y-auto overscroll-contain rounded-2xl p-2 scroll-thin"
+      style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, width, maxHeight: 'calc(100vh - 24px)', visibility: pos ? 'visible' : 'hidden' }}>
       {children}
     </div>,
     anchor?.closest?.('[role="dialog"]') || document.body,
@@ -93,7 +93,8 @@ export function Popover({ anchor, open, onClose, children, width = 200, align = 
 
 /** Monday-style coloured cell; click to pick a value. `label` names the field for screen readers. `hints`: what each
  *  option means (Priority's), shown under it in the list and as the cell's tooltip. `readOnly` shows the same pill
- *  without the picker (view access). */
+ *  without the picker (view access). `labels`: what each option is called when that isn't its value (Department's
+ *  module keys); `muted`: shown without its colour (a value that is only the default). */
 export function LabelPicker({ value, options, onChange, className, allowEmpty = true, label, hints, placeholder = '', readOnly = false, labels, muted = false }) {
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);

@@ -187,7 +187,7 @@ export default function Board({ board, embedded = false, title: named = '' }) {
       <Popover anchor={statusAnchor} open={popover === 'status'} onClose={() => setPopover(null)} width={180} align="right">
         <div role="group" aria-label="Status" className="flex flex-col gap-1.5">
           {Object.entries(STATUS).map(([s, c]) => (
-            <button key={s} type="button" aria-pressed={status === s} className={cn('pill', status === s && 'ring-2 ring-white')} style={{ backgroundColor: c }} onClick={() => { setStatus(s); setPopover(null); }}>{s}</button>
+            <button key={s} type="button" aria-pressed={status === s} className={cn('pill', status === s && 'ring-2 ring-white')} style={{ backgroundColor: c }} onClick={() => { setStatus(status === s ? '' : s); setPopover(null); }}>{s}</button>
           ))}
           <button type="button" aria-pressed={!status} className="pill pill-empty" onClick={() => { setStatus(''); setPopover(null); }}>All statuses</button>
         </div>
@@ -195,7 +195,7 @@ export default function Board({ board, embedded = false, title: named = '' }) {
           <div role="group" aria-label="Department" className="mt-3 flex flex-col gap-1.5 border-t rowline pt-3">
             {Object.entries(DEPARTMENTS).map(([m, c]) => (
               <button key={m} type="button" aria-pressed={department === m} className={cn('pill', department === m && 'ring-2 ring-white')} style={{ backgroundColor: c }}
-                onClick={() => { setDepartment(m); setPopover(null); }}>{MODULE_LABELS[m]}</button>
+                onClick={() => { setDepartment(department === m ? '' : m); setPopover(null); }}>{MODULE_LABELS[m]}</button>
             ))}
             <button type="button" aria-pressed={!department} className="pill pill-empty" onClick={() => { setDepartment(''); setPopover(null); }}>All departments</button>
           </div>
