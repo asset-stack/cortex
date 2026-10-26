@@ -1861,16 +1861,23 @@ function createLiveEngine({ me, onState, onPhase, onSync }) {
   async function start() {
     onPhase({ status: 'loading' });
     sync = createSync({ supabase, onStatus, onRealtime, onRejected });
-    await sync.probe(); // a table whose migration hasn't run stays out of the channel, the load and the writes
+    const probed = await sync.probe(); // a table whose migration hasn't run stays out of the channel, the load and the writes
     if (closed) return;
-    unsubscribe = sync.subscribe((change) => {
+    const onChange = (change) => {
       if (closed) return;
       if (rows) apply(change);
       else early.push(change);
-    });
+    };
+    unsubscribe = sync.subscribe(onChange);
     try {
       const loaded = await sync.loadAll();
       if (closed) return;
+      // The load found a table the probe couldn't tell about (a 502, a network error): a channel that still lists it
+      // fails for every table, so open one without it (its SUBSCRIBED reloads, as any join does).
+      if (sync.missing().length > probed.length) {
+        unsubscribe();
+        unsubscribe = sync.subscribe(onChange);
+      }
       rows = loaded;
       early.forEach(apply);
       early = [];
