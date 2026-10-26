@@ -13,6 +13,9 @@ export const MAX_URGENT = 1;
 export const MAX_IN_PROGRESS = 2;
 // Why a task is on Needs attention, most pressing first.
 export const ATTENTION = ['Overdue', 'Stuck', 'Not accepted', 'No owner', 'Several people', 'No priority'];
+// The sections of someone's task list, in order: what's blocked, what they're on, what's next, and what still needs a
+// priority (docs/PHASE2.md §18).
+export const STAGES = ['Stuck', 'In progress', 'Up next', 'No priority'];
 
 const PRIORITIES = Object.keys(PRIORITY);
 const ymd = (v) => { const s = String(v ?? ''); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : ''; };
@@ -105,6 +108,21 @@ export function prioritiesFor(state, personId, { today = '', viewer = state?.me,
     })));
   const byDue = (a, b) => (a.due === b.due ? 0 : !a.due ? 1 : !b.due ? -1 : a.due < b.due ? -1 : 1);
   return rows.map((r, n) => [r, n]).sort(([a, x], [b, y]) => rank(a.priority) - rank(b.priority) || byDue(a, b) || x - y).map(([r]) => r);
+}
+
+/** Which section of the task list a row (prioritiesFor) goes in: its status when Stuck or In progress, else Up next with
+ *  a priority and No priority without one. */
+export function stageOf(row) {
+  const status = row?.item?.values?.status;
+  if (status === 'Stuck' || status === 'In progress') return status;
+  return row?.priority ? 'Up next' : 'No priority';
+}
+
+/** Rows grouped by stage, in STAGES order, empty stages left out; each keeps the rows' order (Urgent first, then due
+ *  date, then board order: prioritiesFor's). → [{ stage, rows }] */
+export function byStage(rows) {
+  const list = rows || [];
+  return STAGES.map((stage) => ({ stage, rows: list.filter((r) => stageOf(r) === stage) })).filter((g) => g.rows.length);
 }
 
 /** How many of someone's tasks wait on them, are Urgent, In progress or overdue, and are open (the Dashboard's numbers,

@@ -1953,6 +1953,26 @@ await check('priorities: the Dashboard’s tasks are the open tasks someone is o
   assert.deepEqual([work.MAX_URGENT, work.MAX_IN_PROGRESS, work.ACCEPT_WITHIN], [1, 2, 864e5]);
 });
 
+await check('stages: someone’s tasks in sections — Stuck, In progress, Up next (with a priority), No priority — each keeping the priority / due / board order', () => {
+  const st = taskState();
+  const stu = work.prioritiesFor(st, 'stu', { today: '2026-10-25', viewer: 'stu' });
+  assert.deepEqual(work.STAGES, ['Stuck', 'In progress', 'Up next', 'No priority']);
+  const groups = work.byStage(stu);
+  assert.deepEqual(groups.map((g) => [g.stage, names(g.rows)]), [
+    ['Stuck', 'w-high-soon'],
+    ['In progress', 'w-urgent d-1 w-high-late own-1 m-1 wip-1'],
+    ['No priority', 'w-none wip-2'],
+  ], 'Up next is left out when empty; Work in Progress rows go by their status');
+  assert.equal(groups.flatMap((g) => g.rows).length, stu.length, 'every row once');
+  const row = (status, priority) => ({ item: { values: { status } }, priority });
+  assert.deepEqual([row('Stuck', ''), row('In progress', 'Low'), row('Not started', 'High'), row('Not started', ''), row(undefined, 'Medium'), row('Done', '')]
+    .map(work.stageOf), ['Stuck', 'In progress', 'Up next', 'No priority', 'Up next', 'No priority']);
+  // Inside a stage, prioritiesFor's order holds: Urgent first, then the soonest due.
+  const upNext = work.byStage(work.prioritiesFor(st, 'ann', { today: '2026-10-25' })).find((g) => g.stage === 'Up next');
+  assert.equal(names(upNext.rows), 'ann-own w-ann d-3');
+  assert.deepEqual([work.byStage([]), work.byStage(null), work.stageOf(null)], [[], [], 'No priority']);
+});
+
 await check('priorities: Needs attention lists open team-board tasks that are overdue, Stuck, not accepted after a day, have no owner (or only people who can’t edit the board) or several people, or no priority', () => {
   const st = taskState();
   const now = Date.parse('2026-10-25T00:00:00Z'); // w-urgent was handed to Stu 12 hours before

@@ -7,7 +7,7 @@ import NewTaskModal from '@/components/board/NewTaskModal';
 import MyTasks from '@/components/work/MyTasks';
 import { boardHref } from '@/lib/boards';
 import { localClock, localYmd } from '@/lib/format';
-import { prioritiesFor, workload } from '@/lib/work';
+import { byStage, prioritiesFor, workload } from '@/lib/work';
 import { cn } from '@/lib/cn';
 
 const COUNTS = [
@@ -30,6 +30,8 @@ function PersonCard({ user }) {
   const rows = useRows(user.id);
   const load = workload(rows);
   const href = `#/team/${encodeURIComponent(user.id)}`;
+  // Top three by stage: what's stuck, what they're on, what's next (never the unprioritised backlog).
+  const top = byStage(rows).filter((g) => g.stage !== 'No priority').flatMap((g) => g.rows).slice(0, 3);
   return (
     <section aria-label={user.name} className="glass glass-rim flex flex-col rounded-[24px] p-5">
       <a href={href} className="flex items-center gap-3 rounded-2xl hover:underline">
@@ -48,7 +50,7 @@ function PersonCard({ user }) {
         ))}
       </dl>
       <ol className="mt-4 flex flex-col gap-1">
-        {rows.slice(0, 3).map(({ item, board, priority }) => (
+        {top.map(({ item, board, priority }) => (
           <li key={item.id}>
             <a href={boardHref(board, item.id)} className="flex items-center gap-2 rounded-xl px-1.5 py-1 hover:bg-white/10">
               <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: PRIORITY[priority] || 'rgba(255,255,255,.2)' }} aria-hidden="true" />

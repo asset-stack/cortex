@@ -1002,6 +1002,14 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Client page**: Overview starts with **Tasks** (the client's open linked tasks, `clientTasks()`, which now counts only
   boards with a Client column; *Waiting to be accepted* where it applies) and **Add task**. The old simple checklist
   (`client_tasks`) stays, as **Checklist**.
+- **Task lists by stage** (after use on real data: a long list where most tasks had no priority or due date read as one
+  blend in board order): My tasks and a Team page's tasks come in sections, **Stuck**, **In progress**, **Up next**
+  (Not started with a priority) and **No priority** (closed at first: the backlog to triage), each in the usual order
+  (Urgent first, then the soonest due, then board order; `stageOf()` / `byStage()` in `src/lib/work.js`). Waiting on you
+  stays one list. For anyone who can edit a task's board, its priority and status are pickers right in the list (focus
+  follows the row when it moves to another section), so a backlog is triaged without opening each task. Team cards'
+  top three come from Stuck, In progress and Up next. Repeating work (the Daily Automation tasks) belongs in Settings →
+  Routines, which puts it on each day's Today, not in the task lists as permanently In progress.
 - **Calendar**: opens this month only (the rest open on a click); this month's table has a ring and this week's row is
   tinted (`aria-current="date"`).
 - **Demo seed**: Josh has *New video from the Northside preview* (Previews, Northside, High) waiting on him from David,

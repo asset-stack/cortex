@@ -94,7 +94,7 @@ export function Popover({ anchor, open, onClose, children, width = 200, align = 
 /** Monday-style coloured cell; click to pick a value. `label` names the field for screen readers. `hints`: what each
  *  option means (Priority's), shown under it in the list and as the cell's tooltip. `readOnly` shows the same pill
  *  without the picker (view access). */
-export function LabelPicker({ value, options, onChange, className, allowEmpty = true, label, hints, readOnly = false }) {
+export function LabelPicker({ value, options, onChange, className, allowEmpty = true, label, hints, placeholder = '', readOnly = false }) {
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
   const color = value ? options[value] : null;
@@ -119,7 +119,7 @@ export function LabelPicker({ value, options, onChange, className, allowEmpty = 
         aria-label={label ? `${label}: ${value || 'Not set'}` : (value || 'Not set')}
         title={hint}
       >
-        {value || ' '}
+        {value || placeholder || ' '}
       </button>
       <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={hints ? 220 : 180}>
         <div role="listbox" aria-label={label} className="flex flex-col gap-1.5">

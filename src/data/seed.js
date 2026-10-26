@@ -87,7 +87,7 @@ function boards(clientId = () => '') {
           { subtasks: [{ id: id('s'), text: 'Draft constitution', done: true }, { id: id('s'), text: 'Lodge with the regulator', done: false }] }),
       ]),
       group('Backlog', '#e6eaf2', [
-        item('AssetStack Academy', { people: ['hello'], status: 'Not started', priority: 'Low', due: '' }),
+        item('AssetStack Academy', { people: ['hello'], status: 'Not started', priority: '', due: '' }),
       ]),
       // The former Admin board.
       group('Admin', '#ffe6b0', [
