@@ -79,9 +79,10 @@ Contacted → First meetings → Demos, and Work in Progress under the deals; `d
 `docs/PHASE2.md` §15), then `0010_outreach_gmail.sql` (Outreach counted from each mailbox's Gmail; section 14;
 `docs/PHASE2.md` §16), then `0011_team_access_read.sql` (everyone reads everyone's access levels, for the Team pages;
 `docs/PHASE2.md` §18), then `0012_crm_profile.sql` (a deal's and a client's profile: meetings, notes and links;
-`docs/PHASE2.md` §19).
+`docs/PHASE2.md` §19), then `0013_task_emails.sql` (a task's owner is emailed when a task is handed to them or an update
+is posted on it; section 15; `docs/PHASE2.md` §21).
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0013_…`). Run each new file
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0014_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one. From `0013`, each file ends with a line that
 prints `Cortex 00NN applied`: if the SQL editor doesn't show that row, the file didn't finish (look for the error above
 it). To check that a file with a new table ran, `select to_regclass('public.<table>');` shows the table's name, or
@@ -181,6 +182,11 @@ until merged, take it from its branch on GitHub). It adds the profile entries of
 with a link to their notes, and links), and gives a deal's entries to its client when it is made a client. Nothing
 existing changes: a client's older notes show in its timeline as they are. Run it **before** the new app goes live (the
 app that's live now works with it). Nobody needs to close Cortex, and it is safe to run again.
+
+**0013 on an existing database**: run it after `0012`, the same way (`supabase/migrations/0013_task_emails.sql`;
+until merged, take it from its branch on GitHub). The last row shows `Cortex 0013 applied`. It adds the task email queue
+and its rules (section 15). Nothing existing changes and nobody is emailed until an admin turns task emails on. It can
+run before or after the new app goes live. Nobody needs to close Cortex, and it is safe to run again.
 
 ### Upgrading an existing project
 
@@ -620,6 +626,35 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
 - Only `@assetstackai.com` mailboxes for now. `@assetstack.org` and `@assetstackai.com.au` are a separate Workspace:
   they need their own Google client there before they can connect (`docs/PHASE2.md` §16, *Later*).
 
+## 15. Task emails
+
+A task's **owner** gets an email when someone else **hands them the task** (or makes a new task for them) or **posts an
+update** on it, with a link straight to the task. Several at once go as one email. Nobody is emailed about what they
+did themselves. The emails come from one admin's Google account (the one connected in **Settings** → **Business**),
+named *Cortex*; replies go to that admin. Contract: `docs/PHASE2.md` §21.
+
+This needs section 11 steps 1–3 done (the Google client, the Supabase secrets and the `google` function).
+
+1. **Database**: run `0013_task_emails.sql` (section 2, *0013 on an existing database*). The last row says
+   `Cortex 0013 applied`.
+2. **Redeploy the `google` function**: Supabase → **Edge Functions** → `google` → **Code**. Replace all of it with the
+   new `supabase/functions/google/index.ts` (GitHub → **Raw**, copy all; before the merge, from the change's branch or
+   pull request) → **Deploy**. **Enforce JWT verification** stays **off**; the secrets don't change.
+3. **Deploy the new app** (it goes live with the merge to `main`), then reload Cortex.
+4. **Turn it on**: the admin whose address the emails should come from opens **Settings** → **Business**. Under
+   **Google account**, **Connect Google** if it isn't connected yet. Then under **Task emails** → **Send from my Google**.
+   It shows *Sent from …*.
+5. **Try it**: hand a task to a teammate (or post an update on theirs). Their email arrives within a minute or so.
+
+**How it sends**
+- Cortex asks for the emails to go a moment after the change is saved, and again every few minutes while anyone has
+  Cortex open, so an email missed (a tab closed straight away) still goes soon after. Nothing sends while nobody has
+  Cortex open; emails waiting more than two days are dropped.
+- An email goes only if the person is still the task's owner, still active and can still see its board when it is
+  sent. Work in Progress rows and done tasks being handed over don't send.
+- **Stop** (same place) turns them off. If the sending admin disconnects Google, emails wait and **Task emails** says
+  they need to reconnect; another admin can click **Send from my Google** instead.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -651,6 +686,7 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
 | A task's drawer on someone's own page offers no **Board** to move it to | By design: tasks move between team boards, or between groups of one page, never onto or off a personal page. |
 | An admin can't see another admin's notes (*Name’s notes*, once called *Name’s Projects*) | By design: admins see their own and staff's pages; only the SuperAdmin sees everyone's. |
 | No rename or delete on someone's notes page | Personal pages come and go with their person. Only team boards are renamed or deleted (by admins). |
+| Task emails don't arrive | **Settings** → **Business** → **Task emails**: *Run 0013_task_emails.sql* means section 15 step 1; *Off* means nobody turned them on (step 4); *needs to reconnect Google* or *Last send failed* says what went wrong. Nothing at all after an hour: check the `google` function is the new one (step 2). Also check the recipient's spam folder. |
 | "Couldn't load your workspace … crm_entries" after an update (before this was handled: now Cortex opens with a *Database update needed* notice instead) | `0012_crm_profile.sql` hasn't run. In the SQL editor, `select to_regclass('public.crm_entries');`: NULL means run the file (section 2) and look for an error if it doesn't finish; `crm_entries` means the table is there and PostgREST hasn't noticed: run `notify pgrst, 'reload schema';`. Then **Retry**. |
 | **Database update needed: run 00NN_….sql** at the top of Cortex (admins) | That migration hasn't run on this database: run it (section 2), then reload. Until then what it adds is off; everything else works. If `select to_regclass('public.<its table>');` already shows the table, PostgREST hasn't noticed it yet: run `notify pgrst, 'reload schema';`, then reload. Still there? Check that the SQL editor's project is the one in Cloudflare's `VITE_SUPABASE_URL`. |
 | A staff member reads a deal's or a client's profile but has no **Note**, **Meeting** or **Add link** | Expected with View: adding to a deal's profile needs **Pipeline** Edit, to a client's **Clients** Edit (**Settings** → **Team**). Someone else's entry is changed only by its author or an admin. |

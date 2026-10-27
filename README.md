@@ -16,6 +16,7 @@ One workspace for the team's daily work, the departments and team chat:
 | **Clients** | Its menu: **Clients**, then its team boards (**Demos**, **Previews** …). The client list: tabs **Clients · Invoices · Money in · Expenses · Usage**. Client cards and a drawer with overview (platform link, contacts with a **Billing** switch) and the client's **profile**: next steps (their linked tasks, **Add next step**), checklist, a timeline of notes and meetings (with what came over from the deal) and links, invoices (line items, GST 10%, print, PDF), **billing plans**, **contracts**, monthly **usage** with credits imported from each platform's export, and access. Plans raise invoices *Awaiting approval* (and an **Approve invoices** to-do); admins **Approve and send**, which emails the PDF tax invoice from their own Gmail to the billing contacts (or approve, send the PDF yourself and **Mark as sent**). New clients get a **Prepare contract** to-do; **Create contract** fills the Google Doc template into the contracts folder, signed with Google eSignature. Admins upload the weekly bank screenshot and **Mark paid**, log expenses with receipts and track software costs |
 | **Timesheet** | At 16:30 on weekdays (each person's own time zone) staff are asked to fill eight hourly blocks, pre-filled from what they did that day. Admins review everyone's week in Settings |
 | **World clocks** | At the top of every page: the time and day in Sydney, Tbilisi and Manila, with a sun or moon for day or night there |
+| **Task emails** | A task's owner gets an email when someone else hands them the task or posts an update on it, with a link to the task; sent from the Google account of the admin who turns them on in **Settings** → **Business** |
 | **Team chat** | Slack-style dock at the bottom of every page: groups, create group, add members, @mentions with autocomplete and highlight, unread and mention counts |
 | **Settings** (admins) | **Team** (roles, active flags and staff module access; SuperAdmin only), **Routines**, **Timesheets**, **Business** details for invoices, **Outreach** (the agent's sheet link, the mailboxes with their addresses, and **Connect Gmail** per mailbox), CSV **Import** from the old platform |
 
@@ -95,9 +96,9 @@ Fill in the project URL and the anon (publishable) key from the Supabase dashboa
 [`DEPLOY.md`](DEPLOY.md) has the click-by-click setup: Supabase (Sydney), Google sign-in, Cloudflare Pages,
 the custom domain, inviting staff, importing old data, and a security checklist. A database set up before the
 team workflow needs one upgrade step (`0002_team_workflow.sql`, see *Upgrading an existing project*), then each
-newer migration in order (`0003_…` to `0010_…`). Invoice email and contracts need the Google setup in DEPLOY.md
+newer migration in order (`0003_…` to `0013_…`). Invoice email and contracts need the Google setup in DEPLOY.md
 section 11; Outreach also needs section 12 (the agent's sheet and the mailboxes), and section 14 to count mailboxes
-from Gmail; the Calendar's Google meetings section 13. Security headers for Cloudflare
+from Gmail; the Calendar's Google meetings section 13; task emails section 15. Security headers for Cloudflare
 Pages are in `public/_headers`.
 
 ## Not done yet

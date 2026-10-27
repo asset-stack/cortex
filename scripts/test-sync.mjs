@@ -1857,6 +1857,20 @@ await check('owners: Projects, Marketing, Outreach and Clients boards have one O
     .map((i) => i.id).join(''), 'uhln');
 });
 
+await check('task emails: mailsOwner — a new or handed-over task with someone else as owner, or an update on someone else’s task; not your own, a kept owner, a done hand-over or Work in Progress', () => {
+  const task = (owner, extra = {}) => ({ values: { people: owner ? [owner] : [] }, ...extra });
+  assert.equal(work.mailsOwner(task('ben'), { me: 'ana' }), true, 'a new task for Ben');
+  assert.equal(work.mailsOwner(task('ana'), { me: 'ana' }), false, 'your own task');
+  assert.equal(work.mailsOwner(task(''), { me: 'ana' }), false, 'no owner');
+  assert.equal(work.mailsOwner(task('ben'), { me: 'ana', before: 'ana' }), true, 'handed to Ben');
+  assert.equal(work.mailsOwner(task('ben'), { me: 'ana', before: 'ben' }), false, 'Ben kept it');
+  assert.equal(work.mailsOwner(task('ben', { done: true }), { me: 'ana', before: 'ana' }), false, 'a done task handed over');
+  assert.equal(work.mailsOwner(task('ben'), { me: 'ana', update: true }), true, 'an update on Ben’s task');
+  assert.equal(work.mailsOwner(task('ben', { done: true }), { me: 'ana', update: true, before: 'ben' }), true, 'an update on a done task still goes');
+  assert.equal(work.mailsOwner(task('ana'), { me: 'ana', update: true }), false, 'your own update on your own task');
+  assert.equal(work.mailsOwner(task('ben'), { me: 'ana', update: true, module: 'pipeline' }), false, 'Work in Progress');
+});
+
 await check('owners: nextValues — picking an owner sets people to them; handing it to someone else records who and when; taking it or clearing it forgets that', () => {
   const now = '2026-10-25T01:00:00.000Z';
   const base = { people: ['ana'], status: 'In progress', priority: 'High' };

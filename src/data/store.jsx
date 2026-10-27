@@ -17,7 +17,7 @@ import {
   isYmd, makeTodo, mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
 } from '@/lib/automations';
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
-import { acceptedValues, boardValues, itemRef, newTaskValues, nextValues, todoForItem, todoItemId } from '@/lib/work';
+import { acceptedValues, boardValues, itemRef, mailsOwner, newTaskValues, nextValues, ownerOf, todoForItem, todoItemId } from '@/lib/work';
 import { canAddEntry, canChangeEntry, carryDealEntriesLocal, cleanEntry, dropDealEntriesLocal } from '@/lib/crm';
 import { categoryOf } from '@/lib/timesheet';
 import { cleanTool } from '@/lib/tools';
@@ -256,6 +256,14 @@ function createActions(mutate, mode) {
     const b = findBoard(d, boardId);
     return b && !b.owner ? fn(d, b) : false;
   });
+  // Task emails (0013, live mode): the database queues one when a task goes to someone else or someone else posts an
+  // update on it; this asks the google function to send once the save has landed. `fn` → whether it may have queued.
+  const mailing = (fn) => {
+    let queued = false;
+    const result = fn(() => { queued = true; });
+    if (queued && result !== false) mode.taskMail?.();
+    return result;
+  };
   // Your own to-dos, or anyone's for admins.
   const mayTodo = (d, t) => Boolean(t) && (t.assignee === d.me || isAdmin(d));
   // Calendar events (0009): any active teammate adds one; the one who added it, or an admin, edits and deletes it.
@@ -398,7 +406,7 @@ function createActions(mutate, mode) {
     // Into `groupId` (else the board's first group; a board with none gets one), with you as its owner unless `values`
     // (New task: owner, priority, due, client …) say otherwise; a task made for someone else waits on them to accept it
     // (src/lib/work.js newTaskValues). → id
-    addItem: (boardId, groupId, name = 'New task', values = null) => onBoard(boardId, (d, b) => {
+    addItem: (boardId, groupId, name = 'New task', values = null) => mailing((queue) => onBoard(boardId, (d, b) => {
       if (!b.groups.length) b.groups.push(firstGroup(b.module));
       const g = b.groups.find((x) => x.id === groupId) || b.groups[0];
       const item = newItem({ name: textOf(name).trim() || 'New task', values: {} }, [d.me]);
@@ -406,9 +414,10 @@ function createActions(mutate, mode) {
         item.values = boardValues(b, seeing(d, b, newTaskValues(values, { me: d.me, now: nowIso() })));
         item.done = item.values.status === 'Done';
       }
+      if (mailsOwner(item, { me: d.me, module: b.module })) queue();
       g.items.push(item);
       return item.id; // so the caller can open it
-    }),
+    })),
     // The owner accepts a task someone handed them (Waiting on you on the Dashboard).
     acceptItem: (boardId, itemId) => onBoard(boardId, (d) => {
       const { item } = findItem(d, boardId, itemId);
@@ -419,19 +428,21 @@ function createActions(mutate, mode) {
     }),
     // Values as the board keeps them (src/lib/work.js boardValues: a Department only on team boards, '' for the board's
     // own; Also on only where it has one, and only teammates).
-    updateItem: (boardId, itemId, patch = {}) => onBoard(boardId, (d, b) => {
+    updateItem: (boardId, itemId, patch = {}) => mailing((queue) => onBoard(boardId, (d, b) => {
       const { item } = findItem(d, boardId, itemId);
       if (!item) return false;
       const { values, id: _id, updates: _updates, subtasks: _subtasks, ...rest } = patch;
       if ('name' in rest && !textOf(rest.name).trim()) delete rest.name; // a task always has a name
       Object.assign(item, rest);
       if (values) {
+        const before = ownerOf(item);
         const had = Array.isArray(item.values?.also) ? item.values.also : [];
         item.values = boardValues(b, seeing(d, b, nextValues(item.values, values, { me: d.me, now: nowIso() }), had)); // handing it over records who and when
         if ('status' in values) item.done = item.values.status === 'Done'; // done always follows status
+        if (mailsOwner(item, { me: d.me, before, module: b.module })) queue();
       }
       return true;
-    }),
+    })),
     deleteItem: (boardId, itemId) => onBoard(boardId, (d, b) => {
       if (!findItem(d, boardId, itemId).item) return false;
       b.groups.forEach((g) => { g.items = g.items.filter((i) => i.id !== itemId); });
@@ -498,12 +509,13 @@ function createActions(mutate, mode) {
     }),
 
     // Someone @named in an update sees it in My Work → Mentions (src/lib/work.js); the task's owner stays as it is.
-    addUpdate: (boardId, itemId, text) => onBoard(boardId, (d) => {
+    addUpdate: (boardId, itemId, text) => mailing((queue) => onBoard(boardId, (d, b) => {
       const { item } = findItem(d, boardId, itemId);
       if (!item || !textOf(text).trim()) return false;
       item.updates.unshift({ id: uid(), user: d.me, text: textOf(text).trim(), ts: nowIso() });
+      if (mailsOwner(item, { me: d.me, update: true, module: b.module })) queue();
       return true;
-    }),
+    })),
     // Your own updates, or anyone's for admins (as the database allows).
     editUpdate: (boardId, itemId, updateId, text) => onBoard(boardId, (d) => {
       const u = findItem(d, boardId, itemId).item?.updates.find((x) => x.id === updateId);
@@ -1225,6 +1237,11 @@ function createActions(mutate, mode) {
       return ok;
     },
     refreshGoogle: () => mode.refreshGoogle(),
+    // Task emails (0013; admins, live mode): who sends them (task_mail_status), sending them from my Google
+    // (task_mail_use_me) or stopping them (task_mail_off). → { ok: true, data } | { ok: false, error, missing?, demo? }
+    taskMailStatus: () => mode.taskMailRpc('task_mail_status'),
+    taskMailUseMe: () => mode.taskMailRpc('task_mail_use_me'),
+    taskMailOff: () => mode.taskMailRpc('task_mail_off'),
     // A short email to yourself, from yourself. → Promise<{ ok } | { ok: false, error }>
     sendTestEmail: async () => {
       const me = mode.read((s) => s.users.find((u) => u.id === s.me));
@@ -1448,6 +1465,7 @@ function DemoProvider({ children }) {
     calendarStop: async () => false,
     gmailDisconnect: async () => false,
     refreshGoogle: async () => {},
+    taskMailRpc: async () => ({ ok: false, demo: true, error: 'Live mode only.' }),
   }), [mutate, commit]);
 
   const outreach = useMemo(() => demoOutreach(state), [state]);
@@ -1476,6 +1494,18 @@ function demoCalendar() {
     },
     sync: async () => ({ ok: false, error: 'Google works in live mode only.' }),
   };
+}
+
+// The google Edge Function (supabase/functions/google), live mode. → { ok: true, ...data } | { ok: false, error }
+async function invokeFunction(name, body) {
+  try {
+    const { data, error } = await supabase.functions.invoke(name, { body });
+    if (!error) return { ok: true, ...(data || {}) };
+    const detail = await error.context?.json?.().catch(() => null);
+    return { ok: false, error: detail?.error || error.message || 'Google request failed' };
+  } catch (e) {
+    return { ok: false, error: e?.message || 'Google request failed' };
+  }
 }
 
 const MEETING_COLUMNS = 'id, user_id, title, busy, all_day, start_date, end_date, start_at, end_at';
@@ -2012,6 +2042,25 @@ function LiveProvider({ userId, children }) {
   // Edits waiting for the 400 ms debounce go now (at most 3 s), for reads and calls that need them saved.
   const flushSoon = useCallback(() => Promise.race([engine.current?.flush(), wait(3000)]).catch(() => {}), []);
 
+  // Task emails (0013): the database queues them as tasks are handed over and updates posted; the google function sends
+  // what is queued. Asked shortly after such a save (once it has landed), on opening Cortex and every 5 minutes while
+  // it's open, so one that missed its turn (a closed tab, the function busy) still goes. Failures are quiet: the queue
+  // keeps them (before 0013 runs, the call just fails).
+  const mailTimer = useRef(null);
+  const sendTaskMail = useCallback(() => {
+    clearTimeout(mailTimer.current);
+    mailTimer.current = setTimeout(async () => {
+      await flushSoon();
+      await invokeFunction('google/task-mail', {});
+    }, 1500);
+  }, [flushSoon]);
+  useEffect(() => {
+    if (!ready) return undefined;
+    sendTaskMail();
+    const every = setInterval(() => { if (document.visibilityState === 'visible') sendTaskMail(); }, 5 * 60_000);
+    return () => { clearInterval(every); clearTimeout(mailTimer.current); };
+  }, [ready, sendTaskMail]);
+
   const actions = useMemo(() => {
     const fail = (message) => { setSync({ state: 'error', message }); };
     return createActions(mutate, {
@@ -2060,17 +2109,7 @@ function LiveProvider({ userId, children }) {
         }
       },
       removeFile: (path) => { supabase.storage.from(BUCKET).remove([path]).catch(() => {}); },
-      // The google Edge Function (supabase/functions/google). → { ok: true, ...data } | { ok: false, error }
-      invoke: async (name, body) => {
-        try {
-          const { data, error } = await supabase.functions.invoke(name, { body });
-          if (!error) return { ok: true, ...(data || {}) };
-          const detail = await error.context?.json?.().catch(() => null);
-          return { ok: false, error: detail?.error || error.message || 'Google request failed' };
-        } catch (e) {
-          return { ok: false, error: e?.message || 'Google request failed' };
-        }
-      },
+      invoke: invokeFunction,
       googleDisconnect: async () => {
         try {
           const { data, error } = await supabase.rpc('google_disconnect');
@@ -2115,8 +2154,19 @@ function LiveProvider({ userId, children }) {
         }
       },
       refreshGoogle,
+      taskMail: sendTaskMail,
+      taskMailRpc: async (name) => {
+        try {
+          const { data, error } = await supabase.rpc(name);
+          if (!error) return { ok: true, data };
+          // The function isn't there: 0013 hasn't run yet.
+          return { ok: false, missing: error.code === 'PGRST202' || /could not find the function/i.test(error.message || ''), error: error.message };
+        } catch (e) {
+          return { ok: false, error: e?.message || 'Request failed' };
+        }
+      },
     });
-  }, [mutate, refreshGoogle, flushSoon]);
+  }, [mutate, refreshGoogle, flushSoon, sendTaskMail]);
 
   const outreach = useMemo(() => liveOutreach(actions.syncOutreach, flushSoon, actions.syncOutreachGmail), [actions, flushSoon]);
   const calendar = useMemo(() => liveCalendar(actions.syncCalendar), [actions]);

@@ -4,7 +4,7 @@ Cortex is AssetStack's internal ops platform (Vite + React 18 + Tailwind 3 + luc
 It is separate from the marketing site (`AssetLanding`) and from the signed-in product
 (bunburycouncil.assetstack.site). The backend contract is `docs/BACKEND.md` (phase 1) plus `docs/PHASE2.md`
 (team workflow: roles, module access, the Dashboard (was My Work), finance, timesheets, boards, Outreach, Calendar,
-Outreach from Gmail, owners and priorities, Team);
+Outreach from Gmail, owners and priorities, Team, task emails);
 setup steps are in `DEPLOY.md`.
 
 ## Rules
@@ -16,8 +16,8 @@ setup steps are in `DEPLOY.md`.
 - Keep demo mode working. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` the app runs on localStorage
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
-  migration that has been applied** (`0001`–`0012` are live in production): fix forward in the next file
-  (`0013_….sql`). A migration must never mention `module_level` unless it redefines it
+  migration that has been applied** (`0001`–`0012` are live in production; `0013` is written, not yet run): fix forward in
+  the next file (`0014_….sql`). A migration must never mention `module_level` unless it redefines it
   (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table
   keeps row-level security on with policies that require `is_staff()` (directly or through `is_admin()` /
   `can_view()` / `can_edit()` / the board helpers), and is added to the `supabase_realtime` publication if it is synced. Extend
@@ -88,6 +88,11 @@ setup steps are in `DEPLOY.md`.
   Sharing a calendar is an explicit flag (`private.google_accounts.calendar`, set only after a calendar connect, cleared
   by Stop sharing), never inferred from the stored Google scopes. Staff may use Google only to connect their calendar
   (connect with purpose `calendar`); everything else stays admins only.
+- **Task emails (0013)**: the database decides who is emailed (`queue_task_assigned` / `queue_task_update` triggers into
+  `private.task_mail`, and `task_mail_claim()` re-checks as the recipient when sending); the `google` function's
+  `task-mail` route only sends what it claims, from the sender admin's Gmail (`task_mail_use_me`). The app never reads
+  or writes the queue; `mailsOwner()` (`src/lib/work.js`) only says when to ask the function to send. Change the
+  triggers and `mailsOwner()` together.
 - Automations run in the database in live mode (`contact_pipeline` trigger, `ensure_todos` and
   `generate_due_invoices` RPCs) and in `src/lib/automations.js` in demo mode. Change both together; live mode
   never creates those rows client-side.

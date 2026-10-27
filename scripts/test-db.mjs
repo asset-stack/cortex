@@ -36,6 +36,7 @@ const migration9 = await readFile(new URL('supabase/migrations/0009_calendar.sql
 const migration10 = await readFile(new URL('supabase/migrations/0010_outreach_gmail.sql', root), 'utf8');
 const migration11 = await readFile(new URL('supabase/migrations/0011_team_access_read.sql', root), 'utf8');
 const migration12 = await readFile(new URL('supabase/migrations/0012_crm_profile.sql', root), 'utf8');
+const migration13 = await readFile(new URL('supabase/migrations/0013_task_emails.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -5669,6 +5670,197 @@ async function phase12(ctx) {
   return ctx;
 }
 
+// ── 0013: task emails (the queue, claim and settings) ─────────────────────────────────────────────────────────────
+
+async function phase13(ctx) {
+  const { alice, boss, david, hello } = ctx;
+
+  // 104. Runs on top of 0012, whole, again, and statement by statement; ends with its done row.
+  await as(null);
+  const run = async () => db.exec(migration13).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const first = await run();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration13, { continueOnError: true });
+  const body = migration13.replace(/--.*$/gm, '').trim();
+  const doneRow = Array.isArray(first) ? first.at(-1)?.rows?.[0]?.done : null;
+  check('104. 0013 runs on top of 0012, re-runs whole and statement by statement, never mentions module_level, and ends with its done row',
+    doneRow === 'Cortex 0013 applied' && Array.isArray(second) && !splitErrors.length && /^begin;/i.test(body)
+      && /commit;\s*select 'Cortex 0013 applied' as done;$/i.test(body) && !migration13.includes('module_level'),
+    { first: Array.isArray(first) ? 'ok' : first, second: Array.isArray(second) ? 'ok' : second, splitErrors });
+  if (!Array.isArray(first)) return null;
+
+  // Staff at the default (Edit) on Operations for this phase; what earlier phases set comes back at the end.
+  await as(null);
+  const access = await rows("select user_id, level from module_access where user_id = any($1) and module = 'projects'", [[alice, hello]]);
+  await db.query("delete from module_access where user_id = any($1) and module = 'projects'", [[alice, hello]]);
+  const board = (await one("select id from boards where module = 'projects' and owner_id is null order by position, name limit 1")).id;
+  const group = (await one('select id from board_groups where board_id = $1 order by position, name limit 1', [board])).id;
+  const wipBoard = (await one("insert into boards (module, name, position) values ('pipeline', 'Example WIP', 9) returning id")).id;
+  const wip = { board: wipBoard, grp: (await one("insert into board_groups (board_key, board_id, name, position) values ('pipeline', $1, 'Active', 0) returning id", [wipBoard])).id };
+  const task = async (name, owner, { on = board, grp = group, key = 'projects', status = 'Not started' } = {}) => (await one(
+    `insert into items (board_key, board_id, group_id, name, "values") values ($1, $2, $3, $4, $5) returning id`,
+    [key, on, grp, name, { people: owner ? [owner] : [], status, priority: 'High', due: '2026-10-30' }])).id;
+  const queue = async () => { await as(null); return rows('select kind, item_id, update_id, recipient, actor, sent_at from private.task_mail order by id'); };
+  const svc = async () => { await db.exec('set role service_role'); await db.query("select set_config('request.jwt.claim.sub', '', false)"); };
+  await as(null);
+  await db.query('delete from private.task_mail');
+
+  // 105. Queued: a task made for someone else, a task handed to someone else, an update on someone else's task. Not: your
+  // own task, an edit that keeps the owner, your own update, rows written with no signed-in user, Work in Progress rows.
+  await as(boss);
+  const forAlice = await task('Council landing page', alice);
+  await task('Mine', boss);
+  const handed = await task('Tender pack', boss);
+  await as(alice);
+  await db.query(`update items set "values" = jsonb_set("values", '{status}', '"Working on it"') where id = $1`, [forAlice]);
+  await db.query("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Draft is up')", [forAlice, alice]);
+  await as(boss);
+  await db.query(`update items set "values" = jsonb_set("values", '{people}', $2::jsonb) where id = $1`, [handed, JSON.stringify([hello])]);
+  await as(hello);
+  const update = (await one("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Can you check the hero copy?') returning id", [forAlice, hello])).id;
+  await as(null);
+  await task('Imported', alice);
+  await as(boss);
+  await task('Example Shire', alice, { on: wip.board, grp: wip.grp, key: 'pipeline' });
+  const q1 = await queue();
+  const shape = q1.map((r) => `${r.kind}:${r.item_id === forAlice ? 'forAlice' : r.item_id === handed ? 'handed' : r.item_id}:${r.recipient === alice ? 'alice' : r.recipient === hello ? 'hello' : r.recipient}:${r.actor === boss ? 'boss' : r.actor === hello ? 'hello' : r.actor}`);
+  check('105. the queue gets a task made for someone else, one handed to someone else and an update on someone else’s task; not your own work, a kept owner, imports from the SQL editor or Work in Progress',
+    shape.join() === 'assigned:forAlice:alice:boss,assigned:handed:hello:boss,update:forAlice:alice:hello' && q1[2].update_id === update, shape);
+
+  // 106. A sync write (PostgREST upsert) that keeps the owner queues nothing; one that hands the task over queues once.
+  await as(alice);
+  const row = await one('select id, board_key, group_id, board_id, position, name, "values", done from items where id = $1', [forAlice]);
+  const same = await postgrestUpsert('items', [{ ...row, values: row.values }]);
+  const afterSame = (await queue()).length;
+  await as(alice);
+  const moved = await postgrestUpsert('items', [{ ...row, values: { ...row.values, people: [david] } }]);
+  const afterMove = await queue();
+  check('106. a sync upsert that keeps the owner queues nothing; one handing the task to someone else queues one email for them',
+    same === null && moved === null && afterSame === 3 && afterMove.length === 4 && afterMove[3].recipient === david && afterMove[3].actor === alice,
+    { same, moved, afterSame, last: afterMove[3] });
+  await as(alice);
+  await postgrestUpsert('items', [{ ...row, values: { ...row.values, people: [alice] } }]); // she takes it back: nothing queued
+
+  // 107. Only the database and the function touch the queue: staff and admins can't read it or claim; the status and
+  // sender settings are admins'.
+  await as(alice);
+  const staffRead = await error('select * from private.task_mail');
+  const staffClaim = await error('select task_mail_claim()');
+  const staffStatus = await error('select task_mail_status()');
+  const staffUse = await error('select task_mail_use_me()');
+  await as(boss);
+  const adminClaim = await error('select task_mail_claim()');
+  const adminDone = await error("select task_mail_done('{1}', '')");
+  const adminStatus = await one('select task_mail_status() as s');
+  check('107. nobody signed in reads the queue or claims it; only admins read the status or change the sender',
+    staffRead !== null && staffClaim !== null && staffStatus !== null && staffUse !== null && adminClaim !== null && adminDone !== null
+      && adminStatus.s.sender_id === null && adminStatus.s.ready === false && adminStatus.s.waiting === 4,
+    { staffRead, staffClaim, staffStatus, staffUse, adminClaim, adminDone, adminStatus });
+
+  // 108. No sender: nothing is claimed. An admin without Gmail send can't be the sender; with it they can.
+  await svc();
+  const idle = await one('select task_mail_claim() as c');
+  await as(null);
+  await db.query('delete from private.google_accounts where user_id = $1', [boss]);
+  await as(boss);
+  const noGoogle = await error('select task_mail_use_me()');
+  await as(null);
+  await db.query(`insert into private.google_accounts (user_id, email, refresh_token, scopes) values ($1, 'boss@example.com', 'r',
+    'openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/drive')
+    on conflict (user_id) do update set scopes = excluded.scopes, refresh_token = 'r'`, [boss]);
+  await as(boss);
+  const chosen = await one('select task_mail_use_me() as ok');
+  const ready = (await one('select task_mail_status() as s')).s;
+  await as(null);
+  const unclaimed = (await one('select count(*)::int as n from private.task_mail where claimed_at is not null')).n;
+  check('108. without a sender nothing is claimed; an admin needs Gmail send to become the sender, then the status shows it ready',
+    idle.c.sender === null && idle.c.mails.length === 0 && unclaimed === 0 && noGoogle !== null && chosen.ok === true
+      && ready.ready === true && ready.sender_id === boss && ready.sender_email === 'boss@example.com',
+    { idle: idle.c, noGoogle, ready });
+
+  // 109. A claim: one entry per person with what each email needs; what's no longer theirs (Council landing page went to
+  // David, then Alice took it back) is dropped unsent; a second claim straight after gets nothing.
+  await svc();
+  const claim = (await one('select task_mail_claim() as c')).c;
+  const again = (await one('select task_mail_claim() as c')).c;
+  await as(null);
+  const dropped = (await rows("select recipient from private.task_mail where error = 'not sent: no longer theirs'")).map((r) => r.recipient);
+  const byTo = Object.fromEntries(claim.mails.map((m) => [m.to, m]));
+  const aliceMail = byTo['alice@assetstackai.com'] || claim.mails.find((m) => m.events.some((e) => e.item === 'Council landing page'));
+  const helloMail = claim.mails.find((m) => m.events.some((e) => e.item === 'Tender pack'));
+  const kinds = (m) => (m?.events || []).map((e) => `${e.kind}:${e.item}`).join();
+  check('109. a claim groups by person (Alice: assigned and an update; Hello: Tender pack), with board, values, author and update text; David’s, no longer his, is dropped; a second claim gets nothing',
+    claim.sender === boss && claim.mails.length === 2
+      && kinds(aliceMail) === 'assigned:Council landing page,update:Council landing page'
+      && kinds(helloMail) === 'assigned:Tender pack'
+      && aliceMail.events[1].actor && aliceMail.events[1].text === 'Can you check the hero copy?' && aliceMail.events[0].module === 'projects'
+      && aliceMail.events[0].board_id === board && aliceMail.events[0].values.priority === 'High' && aliceMail.events[0].values.due === '2026-10-30'
+      && dropped.length === 1 && dropped[0] === david && again.mails.length === 0,
+    { mails: claim.mails.map((m) => ({ to: m.to, kinds: kinds(m) })), dropped, again: again.mails.length });
+
+  // 110. Done: sent rows are kept as sent; a failure frees them for a later claim (five tries at most) and shows in the status.
+  await svc();
+  await db.query("select task_mail_done($1, '')", [aliceMail.ids]);
+  await db.query("select task_mail_done($1, 'Gmail said no')", [helloMail.ids]);
+  await as(boss);
+  const afterDone = (await one('select task_mail_status() as s')).s;
+  await as(null);
+  await db.query('update private.task_mail set claimed_at = null where id = any($1)', [helloMail.ids]);
+  await svc();
+  const retry = (await one('select task_mail_claim() as c')).c;
+  await as(null);
+  await db.query('update private.task_mail set attempts = 5, claimed_at = null where id = any($1)', [helloMail.ids]);
+  await svc();
+  const exhausted = (await one('select task_mail_claim() as c')).c;
+  await as(null);
+  const sent = (await one('select count(*)::int as n from private.task_mail where id = any($1) and sent_at is not null', [aliceMail.ids])).n;
+  check('110. done marks rows sent (and the status’s last send); a failure is claimed again later, five tries at most, and shows as the last error',
+    sent === aliceMail.ids.length && afterDone.error === 'Gmail said no' && Boolean(afterDone.sent_at) && afterDone.waiting === 1
+      && retry.mails.length === 1 && retry.mails[0].ids.join() === helloMail.ids.join() && exhausted.mails.length === 0,
+    { sent, afterDone, retry: retry.mails.length, exhausted: exhausted.mails.length });
+
+  // 111. Checked as the person when sent: someone who can no longer see the board, or who isn't active, gets nothing;
+  // a deleted update takes its email with it; the claim leaves the caller's identity as it was.
+  await as(null);
+  await db.query('delete from private.task_mail');
+  await as(boss);
+  const forHello = await task('Board pack', hello);
+  const doomed = await task('Short lived', alice);
+  await as(hello);
+  const gone = (await one("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Delete me') returning id", [doomed, hello])).id;
+  await db.query('delete from item_updates where id = $1', [gone]);
+  await as(david);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', 'none') on conflict (user_id, module) do update set level = 'none'", [hello]);
+  await svc();
+  const blocked = (await one('select task_mail_claim() as c')).c;
+  const who = (await one("select coalesce(current_setting('request.jwt.claim.sub', true), '') as sub")).sub;
+  await as(null);
+  const helloRow = await one('select sent_at, error from private.task_mail where item_id = $1', [forHello]);
+  await as(david);
+  await db.query("delete from module_access where user_id = $1 and module = 'projects'", [hello]);
+  check('111. someone who can no longer see the board gets nothing (closed unsent); a deleted update’s email goes with it; the claim leaves the caller as it was',
+    blocked.mails.length === 1 && blocked.mails[0].events.every((e) => e.item === 'Short lived' && e.kind === 'assigned')
+      && Boolean(helloRow?.sent_at) && helloRow.error === 'not sent: no longer theirs' && who === '',
+    { mails: blocked.mails.map((m) => kinds(m)), helloRow, who });
+
+  // 112. Stop: admins only; then nothing is claimed.
+  await as(alice);
+  const staffOff = await error('select task_mail_off()');
+  await as(boss);
+  const off = await one('select task_mail_off() as ok');
+  await svc();
+  const afterOff = (await one('select task_mail_claim() as c')).c;
+  await as(null);
+  await db.query('delete from private.task_mail');
+  check('112. only admins stop task emails; stopped, nothing is claimed',
+    staffOff !== null && off.ok === true && afterOff.sender === null && afterOff.mails.length === 0, { staffOff, afterOff });
+  for (const a of access) {
+    await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', $2) on conflict (user_id, module) do update set level = excluded.level", [a.user_id, a.level]);
+  }
+  return ctx;
+}
+
 async function runSplit(dbx, sql, { continueOnError = false, skip = () => false } = {}) {
   const errors = [];
   for (const st of splitSql(sql)) {
@@ -5786,7 +5978,8 @@ try {
   const ctx10 = ctx9 && await phase10(ctx9);
   const ctx11 = ctx10 && await phase11(ctx10);
   const ctx12 = ctx11 && await phase12(ctx11);
-  if (ctx12) await syncWriteCheck(ctx12);
+  const ctx13 = ctx12 && await phase13(ctx12);
+  if (ctx13) await syncWriteCheck(ctx13);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);

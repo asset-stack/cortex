@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '@/data/store';
 import { hashParam } from '@/lib/router';
 import { cn } from '@/lib/cn';
@@ -123,6 +123,60 @@ function GoogleAccount() {
   );
 }
 
+/** Task emails (0013): a task's owner hears by email when someone else hands them the task or posts an update on it,
+ *  sent from one admin's connected Google account. Admins choose theirs (Send from my Google) or stop them. */
+function TaskEmails() {
+  const { state, actions, google } = useStore();
+  const [status, setStatus] = useState(null); // { ok, data } | { ok: false, error, missing?, demo? } | null while checking
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null); // { ok, text } | null
+  const load = useCallback(async () => setStatus(await actions.taskMailStatus()), [actions]);
+  useEffect(() => { load(); }, [load, google.connected]);
+
+  const act = async (call, done) => {
+    setBusy(true);
+    setNote(null);
+    const res = await call();
+    setNote(res.ok ? { ok: true, text: done } : { ok: false, text: res.error || 'Something went wrong' });
+    await load();
+    setBusy(false);
+  };
+  const useMine = () => act(actions.taskMailUseMe, 'Task emails now come from your Google account');
+  const stop = () => act(actions.taskMailOff, 'Task emails stopped');
+
+  const s = status?.ok ? status.data || {} : null;
+  const mine = s && s.sender_id && s.sender_id === state.me;
+  let body;
+  if (!status) body = <span className="dimmer">Checking…</span>;
+  else if (status.demo) body = <span className="dim">Live mode only</span>;
+  else if (status.missing) body = <span className="text-amber-200">Run <code className="font-semibold">0013_task_emails.sql</code> in the Supabase SQL editor first</span>;
+  else if (!s) body = <span className="text-amber-200">Couldn’t check task emails: {status.error}</span>;
+  else {
+    const from = s.sender_email || s.sender_name;
+    body = (
+      <>
+        {s.sender_id
+          ? <span className={cn('min-w-0 break-all', !s.ready && 'text-amber-200')}>
+              {s.ready ? <>Sent from <span className="font-semibold">{from}</span></> : `${s.sender_name || 'The sender'} needs to reconnect Google`}
+            </span>
+          : <span className="dim">Off{google.connected ? '' : ' · Connect Google above first'}</span>}
+        {!mine && google.connected && (
+          <button type="button" onClick={useMine} disabled={busy} className={cn(BUTTON, s.sender_id ? 'chip' : 'btn-primary')}>Send from my Google</button>
+        )}
+        {s.sender_id && <button type="button" onClick={stop} disabled={busy} className={cn(BUTTON, 'chip')}>Stop</button>}
+      </>
+    );
+  }
+  const message = note || (s?.sender_id && s.error ? { ok: false, text: `Last send failed: ${s.error}` } : null);
+  return (
+    <>
+      <h2 className="mt-7 font-extrabold text-[16px]">Task emails</h2>
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">{body}</div>
+      <p role="status" className={cn('text-[12.5px]', message && 'mt-2', message?.ok ? 'text-emerald-200' : 'text-amber-200')}>{message?.text}</p>
+    </>
+  );
+}
+
 /** Business details used on invoices: name, ABN, contact, bank and invoice settings; your Google account; and the
  *  contract template and folder (Google Drive links). */
 export default function Business() {
@@ -161,6 +215,7 @@ export default function Business() {
         <Field label="Invoice prefix" value={org.invoicePrefix} onChange={set('invoicePrefix')} />
       </div>
       <GoogleAccount />
+      <TaskEmails />
       <h2 className="mt-7 font-extrabold text-[16px]">Contracts</h2>
       <div className="mt-3 grid gap-4 sm:grid-cols-2">
         <Field label="Contract template" type="url" value={org.contractTemplate} onChange={set('contractTemplate')} hint={templateHint(org.contractTemplate)} />

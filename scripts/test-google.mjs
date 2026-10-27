@@ -3499,5 +3499,118 @@ await check('gmail sync: no connection, a mailbox gone mid-run, a failed save or
   assert.deepEqual(pick(queued.data, ['failed', 'pending']), { failed: 1, pending: 2 });
 });
 
+// ── Task emails (0013) ──────────────────────────────────────────────────────────────────────────────────────────
+
+const SENDER = 'c0000000-0000-4000-8000-0000000000b1';
+const BOARD = 'c0000000-0000-4000-8000-0000000000c1';
+const TASK = 'c0000000-0000-4000-8000-0000000000d1';
+const tEvent = (over = {}) => ({
+  kind: 'assigned', at: '2026-10-27T01:00:00Z', actor: 'Josh Example', item: 'Council landing page', item_id: TASK, board_id: BOARD,
+  board: 'Landing Page', board_owner: '', module: 'projects', values: { priority: 'High', due: '2026-10-30', status: 'Not started' }, text: '',
+  ...over,
+});
+const tMail = (over = {}) => ({ ids: [1], to: 'hello@example.com', name: 'Hello Example', events: [tEvent()], ...over });
+function taskRoutes({ claim = { sender: SENDER, mails: [tMail()] }, gmail, done = () => new Response(null, { status: 204 }) } = {}) {
+  return {
+    ...asStaff,
+    [`${RPC}/task_mail_claim`]: () => reply(200, claim),
+    [`${RPC}/task_mail_done`]: done,
+    [`${RPC}/google_token`]: () => reply(200, { email: 'sender@example.com', refresh_token: 'stored-refresh-token', scopes: g.SCOPES }),
+    ...(gmail ? { [GMAIL]: gmail } : {}),
+  };
+}
+const sentMime = (call) => parseMime(Buffer.from(call.json().raw, 'base64url').toString('utf8'));
+const sentText = (mime) => Buffer.from(mime.parts[0].content.replace(/\r\n/g, ''), 'base64').toString('utf8');
+
+await check('task-mail: messages: an assignment (where, priority, due, status, link), an update (its text), several in one email', () => {
+  assert.equal(g.dueLabel('2026-10-30'), 'Fri 30 Oct');
+  assert.deepEqual(['', '30/10/2026', null, '2026-13-45'].map(g.dueLabel), ['', '', '', '']);
+  const one = g.taskMailMessage(tMail(), ORIGIN);
+  assert.equal(one.subject, 'Josh Example assigned you: Council landing page');
+  assert.equal(one.text, ['Josh Example assigned you a task:', 'Council landing page', 'Operations › Landing Page',
+    'Priority: High · Due: Fri 30 Oct · Status: Not started', `${ORIGIN}/#/projects/${BOARD}?item=${TASK}`].join('\n') + '\n');
+  const bare = g.taskMailMessage(tMail({ events: [tEvent({ values: {}, board_owner: 'David Example', board: '' })] }), ORIGIN);
+  assert.equal(bare.text.split('\n').slice(2, 4).join('|'), `David’s notes|${ORIGIN}/#/projects/${BOARD}?item=${TASK}`, 'a personal page; no empty facts line');
+  const upd = g.taskMailMessage(tMail({ events: [tEvent({ kind: 'update', actor: 'Hello Example', text: 'Can you check\r\nthe hero copy?' })] }), ORIGIN);
+  assert.equal(upd.subject, 'Update on Council landing page');
+  assert.ok(upd.text.startsWith('Hello Example posted an update on Council landing page (Operations › Landing Page):\nCan you check\nthe hero copy?\n'));
+  const long = g.taskMailMessage(tMail({ events: [tEvent({ kind: 'update', text: 'x'.repeat(5000) })] }), ORIGIN);
+  assert.ok(long.text.includes(`${'x'.repeat(2000)}…\n`) && !long.text.includes('x'.repeat(2001)), 'an update is cut at 2,000 characters');
+  const many = g.taskMailMessage(tMail({ events: [tEvent(), tEvent({ kind: 'update', text: 'Done?' }), tEvent({ item: 'Tender pack' })] }), ORIGIN);
+  assert.equal(many.subject, '3 task updates in Cortex');
+  assert.equal(many.text.split('\n\n').length, 3);
+  const odd = g.taskMailMessage(tMail({ events: [tEvent({ item: 'Line\r\nbreak\tname', actor: '', board: '', module: 'mystery' })] }), ORIGIN);
+  assert.equal(odd.subject, 'Someone assigned you: Line break name', 'no line breaks reach the subject');
+  assert.ok(odd.text.includes('\nUntitled board\n'));
+  const huge = g.taskMailMessage(tMail({ events: [tEvent({ item: 'y'.repeat(400) })] }), ORIGIN);
+  assert.equal(huge.subject.length, 200);
+});
+
+await check('task-mail: 401 without a JWT, 403 for non-staff, any staff member may ask; nothing queued or no sender → no Google', async () => {
+  const anon = await run('task-mail', { body: {}, auth: '', routes: taskRoutes() });
+  assert.deepEqual([anon.status, anon.calls.length], [401, 0]);
+  const outsider = await run('task-mail', { body: {}, routes: { ...taskRoutes(), [`${RPC}/google_me`]: () => reply(403, { code: '42501', message: 'Not allowed' }) } });
+  assert.deepEqual([outsider.status, outsider.to(`${RPC}/task_mail_claim`).length], [403, 0]);
+  for (const claim of [{ sender: null, mails: [] }, { sender: SENDER, mails: [] }, { sender: null, mails: [tMail()] }]) {
+    const r = await run('task-mail', { body: {}, routes: taskRoutes({ claim }) });
+    assert.deepEqual(r.data, { ok: true, sent: 0, failed: 0 });
+    assert.equal(r.to(TOKEN_URL).length + r.to(GMAIL).length + r.to(`${RPC}/task_mail_done`).length, 0);
+    const [c] = r.to(`${RPC}/task_mail_claim`);
+    assert.deepEqual([c.headers.get('apikey'), c.json()], ['sb_secret_test', { p_limit: 100 }], 'claimed with the secret key');
+  }
+  const get = await run('task-mail', { method: 'GET', routes: taskRoutes() });
+  assert.equal(get.status, 405);
+});
+
+await check('task-mail: one email per person from the sender’s Gmail as “Cortex”, linked to this origin; done with their ids', async () => {
+  const claim = { sender: SENDER, mails: [tMail({ ids: [3, 7] }), tMail({ ids: [9], to: 'Sam@Example.com', events: [tEvent({ kind: 'update', text: 'Hi' })] })] };
+  const r = await run('task-mail', { body: {}, origin: 'http://localhost:4322', routes: taskRoutes({ claim }) });
+  assert.deepEqual([r.status, r.data], [200, { ok: true, sent: 2, failed: 0 }]);
+  assert.deepEqual(r.to(`${RPC}/google_token`).map((c) => c.json()), [{ p_user: SENDER }], 'the sender’s connection, read once');
+  const sent = r.to(GMAIL).map(sentMime);
+  assert.deepEqual(sent.map((m) => [m.headers.from, m.headers.to]), [
+    ['"Cortex" <sender@example.com>', 'hello@example.com'], ['"Cortex" <sender@example.com>', 'sam@example.com']]);
+  assert.equal(sent[0].headers.subject, 'Josh Example assigned you: Council landing page');
+  assert.ok(sentText(sent[0]).includes(`http://localhost:4322/#/projects/${BOARD}?item=${TASK}`));
+  assert.ok(r.to(GMAIL).every((c) => c.headers.get('authorization') === 'Bearer fresh-access-token'));
+  assert.deepEqual(r.to(`${RPC}/task_mail_done`).map((c) => c.json()), [{ p_ids: [3, 7], p_error: '' }, { p_ids: [9], p_error: '' }]);
+  const none = await run('task-mail', { body: {}, origin: '', routes: taskRoutes() });
+  assert.ok(sentText(sentMime(none.to(GMAIL)[0])).includes(`${ORIGIN}/#/projects/`), 'no origin → Cortex’s own address');
+  const elsewhere = await run('task-mail', { body: {}, origin: 'https://evil.example', routes: taskRoutes() });
+  assert.ok(sentText(sentMime(elsewhere.to(GMAIL)[0])).includes(`${ORIGIN}/#/projects/`), 'an unknown origin is never linked');
+});
+
+await check('task-mail: a failed send is recorded for that person only; a bad address isn’t sent; the sender’s Google refused → all wait, no Gmail; no token anywhere', async () => {
+  let n = 0;
+  const claim = { sender: SENDER, mails: [tMail({ ids: [1] }), tMail({ ids: [2], to: 'not an address' }), tMail({ ids: [3], to: 'pat@example.com' })] };
+  const r = await run('task-mail', { body: {}, routes: taskRoutes({ claim, gmail: () => (++n === 1 ? reply(500, { error: { message: 'Backend Error' } }) : reply(200, { id: 'm' })) }) });
+  assert.deepEqual(r.data, { ok: true, sent: 1, failed: 2 });
+  assert.deepEqual(r.to(`${RPC}/task_mail_done`).map((c) => c.json()), [
+    { p_ids: [1], p_error: 'Backend Error' }, { p_ids: [2], p_error: 'Not a valid email address.' }, { p_ids: [3], p_error: '' }]);
+  assert.equal(r.to(GMAIL).length, 2);
+  const refused = await run('task-mail', { body: {}, routes: { ...taskRoutes({ claim }), [TOKEN_URL]: () => reply(400, { error: 'invalid_grant' }) } });
+  assert.deepEqual(refused.data, { ok: true, sent: 0, failed: 3 });
+  assert.equal(refused.to(GMAIL).length, 0);
+  assert.deepEqual(refused.to(`${RPC}/task_mail_done`).map((c) => c.json()), [
+    { p_ids: [1, 2, 3], p_error: 'The admin who sends task emails needs to reconnect Google in Settings → Business.' }]);
+  const gone = await run('task-mail', { body: {}, routes: { ...taskRoutes({ claim }), [`${RPC}/google_token`]: () => reply(200, null) } });
+  assert.equal(gone.to(`${RPC}/task_mail_done`)[0].json().p_error, 'The admin who sends task emails needs to reconnect Google in Settings → Business.');
+  for (const x of [r, refused]) {
+    const everything = [x.text, ...x.to(`${RPC}/task_mail_done`).map((c) => c.body)].join('\n');
+    assert.ok(!/access-token|refresh-token/.test(everything));
+  }
+  const logs = [];
+  const original = console.error;
+  console.error = (...args) => logs.push(args.map(String).join(' '));
+  let brokenDone;
+  try {
+    brokenDone = await run('task-mail', { body: {}, routes: taskRoutes({ done: () => reply(500, { message: 'boom' }) }) });
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(brokenDone.data, { ok: true, sent: 1, failed: 0 }, 'an unsaved result is retried after the claim lapses');
+  assert.ok(logs.length === 1 && logs[0].startsWith('google/task-mail: POST rpc/task_mail_done → 500') && !logs[0].includes('@'), 'logged without an address');
+});
+
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);

@@ -1138,3 +1138,40 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   `dropPlace` / `stepPlace`, `itemMatches`, `categoryOf` / timesheets / calendar / imports).
 - **Later, not built**: Move up/down from the keyboard on the board page itself (it has drag and group moves), a
   personal order separate from the board's, and Also on from an `@Name`.
+
+## 21. 0013: task emails — the owner hears when a task is handed to them or updated
+
+- **Owner's ask**: a task's owner gets an email when they are assigned a task or an update is made on it.
+- **Decisions** (made in the build, the owner can change them): "an update" is a post in the task's **Updates** (not
+  every edit of its fields); only the **owner** (`values.people[0]`) is emailed, not Also on or `@Name`s (Mentions stay
+  in the app); nobody is emailed about their own action; several at once go as **one email per person**. The emails go
+  from **one admin's Google account** (their existing Gmail and Drive connection, Settings → Business: no new Google
+  permission, vendor or key), named *Cortex*; it isn't each actor's own Gmail, since staff can't use Google for anything
+  but their calendar.
+- **Database** (`0013_task_emails.sql`): `private.task_mail` (the queue: kind `assigned | update`, task, update,
+  recipient, actor, claimed / sent / attempts / error) and `private.task_mail_settings` (the sender, the last send and
+  error), neither readable from the app. Triggers queue in the save's transaction: `queue_task_assigned` (after insert or
+  update of `values` / `done` on `items`: a new owner who isn't `auth.uid()`; never a done task, Work in Progress or a
+  write with no signed-in user) and `queue_task_update` (after insert on `item_updates`: the task's owner isn't the
+  author; one row per update). `task_mail_claim()` (secret key only) removes rows unsent after two days and sent after 30,
+  claims up to 100 due rows (none claimed in the last 5 minutes, fewer than five tries) when the sender can send (an
+  active admin whose Google connection has Gmail send), closes unsent what may no longer go (not the owner any more,
+  inactive, a deleted task or update, can't see the board: checked as that person, with `auth.uid()` set to them for
+  `can_view_board()`), and returns the rest grouped by person with what the email needs. `task_mail_done(ids, error)`
+  records the result. Admins: `task_mail_status()`, `task_mail_use_me()` (needs Gmail send), `task_mail_off()`.
+- **Function** (`google`, route `task-mail`, any active staff caller): claims, reads the sender's token once (refused →
+  every claimed row waits with *reconnect*), sends one plain-text email per person (`taskMailMessage()`: an assignment
+  with where, priority, due, status and a link `#/<module>/<board>?item=<id>`; an update with its text, at most 2,000
+  characters; the link uses the caller's origin when it is Cortex's, else Cortex's own), and calls `task_mail_done` per
+  person. No address, subject or text in its logs.
+- **App**: `mailsOwner()` (`src/lib/work.js`) says when a save may have queued one (`addItem`, `updateItem`, `addUpdate`);
+  live mode then asks `task-mail` once the save has landed (1.5 s after the last such save, after a flush), on opening
+  Cortex and every 5 minutes while the tab is visible. Demo mode sends nothing. **Settings** → **Business** → **Task
+  emails** (admins): *Sent from …* / *Off* / *needs to reconnect Google* / *Run 0013_task_emails.sql …*, **Send from my
+  Google**, **Stop**, and the last failure. No synced state changes, so the release doesn't need the migration to open.
+- **Tests**: `scripts/test-db.mjs` phase 13 (re-runs and the done row; what queues and what doesn't, sync upserts;
+  privileges; the sender rule; the claim's grouping, drops and retries; access checked as the recipient; stop);
+  `scripts/test-google.mjs` (the messages; callers; sending, origins, failures, reconnect, no tokens);
+  `scripts/test-sync.mjs` (`mailsOwner`).
+- **Later, not built**: a per-person switch to opt out, a daily digest instead of each change, emails for other edits
+  (status, due date) or to Also on, sending with nobody's Cortex open (`pg_cron` + `pg_net` calling the function).

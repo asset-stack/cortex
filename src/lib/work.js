@@ -41,6 +41,15 @@ export const ownerOf = (item) => (Array.isArray(item?.values?.people) ? item.val
 // Also on: a clean list of user ids, each once, never the owner.
 const cleanAlso = (list, owner) => [...new Set((Array.isArray(list) ? list : []).filter((id) => id && typeof id === 'string'))]
   .filter((id) => id !== owner);
+/** Whether saving a task may email its owner (0013's triggers decide; this only says when to ask the google function
+ *  to send): the task has an owner who isn't `me`, and either it's an update (`update`) or the owner is new (`before`,
+ *  the owner before the save; undefined for a new task). Never for a done task being handed over, or Work in Progress. */
+export function mailsOwner(item, { me = '', before, update = false, module = '' } = {}) {
+  const owner = ownerOf(item);
+  if (!owner || owner === me || module === 'pipeline') return false;
+  if (update) return true;
+  return owner !== before && !item?.done;
+}
 /** The other people on a task (Also on, §20): they see it in their task lists; it's the owner's to answer for. */
 export const alsoOf = (item) => cleanAlso(item?.values?.also, ownerOf(item));
 /** Who can be put on a task's Also on: active teammates who can see its board, not its owner. */

@@ -34,9 +34,14 @@
 //                                                          a body or snippet; more = call again (a claim was released, or
 //                                                          the claim was full so others may be due); since = when the
 //                                                          chain started (pass it back on the chain's later calls)
+//   POST task-mail {}                                    → {ok, sent, failed}: the task emails due (rpc task_mail_claim:
+//                                                          a task handed to its owner, an update posted on it; 0013),
+//                                                          one per person, from the Gmail of the admin chosen in
+//                                                          Settings → Business; results through rpc task_mail_done
 //
 // JWT verification is OFF for this function (Google's callback carries no JWT), so it checks callers itself: the
-// caller's JWT goes to rpc google_me (active staff only; send, contract, a plain and a mailbox connect then need admin),
+// caller's JWT goes to rpc google_me (active staff only; send, contract, a plain and a mailbox connect then need admin;
+// task-mail takes any of them, since it sends only what the database queued and claims with the secret key),
 // or rpc outreach_access for outreach-sync and outreach-gmail-sync (anyone who can see Outreach; the sheet is read with
 // the Google account of the admin who set its link, each mailbox with its own), and PostgREST decides who that is.
 // Refresh tokens are read and saved with the secret key (rpc google_token / google_save / outreach_gmail_connect /
@@ -86,6 +91,7 @@ const MAX_CELL = 50000; // Google Sheets' limit per cell
 
 const ROUTES = {
   connect: 'POST', callback: 'GET', send: 'POST', contract: 'POST', 'outreach-sync': 'POST', 'calendar-sync': 'POST', 'outreach-gmail-sync': 'POST',
+  'task-mail': 'POST',
 };
 const EXPIRED = 'This sign-in link has expired. Go back to Cortex and try again.';
 const NOT_CONNECTED = 'Connect your Google account in Settings first.';
@@ -1380,6 +1386,113 @@ async function calendarSync(body, cfg, fetch) {
   return result;
 }
 
+// ── Task emails (0013) ──────────────────────────────────────────────────────────────────────────────────────────
+// A task's owner hears by email when someone else hands them the task or posts an update on it. The database queues
+// them (triggers on items and item_updates, private.task_mail) and decides what may still go (task_mail_claim: still
+// theirs, still active, the board still theirs to see); this sends one plain-text email per person from the Gmail of the
+// admin chosen in Settings → Business, with a link to each task, and records the result (task_mail_done).
+
+const TASK_MAIL_FROM = 'Cortex';
+const TASK_MODULES = { projects: 'Operations', marketing: 'Marketing', outreach: 'Outreach', clients: 'Clients', pipeline: 'Pipeline' };
+const MAX_UPDATE = 2000; // an update's text in the email
+const SENDER_RECONNECT = 'The admin who sends task emails needs to reconnect Google in Settings → Business.';
+const oneLine = (s) => str(String(s ?? '').replace(/[\x00-\x1f\x7f]+/g, ' ')).replace(/\s+/g, ' ');
+const firstName = (name) => oneLine(name).split(' ')[0] || 'Someone';
+
+// 'YYYY-MM-DD' → 'Fri 30 Oct'; anything else → ''.
+export function dueLabel(day) {
+  const s = str(day);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '';
+  const d = new Date(`${s}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).replace(/,/g, '');
+}
+
+// Where a task lives, as its breadcrumb in the app: Operations › Landing Page, or “David’s notes” for a personal page.
+function whereLabel(e) {
+  if (str(e.board_owner)) return `${firstName(e.board_owner)}’s notes`;
+  return [TASK_MODULES[e.module] || '', oneLine(e.board) || 'Untitled board'].filter(Boolean).join(' › ');
+}
+
+const taskLink = (origin, e) => `${origin}/#/${encodeURIComponent(str(e.module))}/${encodeURIComponent(str(e.board_id))}?item=${encodeURIComponent(str(e.item_id))}`;
+
+/** One person's claimed events → { subject, text }: one email, each event with a link to its task. */
+export function taskMailMessage(mail, origin) {
+  const events = Array.isArray(mail?.events) ? mail.events : [];
+  const name = (e) => oneLine(e.item) || 'Untitled task';
+  const blocks = events.map((e) => {
+    const who = oneLine(e.actor) || 'Someone';
+    const v = e.values || {};
+    if (e.kind === 'assigned') {
+      const facts = [
+        str(v.priority) && `Priority: ${oneLine(v.priority)}`,
+        dueLabel(v.due) && `Due: ${dueLabel(v.due)}`,
+        str(v.status) && `Status: ${oneLine(v.status)}`,
+      ].filter(Boolean).join(' · ');
+      return [`${who} assigned you a task:`, name(e), whereLabel(e), facts, taskLink(origin, e)].filter(Boolean).join('\n');
+    }
+    const said = String(e.text ?? '').replace(/\r\n|\r/g, '\n').trim();
+    const text = said.length > MAX_UPDATE ? `${said.slice(0, MAX_UPDATE)}…` : said;
+    return [`${who} posted an update on ${name(e)} (${whereLabel(e)}):`, text, taskLink(origin, e)].filter(Boolean).join('\n');
+  });
+  let subject;
+  if (events.length === 1) {
+    const e = events[0];
+    subject = e.kind === 'assigned' ? `${oneLine(e.actor) || 'Someone'} assigned you: ${name(e)}` : `Update on ${name(e)}`;
+  } else {
+    subject = `${events.length} task updates in Cortex`;
+  }
+  if (subject.length > MAX_SUBJECT) subject = `${subject.slice(0, MAX_SUBJECT - 1)}…`;
+  return { subject, text: `${blocks.join('\n\n')}\n` };
+}
+
+async function taskMail(cfg, fetch, origin) {
+  const db = (path, body, fail) => rest(cfg, fetch, 'task-mail', path, { method: 'POST', body }, fail);
+  const done = (ids, error = '') => db('rpc/task_mail_done', { p_ids: ids, p_error: error }, 'Could not save the task emails.');
+  const claim = await db('rpc/task_mail_claim', { p_limit: 100 }, 'Could not read the task emails.');
+  const mails = Array.isArray(claim?.mails) ? claim.mails : [];
+  const result = { ok: true, sent: 0, failed: 0 };
+  if (!str(claim?.sender) || !mails.length) return result;
+
+  let access;
+  try {
+    access = await googleAccess(cfg, fetch, { uid: str(claim.sender) }, {
+      unread: 'Could not read the task email sender’s Google connection.', notConnected: SENDER_RECONNECT, reconnect: SENDER_RECONNECT,
+    });
+  } catch (e) {
+    const error = e instanceof HttpError ? e.message : 'Google sign-in failed.';
+    await done(mails.flatMap((m) => m.ids || []), error);
+    result.failed = mails.length;
+    return result;
+  }
+  const link = origin || cfg.origins[0] || DEFAULT_ORIGINS[0];
+  for (const mail of mails) {
+    const ids = Array.isArray(mail.ids) ? mail.ids : [];
+    const to = str(mail.to).toLowerCase();
+    let error = '';
+    try {
+      if (!EMAIL.test(to) || !ASCII.test(to) || to.length > 254) throw new HttpError(400, 'Not a valid email address.');
+      const { subject, text } = taskMailMessage(mail, link);
+      const mime = buildMime({ fromName: TASK_MAIL_FROM, fromEmail: access.email, to: [to], subject, text });
+      await google(fetch, GMAIL_SEND, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${access.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw: base64url(mime) }),
+      });
+    } catch (e) {
+      error = e instanceof HttpError ? e.message : 'Sending failed.';
+    }
+    try {
+      await done(ids, error);
+    } catch {
+      // Unsaved: the rows go again once their claim lapses (5 minutes).
+    }
+    if (error) result.failed++;
+    else result.sent++;
+  }
+  return result;
+}
+
 // ── Outreach Gmail (0010) ───────────────────────────────────────────────────────────────────────────────────────
 // Each outreach mailbox's own Gmail, read only, to measure cold sales emails. An admin connects a mailbox by signing in
 // to that mailbox's Google account (rpc outreach_gmail_connect keeps its refresh token in private.outreach_gmail). The
@@ -2244,6 +2357,11 @@ export async function handle(req, { env = {}, fetch = globalThis.fetch, limits =
     if (route === 'outreach-gmail-sync') {
       await outreachCaller(req, cfg, fetch);
       return json(200, await gmailSync(await readBody(req), cfg, fetch, { limits, now, sleep }), origin);
+    }
+    if (route === 'task-mail') {
+      await staffCaller(req, cfg, fetch);
+      await readBody(req);
+      return json(200, await taskMail(cfg, fetch, origin), origin);
     }
     if (route === 'connect') {
       // Any staff member may connect their calendar; anything else (a mailbox's Gmail too) stays admins only.
