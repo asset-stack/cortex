@@ -43,13 +43,14 @@ const normName = (s) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' '
 const nowIso = () => new Date().toISOString();
 const fresh = (list) => (list || []).map((x) => ({ ...x, id: uid() }));
 const userExists = (d, userId) => d.users.some((u) => u.id === userId);
-// A task's values with Also on (§20) kept to teammates who can see the board (src/lib/work.js taggable offers no one
-// else), the key gone when that leaves no one. Applied to the values as saved, after nextValues() (which may move the
-// other people of a several-people task there).
-function seeing(d, b, values) {
+// A task's values with Also on (§20) adding only teammates who can see the board (src/lib/work.js taggable offers no
+// one else), the key gone when that leaves no one. Applied to the values as saved, after nextValues() (which may move
+// the other people of a several-people task there). Those already on it (`had`) stay: someone deactivated or set to
+// None for a while is back on their tasks when restored, and the lists already hide what they can't see.
+function seeing(d, b, values, had = []) {
   if (!values || !('also' in values)) return values;
   const { also, ...rest } = values;
-  const kept = (Array.isArray(also) ? also : []).filter((id) => userExists(d, id) && canViewBoard(d, b, id));
+  const kept = (Array.isArray(also) ? also : []).filter((id) => had.includes(id) || (userExists(d, id) && canViewBoard(d, b, id)));
   return kept.length ? { ...rest, also: kept } : rest;
 }
 
@@ -425,7 +426,8 @@ function createActions(mutate, mode) {
       if ('name' in rest && !textOf(rest.name).trim()) delete rest.name; // a task always has a name
       Object.assign(item, rest);
       if (values) {
-        item.values = boardValues(b, seeing(d, b, nextValues(item.values, values, { me: d.me, now: nowIso() }))); // handing it over records who and when
+        const had = Array.isArray(item.values?.also) ? item.values.also : [];
+        item.values = boardValues(b, seeing(d, b, nextValues(item.values, values, { me: d.me, now: nowIso() }), had)); // handing it over records who and when
         if ('status' in values) item.done = item.values.status === 'Done'; // done always follows status
       }
       return true;

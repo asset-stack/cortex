@@ -49,12 +49,14 @@ export function Popover({ anchor, open, onClose, children, width = 200, align = 
     if (!open || !anchor) { setPos(null); return; }
     const update = () => {
       const r = anchor.getBoundingClientRect();
+      const max = window.innerHeight - 24; // taller than the window: it scrolls
+      if (ref.current) ref.current.style.maxHeight = `${max}px`; // measured at this window's cap, not the last one
       const h = ref.current?.offsetHeight || 0;
       let left = align === 'center' ? r.left + r.width / 2 - width / 2 : align === 'right' ? r.right - width : r.left;
       left = Math.max(12, Math.min(left, window.innerWidth - width - 12));
       const below = r.bottom + 6;
       const top = below + h + 12 > window.innerHeight ? Math.max(12, r.top - 6 - h) : below;
-      setPos({ left, top, max: window.innerHeight - 24 }); // taller than the window: it scrolls
+      setPos({ left, top, max });
     };
     update();
     const onScroll = (e) => { if (!ref.current?.contains(e.target)) update(); };

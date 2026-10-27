@@ -1112,7 +1112,9 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   (`schemaOf(board)` in `src/data/boards.js`: use it, not `BOARD_SCHEMAS[module]`, wherever a board's columns show).
 - **Also on**: picked in the table, the drawer or New task from active teammates who can see the board (`taggable()`),
   never the owner (`nextValues()` drops them, and the key when it's empty). Picking the owner of a task that still has
-  several people puts the others on Also on (they used to drop off it). `prioritiesFor()` includes the tasks someone is
+  several people puts the others on Also on (they used to drop off it). The store adds only people who can see the
+  board, and keeps those already on a task when they lose access for a while (deactivated, or set to None): they're
+  back on it when restored, and the lists hide it from them meanwhile. `prioritiesFor()` includes the tasks someone is
   also on (`also: true`, `owner`), `workload()` and `topTasks()` (Team cards) leave them out, and Waiting on you is the
   owner's only. The board's person filter (`itemMatches()`) and the Calendar's people include Also on.
 - **Department**: the board's own shows muted; picking another stores it, picking the board's own (or Clear) stores ''.
