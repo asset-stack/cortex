@@ -3,6 +3,7 @@
 // never runs these (the database does). Also the invoice numbering and date helpers both modes share.
 // Pure: no React and no store, so scripts/test-sync.mjs runs this file in Node.
 import { TEAM_TIMEZONE, localYmd, ymdIn } from './format.js';
+import { lifecycleAfter } from './accounts.js';
 
 // Runtime ids are uuids in both modes (live rows use them as primary keys). randomUUID needs a secure
 // context, so a plain-http preview (a phone on the LAN) falls back to getRandomValues.
@@ -195,14 +196,54 @@ export function clientCreatedLocal(state, clientId, { me = state.me, uid: newId 
 // ── Outreach → Pipeline ────────────────────────────────────────────────────────────────────────────────────
 
 export const PIPELINE_STATUSES = ['Replied', 'Meeting booked'];
-// The stages a booking moves a deal on from (0008's contact_pipeline()).
-const EARLY_STAGES = ['Opportunities', 'Contacted'];
+// The stages a booking moves a deal on from (0014's contact_pipeline(); the last two are the names before 0014).
+const EARLY_STAGES = ['Interested', 'Opportunities', 'Contacted'];
+const norm = (s) => String(s ?? '').trim().toLowerCase();
 
-// The contact_pipeline trigger, for a contact whose status was `prevStatus` ('' for a new contact). When it becomes
-// Replied or Meeting booked: a deal for it (named after the organisation, owned by the contact's owner or `me`), or
-// its deal moves from Opportunities or Contacted to First meetings on a booking (never back from later on); and the owner gets a follow-up to-do for `day`,
-// by default the owner's own today (user_today()), once per contact and day. → { deal, todo } (todo null when it
-// already existed), or null when nothing applies.
+/** A deal's fields from 0014 on, as a new deal starts (the database's defaults; reached its stage `at`). */
+export const dealDefaults = (at = new Date().toISOString()) => ({
+  accountId: '', contactIds: [], currency: 'AUD', closeOn: '', probability: null, waitingOn: '', lostReason: '', stageAt: at,
+});
+/** An account's fields as a new one starts (0014's defaults). */
+export const accountDefaults = (at = new Date().toISOString()) => ({
+  kind: 'prospect', lifecycle: 'new', lifecycleNote: '', revisitOn: '', sector: '', country: '', region: '', timezone: '', domain: '',
+  website: '', size: '', guardrails: '', prepUrl: '', referredBy: '', owner: '', clientId: '', createdAt: at,
+});
+/** A contact's fields as a new one starts. */
+export const personDefaults = (at = new Date().toISOString()) => ({
+  name: '', title: '', email: '', phone: '', linkedin: '', timezone: '', role: '', status: 'active', owner: '', createdAt: at,
+});
+
+// The account named `name` (any case), else a new one with `fields`. → the account
+function accountFor(state, name, fields, newId) {
+  state.accounts ||= [];
+  const found = state.accounts.find((a) => norm(a.name) === norm(name));
+  if (found) return found;
+  const a = { id: newId(), ...accountDefaults(), name: String(name).trim().slice(0, 200) || 'New account', ...fields };
+  state.accounts.push(a);
+  return a;
+}
+// The person at `account` with this email (else, without one, this name), else a new contact. → the contact, or null
+// when there's neither a name nor an email.
+function personFor(state, account, { name = '', email = '', owner = '' }, newId) {
+  state.crmContacts ||= [];
+  const n = String(name ?? '').trim();
+  const e = norm(email);
+  if (!n && !e) return null;
+  const found = state.crmContacts.find((c) => c.accountId === account.id && (e ? norm(c.email) === e : norm(c.name) === norm(n)));
+  if (found) return found;
+  const c = { id: newId(), ...personDefaults(), accountId: account.id, name: n.slice(0, 200), email: e.slice(0, 254), owner };
+  state.crmContacts.push(c);
+  return c;
+}
+
+// The contact_pipeline trigger (0014), for a contact whose status was `prevStatus` ('' for a new contact). When it
+// becomes Replied or Meeting booked: its organisation's account (found by name, or a new prospect; its lifecycle moves
+// on as lifecycleAfter() says) and the person as its contact; a deal for it (named after the organisation, owned by the
+// contact's owner or `me`, waiting on us, with the person on it), or its deal moves from Interested to Meeting booked on
+// a booking (never back from later on); and the owner gets a follow-up to-do for `day`, by default the owner's own today
+// (user_today()), once per contact and day. → { deal, todo } (todo null when it already existed), or null when nothing
+// applies.
 export function contactPipelineLocal(state, contactId, prevStatus = '', { day, me = state.me, uid: newId = uid } = {}) {
   const c = (state.contacts || []).find((x) => x.id === contactId);
   if (!c || !PIPELINE_STATUSES.includes(c.status) || c.status === prevStatus) return null;
@@ -210,19 +251,26 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day, m
   state.todos ||= [];
   const booked = c.status === 'Meeting booked';
   const name = String(c.name ?? '').trim() || String(c.org ?? '').trim() || 'contact';
+  const org = String(c.org ?? '').trim() || String(c.name ?? '').trim() || 'New account';
   const owner = c.owner || me;
   day ||= ymdIn((state.users || []).find((u) => u.id === owner)?.timezone || TEAM_TIMEZONE);
+
+  const account = accountFor(state, org, { lifecycle: booked ? 'meeting' : 'engaged', owner }, newId);
+  account.lifecycle = lifecycleAfter(account.lifecycle, booked ? 'booked' : 'replied');
+  const person = personFor(state, account, { name: c.name, email: c.email, owner }, newId);
 
   let deal = state.deals.find((x) => x.contactId === c.id);
   if (!deal) {
     deal = {
-      id: newId(), name: String(c.org ?? '').trim() || c.name, sector: '', value: 0, priority: 'P2',
-      stage: booked ? 'First meetings' : 'Opportunities', contact: owner,
+      id: newId(), name: org.slice(0, 200), sector: '', value: 0, priority: 'P2',
+      stage: booked ? 'Meeting booked' : 'Interested', contact: owner,
       next: booked ? `Prepare meeting with ${name}` : `Reply to ${name}`, contactId: c.id,
+      ...dealDefaults(), accountId: account.id, contactIds: person ? [person.id] : [], waitingOn: 'us',
     };
     state.deals.push(deal);
   } else if (booked && EARLY_STAGES.includes(deal.stage)) {
-    deal.stage = 'First meetings';
+    deal.stage = 'Meeting booked';
+    deal.stageAt = new Date().toISOString();
   }
 
   let todo = null;
@@ -235,4 +283,42 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day, m
     state.todos.push(todo);
   }
   return { deal, todo };
+}
+
+const OLD_STAGES = { Opportunities: 'Interested', Contacted: 'Interested', 'First meetings': 'Meeting booked', Demos: 'Demo held', Won: 'Demo held' };
+
+/** 0014's one-off steps for demo data saved before it: the old stages renamed (a Contacted deal waits on them), every
+ *  client a customer account, every deal its account (its client's, else the one with its name, else a new one), and
+ *  a deal from an outreach contact that person as its contact. Safe to run again (nothing is left to do). */
+export function crmBackfillLocal(state, { uid: newId = uid } = {}) {
+  state.accounts ||= [];
+  state.crmContacts ||= [];
+  (state.deals || []).forEach((d) => {
+    Object.entries(dealDefaults(d.stageAt || new Date().toISOString())).forEach(([k, v]) => { if (d[k] === undefined) d[k] = v; });
+    if (OLD_STAGES[d.stage]) {
+      if (d.stage === 'Contacted' && !d.waitingOn) d.waitingOn = 'them';
+      d.stage = OLD_STAGES[d.stage];
+    }
+  });
+  (state.clients || []).forEach((cl) => {
+    if (state.accounts.some((a) => a.clientId === cl.id)) return;
+    state.accounts.push({
+      id: newId(), ...accountDefaults(), name: String(cl.name || '').trim().slice(0, 200) || 'Client', kind: 'customer',
+      lifecycle: 'customer', sector: String(cl.sector || '').slice(0, 100), owner: cl.contact || '', clientId: cl.id,
+    });
+  });
+  (state.deals || []).forEach((d) => {
+    if (d.accountId) return;
+    const account = (d.clientId && state.accounts.find((a) => a.clientId === d.clientId))
+      || accountFor(state, d.name, { lifecycle: 'opportunity', sector: String(d.sector || '').slice(0, 100), owner: d.contact || '' }, newId);
+    d.accountId = account.id;
+  });
+  (state.deals || []).forEach((d) => {
+    if (!d.accountId || (d.contactIds || []).length) return;
+    const from = (state.contacts || []).find((c) => c.id === d.contactId);
+    const account = state.accounts.find((a) => a.id === d.accountId);
+    const person = from && account && personFor(state, account, { name: from.name, email: from.email, owner: from.owner || '' }, newId);
+    if (person) d.contactIds = [person.id];
+  });
+  return state;
 }

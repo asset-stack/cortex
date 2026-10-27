@@ -37,6 +37,7 @@ const migration10 = await readFile(new URL('supabase/migrations/0010_outreach_gm
 const migration11 = await readFile(new URL('supabase/migrations/0011_team_access_read.sql', root), 'utf8');
 const migration12 = await readFile(new URL('supabase/migrations/0012_crm_profile.sql', root), 'utf8');
 const migration13 = await readFile(new URL('supabase/migrations/0013_task_emails.sql', root), 'utf8');
+const migration14 = await readFile(new URL('supabase/migrations/0014_crm_accounts.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -5205,7 +5206,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
   // a normal save. Boards are new team boards here (personal pages: below), and so are Outreach's (who: below).
 
   await as(david);
-  const [grp, grp2, itm, cli, inv, pln, con, chn, rtn, stm, teamP, teamM, mbx, mbx2, dl] = Array.from({ length: 15 }, uid);
+  const [grp, grp2, itm, cli, inv, pln, con, chn, rtn, stm, teamP, teamM, mbx, mbx2, dl, acct, ppl] = Array.from({ length: 17 }, uid);
   const flat = flatten({
     me: david,
     users: [],
@@ -5240,7 +5241,20 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
     }],
     deals: [{
       id: dl, name: 'Example Client', sector: 'Utilities', value: '1,500.50', priority: 'P1', stage: 'Won', contact: alice, next: '',
-      clientId: cli, contactId: con,
+      clientId: cli, contactId: con, accountId: acct, contactIds: [ppl], currency: 'GBP', closeOn: '2026-12-01', probability: 70, waitingOn: 'them',
+      lostReason: '', stageAt: '2026-10-01T00:00:00.000Z',
+    }],
+    // The CRM (0014): the deal's account (its client's) and a person there.
+    accounts: [{
+      id: acct, name: 'Example Client', kind: 'customer', lifecycle: 'customer', lifecycleNote: '', revisitOn: '2027-01-15', sector: 'Utilities',
+      country: 'Australia', region: 'QLD', timezone: 'Australia/Brisbane', domain: 'client.example.com', website: 'https://client.example.com/',
+      size: '40 sites', guardrails: 'No pricing on the first call', prepUrl: 'https://docs.google.com/document/d/prep/edit', referredBy: '',
+      owner: alice, clientId: cli, createdAt: '2026-10-01T00:00:00.000Z',
+    }],
+    crmContacts: [{
+      id: ppl, accountId: acct, name: 'Pat', title: 'Asset Manager', email: 'pat@example.com', phone: '+61 7 0000 0000',
+      linkedin: 'https://www.linkedin.com/in/example/', timezone: 'Australia/Brisbane', role: 'champion', status: 'active', owner: alice,
+      createdAt: '2026-10-02T00:00:00.000Z',
     }],
     // A client's meeting (from its deal) and link (0012).
     crmEntries: [
@@ -5249,6 +5263,10 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
         createdAt: '2026-10-08T00:00:00.000Z' },
       { id: uid(), dealId: '', clientId: cli, kind: 'link', title: 'Deck', body: '', url: 'https://example.com/deck', label: 'Deck',
         happenedOn: '', attendees: '', user: david, createdAt: '2026-10-09T00:00:00.000Z' },
+      { id: uid(), dealId: '', clientId: '', accountId: acct, contactId: '', kind: 'note', title: '', body: 'Budget in Feb', url: '', label: '',
+        happenedOn: '', attendees: '', user: david, createdAt: '2026-10-10T00:00:00.000Z' },
+      { id: uid(), dealId: '', clientId: '', accountId: '', contactId: ppl, kind: 'note', title: '', body: 'Prefers calls', url: '', label: '',
+        happenedOn: '', attendees: '', user: david, createdAt: '2026-10-11T00:00:00.000Z' },
     ],
     contacts: [{ id: con, name: 'Pat', org: 'Example Org', email: 'pat@example.com', stage: 'Won', status: 'Opened', last: '', owner: alice }],
     emails: [{ id: uid(), kind: 'sent', contactId: con, contact: 'Pat', subject: 'Hello', snippet: 'Hi', ts: '2026-10-04T00:00:00.000Z' }],
@@ -5861,6 +5879,167 @@ async function phase13(ctx) {
   return ctx;
 }
 
+// ── 0014: the CRM (accounts, crm_contacts, the new deal columns and stages) ───────────────────────────────────────
+
+async function phase14(ctx) {
+  const { alice, boss, david, hello, carol } = ctx;
+
+  // Data from before 0014: a client and its deal, deals on the old stages (two with one name), one from an outreach contact.
+  await as(boss);
+  const client = (await one("insert into clients (name, sector, contact_id) values ('Example Fourteen', 'Government', $1) returning id", [boss])).id;
+  const old = {};
+  for (const [key, name, stage, extra] of [
+    ['won', 'Example Fourteen', 'Demos', { client_id: client }],
+    ['opp', 'Example Basin', 'Opportunities', {}],
+    ['contacted', 'example basin', 'Contacted', {}],
+    ['meeting', 'Example Range', 'First meetings', {}],
+  ]) {
+    const cols = ['name', 'stage', 'sector', ...Object.keys(extra)];
+    const vals = [name, stage, 'Utilities', ...Object.values(extra)];
+    old[key] = (await one(`insert into deals (${cols.join(', ')}) values (${cols.map((_, i) => `$${i + 1}`).join(', ')}) returning id`, vals)).id;
+  }
+  const outreach = (await one("insert into contacts (name, org, email, status, owner_id) values ('Pat Example', 'Example Harbour', 'Pat@Example.com', 'Sent', $1) returning id", [boss])).id;
+  old.fromContact = (await one("insert into deals (name, stage, contact_id) values ('Example Harbour', 'Contacted', $1) returning id", [outreach])).id;
+
+  // 113. Runs on top of 0013, whole, again, and statement by statement; ends with its done row; both tables RLS and realtime.
+  await as(null);
+  const run = async () => db.exec(migration14).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const first = await run();
+  const counts = async () => one(`select (select count(*)::int from accounts) as accounts, (select count(*)::int from crm_contacts) as people,
+    (select count(*)::int from deals where account_id is null) as unlinked`);
+  const afterFirst = await counts();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration14, { continueOnError: true });
+  const afterAgain = await counts();
+  const body = migration14.replace(/--.*$/gm, '').trim();
+  const published = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime' and tablename in ('accounts', 'crm_contacts')")).n;
+  const rls = (await rows("select relrowsecurity as on from pg_class where oid in ('public.accounts'::regclass, 'public.crm_contacts'::regclass)")).every((r) => r.on);
+  check('113. 0014 runs on top of 0013, re-runs whole and statement by statement (adding nothing), never mentions module_level, ends with its done row; accounts and crm_contacts have RLS and realtime',
+    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0014 applied' && Array.isArray(second) && !splitErrors.length
+      && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0014 applied' as done;$/i.test(body) && !migration14.includes('module_level')
+      && published === 2 && rls && JSON.stringify(afterFirst) === JSON.stringify(afterAgain) && afterFirst.unlinked === 0,
+    { first: Array.isArray(first) ? 'ok' : first, second: Array.isArray(second) ? 'ok' : second, splitErrors, published, rls, afterFirst, afterAgain });
+  if (!Array.isArray(first)) return null;
+
+  // 114. The existing data: stages renamed (Contacted waits on them), every client a customer account, every deal its
+  // account (its client's; one account for one name), the outreach contact's person on its deal.
+  const deal = async (id) => one('select stage, waiting_on, account_id, contact_ids, currency, probability, stage_at from deals where id = $1', [id]);
+  const d = Object.fromEntries(await Promise.all(Object.entries(old).map(async ([k, id]) => [k, await deal(id)])));
+  const acc = async (id) => one('select name, kind, lifecycle, client_id, owner_id from accounts where id = $1', [id]);
+  const clientAccount = await acc(d.won.account_id);
+  const basin = await acc(d.opp.account_id);
+  const person = await one('select name, email, account_id from crm_contacts where id = $1', [d.fromContact.contact_ids[0]]);
+  const everyClient = (await one('select count(*)::int as n from clients c where not exists (select 1 from accounts a where a.client_id = c.id)')).n;
+  check('114. existing deals: old stages renamed (Contacted waits on them), each on its account (a client’s is its customer account; one name, one account); every client has an account; an outreach contact’s person is on its deal',
+    d.opp.stage === 'Interested' && d.contacted.stage === 'Interested' && d.contacted.waiting_on === 'them' && d.opp.waiting_on === ''
+      && d.meeting.stage === 'Meeting booked' && d.won.stage === 'Demo held' && d.opp.currency === 'AUD' && d.opp.probability === null
+      && clientAccount.kind === 'customer' && clientAccount.lifecycle === 'customer' && clientAccount.client_id === client && clientAccount.owner_id === boss
+      && d.contacted.account_id === d.opp.account_id && basin.lifecycle === 'opportunity' && everyClient === 0
+      && person?.name === 'Pat Example' && person.email === 'pat@example.com' && person.account_id === d.fromContact.account_id,
+    { d, clientAccount, basin, person, everyClient });
+
+  // 115. Pipeline access: staff at the default (View) read accounts and people and change none; with Edit they add,
+  // change and delete; inactive or with Pipeline none, nothing.
+  await as(david);
+  await db.query("delete from module_access where user_id = any($1) and module = 'pipeline'", [[alice, hello]]);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'pipeline', 'edit')", [hello]);
+  await as(alice);
+  const viewReads = (await rows('select id from accounts')).length;
+  const viewAdd = await error("insert into accounts (name) values ('Nope')");
+  const viewEdit = await affected("update accounts set sector = 'x'");
+  const viewPerson = await error('insert into crm_contacts (account_id, name) values ($1, $2)', [d.opp.account_id, 'Nope']);
+  await as(hello);
+  const account = (await one("insert into accounts (name, kind, lifecycle, timezone, guardrails) values ('Example Shire', 'prospect', 'engaged', 'Australia/Brisbane', 'No pricing yet') returning id, owner_id")).id;
+  const jo = (await one("insert into crm_contacts (account_id, name, email, role) values ($1, 'Jo Example', 'jo@example.com', 'champion') returning id", [account])).id;
+  const editUpdate = await affected("update accounts set lifecycle = 'meeting' where id = $1", [account]);
+  await as(carol);
+  const inactive = (await rows('select id from accounts')).length + (await rows('select id from crm_contacts')).length;
+  await as(david);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'pipeline', 'none')", [alice]);
+  await as(alice);
+  const none = (await rows('select id from accounts')).length;
+  await as(david);
+  await db.query("delete from module_access where user_id = $1 and module = 'pipeline'", [alice]);
+  check('115. Pipeline View reads accounts and contacts but changes none; Pipeline Edit adds and changes them; inactive or Pipeline None sees none',
+    viewReads > 0 && viewAdd !== null && viewEdit === 0 && viewPerson !== null && Boolean(account) && Boolean(jo) && editUpdate === 1
+      && inactive === 0 && none === 0, { viewReads, viewAdd, viewEdit, viewPerson, editUpdate, inactive, none });
+
+  // 116. The new deal columns: checked values; stage_at is the database's (a stage change stamps it, nothing else does,
+  // an insert keeps a time given); a sync upsert with the new columns.
+  await as(hello);
+  const badCurrency = await error("insert into deals (name, currency) values ('X', 'XYZ')");
+  const badWaiting = await error("insert into deals (name, waiting_on) values ('X', 'nobody')");
+  const badProbability = await error("insert into deals (name, probability) values ('X', 101)");
+  const badRole = await error("insert into crm_contacts (account_id, name, role) values ($1, 'X', 'boss')", [account]);
+  const badLifecycle = await error("insert into accounts (name, lifecycle) values ('X', 'won')");
+  const fresh = (await one(`insert into deals (name, stage, account_id, contact_ids, currency, probability, waiting_on, stage_at)
+    values ('Example Shire', 'Interested', $1, $2, 'NZD', 40, 'us', '2026-01-05T00:00:00Z') returning id, stage_at`, [account, [jo]]));
+  const kept = Date.parse(fresh.stage_at) === Date.parse('2026-01-05T00:00:00Z');
+  await db.query("update deals set next_step = 'Call', stage_at = '2020-01-01T00:00:00Z' where id = $1", [fresh.id]);
+  const unchanged = Date.parse((await one('select stage_at from deals where id = $1', [fresh.id])).stage_at) === Date.parse('2026-01-05T00:00:00Z');
+  await db.query("update deals set stage = 'Demo held' where id = $1", [fresh.id]);
+  const moved = Date.now() - Date.parse((await one('select stage_at from deals where id = $1', [fresh.id])).stage_at) < 60_000;
+  const row = await one('select id, name, stage, account_id, contact_ids, currency, close_on, probability, waiting_on, lost_reason, stage_at, position from deals where id = $1', [fresh.id]);
+  const upsert = await postgrestUpsert('deals', [{ ...row, stage: 'Lost', lost_reason: 'Timing', probability: null }]);
+  const lost = await one('select stage, lost_reason, probability from deals where id = $1', [fresh.id]);
+  check('116. deals: currency, waiting on and probability are checked (and a contact’s role, an account’s lifecycle); stage_at is kept on insert and on other edits, stamped when the stage changes; the app’s upsert writes the new columns',
+    [badCurrency, badWaiting, badProbability, badRole, badLifecycle].every((e) => e !== null) && kept && unchanged && moved && upsert === null
+      && lost.stage === 'Lost' && lost.lost_reason === 'Timing' && lost.probability === null,
+    { badCurrency, badWaiting, badProbability, badRole, badLifecycle, kept, unchanged, moved, upsert, lost });
+
+  // 117. Timeline entries on an account or a contact: Pipeline Edit adds, View reads, never moved by an edit; deleting a
+  // contact or an account takes theirs; an account deleted leaves its deals, without it.
+  await as(hello);
+  const onAccount = (await one("insert into crm_entries (account_id, kind, body) values ($1, 'note', 'Budget in Feb') returning id, user_id", [account]));
+  const onPerson = (await one("insert into crm_entries (contact_id, kind, body) values ($1, 'note', 'Prefers calls') returning id", [jo])).id;
+  await as(alice);
+  const viewerReads = (await rows('select id from crm_entries where id = any($1)', [[onAccount.id, onPerson]])).length;
+  const viewerAdds = await error("insert into crm_entries (account_id, kind, body) values ($1, 'note', 'Nope')", [account]);
+  await as(hello);
+  await db.query('update crm_entries set account_id = $2, contact_id = $3 where id = $1', [onAccount.id, d.opp.account_id, jo]);
+  const stays = await one('select account_id, contact_id from crm_entries where id = $1', [onAccount.id]);
+  const goneWithPerson = await affected('delete from crm_contacts where id = $1', [jo]);
+  await as(null);
+  const personEntries = (await one('select count(*)::int as n from crm_entries where id = $1', [onPerson])).n;
+  await as(hello);
+  await db.query('delete from accounts where id = $1', [account]);
+  await as(null);
+  const afterAccount = await one(`select (select count(*)::int from crm_entries where id = $1) as entries,
+    (select account_id from deals where id = $2) as account`, [onAccount.id, fresh.id]);
+  check('117. entries on an account or a contact: Pipeline Edit adds (as themselves), View reads but adds none; an edit never moves one; deleting the contact or the account takes theirs, and leaves the account’s deals without it',
+    onAccount.user_id === hello && viewerReads === 2 && viewerAdds !== null && stays.account_id === account && stays.contact_id === null
+      && goneWithPerson === 1 && personEntries === 0 && afterAccount.entries === 0 && afterAccount.account === null,
+    { onAccount, viewerReads, viewerAdds, stays, personEntries, afterAccount });
+
+  // 118. The outreach automation: a reply files the organisation as an (engaged) account and the person as its contact,
+  // on a new Interested deal waiting on us; a booking moves the deal to Meeting booked and the account to meeting; another
+  // reply from the same person adds nobody; an account set aside keeps its lifecycle.
+  await as(boss);
+  const lead = (await one("insert into contacts (name, org, email, status, owner_id) values ('Lee Example', 'Example Lakes', 'lee@example.com', 'Replied', $1) returning id", [boss])).id;
+  const made = await one('select id, stage, waiting_on, account_id, contact_ids from deals where contact_id = $1', [lead]);
+  const lakes = await one('select name, kind, lifecycle, owner_id from accounts where id = $1', [made.account_id]);
+  const lee = await one('select name, email from crm_contacts where id = $1', [made.contact_ids[0]]);
+  await db.query("update contacts set status = 'Meeting booked' where id = $1", [lead]);
+  const booked = await one('select d.stage, a.lifecycle from deals d join accounts a on a.id = d.account_id where d.id = $1', [made.id]);
+  const twin = (await one("insert into contacts (name, org, email, status, owner_id) values ('Lee Example', 'EXAMPLE LAKES', 'Lee@Example.com', 'Replied', $1) returning id", [boss])).id;
+  const twinDeal = await one('select account_id, contact_ids from deals where contact_id = $1', [twin]);
+  await as(null);
+  await db.query("insert into accounts (name, lifecycle) values ('Example Quiet', 'suppressed')");
+  await as(boss);
+  await db.query("insert into contacts (name, org, email, status, owner_id) values ('Kim Example', 'Example Quiet', '', 'Replied', $1)", [boss]);
+  const quiet = await one("select count(*)::int as n, min(lifecycle) as lifecycle from accounts where name = 'Example Quiet'");
+  check('118. the outreach automation files the account (engaged, then meeting) and the person, on an Interested deal waiting on us that a booking moves to Meeting booked; the same person again adds nobody; a suppressed account stays so',
+    made.stage === 'Interested' && made.waiting_on === 'us' && lakes.kind === 'prospect' && lakes.lifecycle === 'engaged' && lakes.owner_id === boss
+      && lee.name === 'Lee Example' && lee.email === 'lee@example.com' && booked.stage === 'Meeting booked' && booked.lifecycle === 'meeting'
+      && twinDeal.account_id === made.account_id && twinDeal.contact_ids[0] === made.contact_ids[0] && quiet.n === 1 && quiet.lifecycle === 'suppressed',
+    { made, lakes, lee, booked, twinDeal, quiet });
+  await as(david);
+  await db.query("delete from module_access where user_id = $1 and module = 'pipeline'", [hello]);
+  await as(null);
+  return ctx;
+}
+
 async function runSplit(dbx, sql, { continueOnError = false, skip = () => false } = {}) {
   const errors = [];
   for (const st of splitSql(sql)) {
@@ -5979,7 +6158,8 @@ try {
   const ctx11 = ctx10 && await phase11(ctx10);
   const ctx12 = ctx11 && await phase12(ctx11);
   const ctx13 = ctx12 && await phase13(ctx12);
-  if (ctx13) await syncWriteCheck(ctx13);
+  const ctx14 = ctx13 && await phase14(ctx13);
+  if (ctx14) await syncWriteCheck(ctx14);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);

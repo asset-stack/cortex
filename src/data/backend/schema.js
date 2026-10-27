@@ -22,6 +22,7 @@ const CONVERT = {
     return Number.isNaN(d.getTime()) ? null : d.toISOString();
   },
   int: (v) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : 0; },
+  nint: (v) => { const n = parseInt(v, 10); return v === '' || v == null || !Number.isFinite(n) ? null : n; }, // int or null
   num: (v) => {
     const n = typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(/[^\d.-]/g, ''));
     return Number.isFinite(n) ? n : 0;
@@ -66,6 +67,19 @@ const COLUMNS = {
   deals: {
     id: 'id', name: t, sector: t, priority: t, stage: t, next_step: t, value: 'num', owner_id: 'fk', client_id: 'fk', contact_id: 'fk',
     position: 'int',
+    // 0014 (DEAL_0014: left out of writes until it has run). stage_at is the database's (set when the stage changes).
+    account_id: 'fk', contact_ids: 'uuids', currency: t, close_on: 'date', probability: 'nint', waiting_on: t, lost_reason: t,
+    stage_at: 'ts',
+  },
+  // The CRM (0014): organisations and the people at them.
+  accounts: {
+    id: 'id', name: t, kind: t, lifecycle: t, lifecycle_note: t, revisit_on: 'date', sector: t, country: t, region: t, timezone: t,
+    domain: t, website: t, size: t, guardrails: t, prep_url: t, referred_by: 'fk', owner_id: 'fk', client_id: 'fk', position: 'int',
+    created_at: 'ts',
+  },
+  crm_contacts: {
+    id: 'id', account_id: 'id', name: t, title: t, email: t, phone: t, linkedin: t, timezone: t, role: t, status: t, owner_id: 'fk',
+    position: 'int', created_at: 'ts',
   },
   client_notes: { id: 'id', client_id: 'id', user_id: 'fk', text: t, created_at: 'ts' },
   client_tasks: { id: 'id', client_id: 'id', position: 'int', text: t, done: 'bool' },
@@ -124,7 +138,7 @@ const COLUMNS = {
   // The CRM profile (0012): a deal's or client's notes, meetings and links (Make client carries a deal's to its client).
   crm_entries: {
     id: 'id', deal_id: 'fk', client_id: 'fk', kind: t, title: t, body: t, url: t, label: t, happened_on: 'date', attendees: t,
-    user_id: 'fk', created_at: 'ts',
+    user_id: 'fk', created_at: 'ts', account_id: 'fk', contact_id: 'fk', // the last two: 0014
   },
   // Outreach (0007). outreach_emails is not here: the app reads it on demand (store.outreach) and never writes it.
   outreach_mailboxes: { id: 'id', name: t, addresses: 'texts', owner_id: 'fk', active: 'bool', position: 'int' },
@@ -134,6 +148,7 @@ const COLUMNS = {
 };
 
 const byId = (r) => String(r.id);
+const DEAL_0014 = ['account_id', 'contact_ids', 'currency', 'close_on', 'probability', 'waiting_on', 'lost_reason', 'stage_at'];
 
 // Parents before children (FK-safe insert order; deletes run in reverse).
 // update: the rows always exist (sign-up trigger, seeded org row), so the sync engine updates them in place. A
@@ -143,6 +158,8 @@ const byId = (r) => String(r.id);
 // setNull: links (column → table) the database clears when the row they point at is deleted (on delete set null).
 // since: the migration that adds the table. Until it has run, the app goes on without it (the sync engine's probe():
 //   no rows, no realtime, no writes; admins see which file to run) instead of failing to load. Core tables have none.
+// later: columns a migration adds to an existing table, with the new table of that same migration ({ table, columns }):
+//   until that table is there, writes leave the columns out (the database doesn't have them yet).
 export const TABLES = [
   { name: 'profiles', key: byId, update: true },
   { name: 'org_settings', key: byId, update: true },
@@ -154,11 +171,26 @@ export const TABLES = [
   { name: 'subtasks', key: byId, parent: ['items', 'item_id'] },
   { name: 'clients', key: byId },
   { name: 'contacts', key: byId, setNull: { owner_id: 'profiles' } }, // before deals (deals.contact_id)
-  { name: 'deals', key: byId, setNull: { client_id: 'clients', contact_id: 'contacts' } },
+  // The CRM (0014): accounts before deals (deals.account_id); an account's contacts go with it (on delete cascade).
+  {
+    name: 'accounts', key: byId, setNull: { owner_id: 'profiles', client_id: 'clients', referred_by: 'accounts' },
+    since: '0014_crm_accounts.sql',
+  },
+  {
+    name: 'crm_contacts', key: byId, parent: ['accounts', 'account_id'], setNull: { owner_id: 'profiles' },
+    since: '0014_crm_accounts.sql',
+  },
+  {
+    name: 'deals', key: byId, setNull: { client_id: 'clients', contact_id: 'contacts', account_id: 'accounts' },
+    later: [{ table: 'accounts', columns: DEAL_0014 }],
+  },
   { name: 'client_notes', key: byId, parent: ['clients', 'client_id'] },
   // After deals and clients. A client deleted takes its entries (on delete cascade; the store drops them too); a deal
   // deleted takes the ones that never reached a client and leaves the others off it (0012's trigger, then set null).
-  { name: 'crm_entries', key: byId, setNull: { deal_id: 'deals', user_id: 'profiles' }, since: '0012_crm_profile.sql' },
+  {
+    name: 'crm_entries', key: byId, setNull: { deal_id: 'deals', user_id: 'profiles' }, since: '0012_crm_profile.sql',
+    later: [{ table: 'accounts', columns: ['account_id', 'contact_id'] }],
+  },
   { name: 'client_tasks', key: byId, parent: ['clients', 'client_id'] },
   { name: 'billing_plans', key: byId, parent: ['clients', 'client_id'] }, // before invoices (invoices.plan_id)
   { name: 'invoices', key: byId, parent: ['clients', 'client_id'], setNull: { plan_id: 'billing_plans' } },
@@ -307,9 +339,21 @@ export function flatten(state) {
     }));
   });
 
+  (state.accounts || []).forEach((a, i) => put('accounts', {
+    id: a.id, name: a.name, kind: a.kind, lifecycle: a.lifecycle, lifecycle_note: a.lifecycleNote, revisit_on: a.revisitOn,
+    sector: a.sector, country: a.country, region: a.region, timezone: a.timezone, domain: a.domain, website: a.website, size: a.size,
+    guardrails: a.guardrails, prep_url: a.prepUrl, referred_by: a.referredBy, owner_id: a.owner, client_id: a.clientId, position: i,
+    created_at: a.createdAt,
+  }));
+  (state.crmContacts || []).forEach((c, i) => put('crm_contacts', {
+    id: c.id, account_id: c.accountId, name: c.name, title: c.title, email: c.email, phone: c.phone, linkedin: c.linkedin,
+    timezone: c.timezone, role: c.role, status: c.status, owner_id: c.owner, position: i, created_at: c.createdAt,
+  }));
   (state.deals || []).forEach((d, i) => put('deals', {
     id: d.id, name: d.name, sector: d.sector, priority: d.priority, stage: d.stage, next_step: d.next, value: d.value,
-    owner_id: d.contact, client_id: d.clientId, contact_id: d.contactId, position: i,
+    owner_id: d.contact, client_id: d.clientId, contact_id: d.contactId, position: i, account_id: d.accountId,
+    contact_ids: d.contactIds, currency: d.currency || 'AUD', close_on: d.closeOn, probability: d.probability, waiting_on: d.waitingOn,
+    lost_reason: d.lostReason, stage_at: d.stageAt,
   }));
 
   (state.contacts || []).forEach((c, i) => put('contacts', {
@@ -386,6 +430,7 @@ export function flatten(state) {
   (state.crmEntries || []).forEach((x) => put('crm_entries', {
     id: x.id, deal_id: x.dealId || null, client_id: x.clientId || null, kind: x.kind, title: x.title, body: x.body, url: x.url,
     label: x.label, happened_on: x.happenedOn || null, attendees: x.attendees, user_id: x.user || null, created_at: x.createdAt,
+    account_id: x.accountId || null, contact_id: x.contactId || null,
   }));
   (state.calendarEvents || []).forEach((x) => put('calendar_events', {
     id: x.id, kind: x.kind, title: x.title, day: x.day, end_day: x.endDay, starts_at: x.startsAt, ends_at: x.endsAt, people: x.people,
@@ -500,6 +545,18 @@ export function assemble(rowsByTable, { me } = {}) {
     deals: all('deals').sort(byPos).map((d) => ({
       id: d.id, name: d.name, sector: d.sector, value: d.value, priority: d.priority, stage: d.stage,
       contact: d.owner_id ?? '', next: d.next_step, contactId: d.contact_id ?? '', ...(d.client_id ? { clientId: d.client_id } : {}),
+      accountId: d.account_id ?? '', contactIds: [...d.contact_ids], currency: d.currency || 'AUD', closeOn: d.close_on ?? '',
+      probability: d.probability, waitingOn: d.waiting_on, lostReason: d.lost_reason, stageAt: d.stage_at ?? '',
+    })),
+    accounts: all('accounts').sort(byPos).map((a) => ({
+      id: a.id, name: a.name, kind: a.kind || 'prospect', lifecycle: a.lifecycle || 'new', lifecycleNote: a.lifecycle_note,
+      revisitOn: a.revisit_on ?? '', sector: a.sector, country: a.country, region: a.region, timezone: a.timezone, domain: a.domain,
+      website: a.website, size: a.size, guardrails: a.guardrails, prepUrl: a.prep_url, referredBy: a.referred_by ?? '',
+      owner: a.owner_id ?? '', clientId: a.client_id ?? '', createdAt: a.created_at ?? '',
+    })),
+    crmContacts: all('crm_contacts').sort(byPos).map((c) => ({
+      id: c.id, accountId: c.account_id, name: c.name, title: c.title, email: c.email, phone: c.phone, linkedin: c.linkedin,
+      timezone: c.timezone, role: c.role, status: c.status || 'active', owner: c.owner_id ?? '', createdAt: c.created_at ?? '',
     })),
     clients,
     contacts: all('contacts').sort(byPosDesc).map((c) => ({
@@ -553,6 +610,7 @@ export function assemble(rowsByTable, { me } = {}) {
     crmEntries: all('crm_entries').sort(newest('created_at')).map((x) => ({
       id: x.id, dealId: x.deal_id ?? '', clientId: x.client_id ?? '', kind: x.kind, title: x.title, body: x.body, url: x.url,
       label: x.label, happenedOn: x.happened_on ?? '', attendees: x.attendees, user: x.user_id ?? '', createdAt: x.created_at ?? '',
+      accountId: x.account_id ?? '', contactId: x.contact_id ?? '',
     })),
     // By day, then start time (all-day first).
     calendarEvents: all('calendar_events').sort((a, b) => cmp(a.day || '', b.day || '') || cmp(a.starts_at || '', b.starts_at || '')

@@ -15,6 +15,20 @@ export const compactMoney = (n) => {
   return money(n);
 };
 
+// In a deal's currency (0014), as compactMoney: $250k (AUD), £40k, NZ$1.2M.
+const SYMBOLS = { AUD: '$', NZD: 'NZ$', GBP: '£', USD: 'US$', EUR: '€', CAD: 'C$', AED: 'AED ', SAR: 'SAR ' };
+export const compactIn = (n, currency = 'AUD') => compactMoney(n || 0).replace(/^\$/, SYMBOLS[currency] ?? `${currency} `);
+/** Totals per currency, AUD first then the largest: "$1.2M · £40k" ("$0" when there's nothing). `items`: [{ currency,
+ *  value }]. Currencies aren't converted into each other. */
+export const totalsIn = (items = []) => totalsList(items).join(' · ');
+/** As totalsIn, as a list: ['$1.2M', '£40k'] (['$0'] when there's nothing). */
+export function totalsList(items = []) {
+  const by = new Map();
+  items.forEach(({ currency, value }) => { const c = currency || 'AUD'; by.set(c, (by.get(c) || 0) + (Number(value) || 0)); });
+  const list = [...by].filter(([, v]) => v > 0).sort((a, b) => (a[0] === 'AUD' ? -1 : b[0] === 'AUD' ? 1 : b[1] - a[1]));
+  return list.length ? list.map(([c, v]) => compactIn(v, c)) : [compactIn(0)];
+}
+
 const parseDay = (iso) => new Date(iso.length === 10 ? `${iso}T00:00:00` : iso);
 
 // Day and month; the year is added when it isn't this year, so 2026 and 2027 dates don't look the same.

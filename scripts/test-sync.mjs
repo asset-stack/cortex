@@ -91,8 +91,39 @@ const fixture = () => ({
     { id: 'b-events', module: 'marketing', name: 'Events', owner: '', calendar: false, groups: [] },
   ],
   deals: [
-    { id: 'd-1', name: 'Deal one', sector: 'Government', value: 70000, priority: 'P2', stage: 'Opportunities', contact: U1, next: 'Call', contactId: 'p-1' },
-    { id: 'd-2', name: 'Client one', sector: 'Utilities', value: '1,500', priority: 'P1', stage: 'Won', contact: '', next: '', contactId: '', clientId: 'c-1' },
+    {
+      id: 'd-1', name: 'Deal one', sector: 'Government', value: 70000, priority: 'P2', stage: 'Interested', contact: U1, next: 'Call', contactId: 'p-1',
+      accountId: 'ac-1', contactIds: ['cc-1', 'cc-2'], currency: 'NZD', closeOn: '2026-12-15', probability: 25, waitingOn: 'us', lostReason: '',
+      stageAt: '2026-10-18T00:00:00.000Z',
+    },
+    {
+      id: 'd-2', name: 'Client one', sector: 'Utilities', value: '1,500', priority: 'P1', stage: 'Won', contact: '', next: '', contactId: '', clientId: 'c-1',
+      accountId: '', contactIds: [], currency: 'AUD', closeOn: '', probability: null, waitingOn: '', lostReason: '', stageAt: '',
+    },
+  ],
+  // The CRM (0014): accounts in order, then the people at them.
+  accounts: [
+    {
+      id: 'ac-1', name: 'Example Shire', kind: 'prospect', lifecycle: 'opportunity', lifecycleNote: '', revisitOn: '', sector: 'Government',
+      country: 'New Zealand', region: 'Waikato', timezone: 'Pacific/Auckland', domain: 'shire.example.com', website: 'https://shire.example.com/',
+      size: '300 staff', guardrails: 'No pricing before the budget review', prepUrl: 'https://docs.google.com/document/d/prep/edit',
+      referredBy: 'ac-2', owner: U1, clientId: '', createdAt: '2026-10-01T00:00:00.000Z',
+    },
+    {
+      id: 'ac-2', name: 'Example Partners', kind: 'partner', lifecycle: 'nurture', lifecycleNote: 'Refers councils', revisitOn: '2027-03-01',
+      sector: '', country: 'United Kingdom', region: '', timezone: 'Europe/London', domain: '', website: '', size: '', guardrails: '',
+      prepUrl: '', referredBy: '', owner: '', clientId: 'c-1', createdAt: '2026-09-01T00:00:00.000Z',
+    },
+  ],
+  crmContacts: [
+    {
+      id: 'cc-1', accountId: 'ac-1', name: 'Jo Example', title: 'Asset Manager', email: 'jo@example.com', phone: '+64 0 000 0000',
+      linkedin: 'https://www.linkedin.com/in/example/', timezone: '', role: 'champion', status: 'active', owner: U1, createdAt: '2026-10-02T00:00:00.000Z',
+    },
+    {
+      id: 'cc-2', accountId: 'ac-1', name: 'Sam Example', title: 'Director', email: '', phone: '', linkedin: '', timezone: 'Pacific/Auckland',
+      role: 'decision_maker', status: 'left', owner: '', createdAt: '',
+    },
   ],
   clients: [
     {
@@ -197,13 +228,17 @@ const fixture = () => ({
   ],
   // CRM profile (0012): newest first; one on a deal, one carried to a client, one on a client only.
   crmEntries: [
+    { id: 'ce-n5', dealId: '', clientId: '', kind: 'note', title: '', body: 'Signs off over $50k', url: '', label: '', happenedOn: '',
+      attendees: '', user: U1, createdAt: '2026-10-23T01:00:00.000Z', accountId: '', contactId: 'cc-2' },
+    { id: 'ce-n4', dealId: '', clientId: '', kind: 'note', title: '', body: 'Budget review in February', url: '', label: '', happenedOn: '',
+      attendees: '', user: U2, createdAt: '2026-10-22T01:00:00.000Z', accountId: 'ac-1', contactId: '' },
     { id: 'ce-n3', dealId: '', clientId: 'c-1', kind: 'link', title: 'Pitch deck', body: '', url: 'https://example.com/deck', label: 'Deck',
-      happenedOn: '', attendees: '', user: U1, createdAt: '2026-10-21T03:00:00.000Z' },
+      happenedOn: '', attendees: '', user: U1, createdAt: '2026-10-21T03:00:00.000Z', accountId: '', contactId: '' },
     { id: 'ce-n2', dealId: 'd-1', clientId: '', kind: 'meeting', title: 'First meeting', body: 'Wants a pilot',
       url: 'https://docs.google.com/document/d/example/edit', label: '', happenedOn: '2026-10-20', attendees: 'Jo Example', user: U2,
-      createdAt: '2026-10-20T05:00:00.000Z' },
+      createdAt: '2026-10-20T05:00:00.000Z', accountId: '', contactId: '' },
     { id: 'ce-n1', dealId: 'd-1', clientId: '', kind: 'note', title: '', body: 'Call back Friday', url: '', label: '', happenedOn: '',
-      attendees: '', user: U1, createdAt: '2026-10-19T01:00:00.000Z' },
+      attendees: '', user: U1, createdAt: '2026-10-19T01:00:00.000Z', accountId: '', contactId: '' },
   ],
   // Calendar (0009): by day, then start (all-day first).
   calendarEvents: [
@@ -277,8 +312,13 @@ await check('flatten: DB column shapes', () => {
   });
   assert.deepEqual(rows.deals.get('d-2'), {
     id: 'd-2', name: 'Client one', sector: 'Utilities', priority: 'P1', stage: 'Won', next_step: '', value: 1500,
-    owner_id: null, client_id: 'c-1', contact_id: null, position: 1,
+    owner_id: null, client_id: 'c-1', contact_id: null, position: 1, account_id: null, contact_ids: [], currency: 'AUD', close_on: null,
+    probability: null, waiting_on: '', lost_reason: '', stage_at: null,
   });
+  assert.deepEqual(rows.deals.get('d-1').contact_ids, ['cc-1', 'cc-2']);
+  assert.equal(rows.deals.get('d-1').probability, 25);
+  assert.deepEqual([rows.crm_contacts.get('cc-2').account_id, rows.crm_contacts.get('cc-2').position, rows.accounts.get('ac-2').position], ['ac-1', 1, 1]);
+  assert.deepEqual([rows.crm_entries.get('ce-n4').account_id, rows.crm_entries.get('ce-n5').contact_id, rows.crm_entries.get('ce-n1').account_id], ['ac-1', 'cc-2', null]);
   assert.equal(rows.clients.get('c-0').last_contact, null);
   // position is the array index ('c-0' sits second, so id order can't stand in for it), counted from the end for
   // the lists that grow at the top (clients, contacts, a client's invoices).
@@ -302,7 +342,8 @@ await check('assemble: order and state fields', () => {
   const back = assemble(flatten(s), { me: U1 });
   assert.deepEqual(Object.keys(back).sort(), ['approvals', 'boards', 'channels', 'clients', 'contacts', 'deals', 'emails', 'lastRead',
     'messages', 'org', 'sequences', 'users', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements',
-    'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'calendarEvents', 'crmEntries'].sort());
+    'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'calendarEvents', 'crmEntries', 'accounts',
+    'crmContacts'].sort());
   assert.deepEqual(back.crmEntries, s.crmEntries, 'CRM entries newest first, every field back');
   assert.deepEqual(back.boards.map((b) => b.id), ['b-ana', 'b-ben', 'b-web', 'b-gen', 'b-post', 'b-events']);
   const web = back.boards.find((b) => b.id === 'b-web');
@@ -327,7 +368,7 @@ await check('assemble: order and state fields', () => {
   assert.deepEqual(back.users, s.users);
   // Parts of the fixture already in canonical form come back exactly (no extra or missing fields).
   ['boards', 'contacts', 'emails', 'sequences', 'approvals', 'messages', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments',
-    'bankStatements', 'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet']
+    'bankStatements', 'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'accounts', 'crmContacts']
     .forEach((k) => assert.deepEqual(back[k], s[k], k));
   assert.deepEqual(back.clients[1], s.clients[1]);
   assert.deepEqual(back.clients[0].plans, s.clients[0].plans);
@@ -1419,23 +1460,51 @@ await check('sync: loadAll pages every table and normalises rows', async () => {
 // the schema cache") loses that feature, not the workspace.
 const NOT_FOUND = { code: 'PGRST205', message: "Could not find the table 'public.crm_entries' in the schema cache" };
 await check('sync: a table whose migration hasn’t run (TABLES since) is left out — no rows, no realtime, no writes — and the rest loads', async () => {
-  assert.deepEqual(TABLES.filter((t) => t.since).map((t) => [t.name, t.since]), [['crm_entries', '0012_crm_profile.sql']]);
+  assert.deepEqual(TABLES.filter((t) => t.since).map((t) => [t.name, t.since]),
+    [['accounts', '0014_crm_accounts.sql'], ['crm_contacts', '0014_crm_accounts.sql'], ['crm_entries', '0012_crm_profile.sql']]);
   const { sb, sync } = setup({ deals: [{ id: 'd1', name: 'D', value: 0, position: 0 }] });
   sb.failures.push({ table: 'crm_entries', method: 'select', ...NOT_FOUND, sticky: true });
   assert.deepEqual(await sync.probe(), ['crm_entries']);
-  assert.deepEqual(sb.calls.map((c) => [c.table, c.columns, c.range]), [['crm_entries', 'id', [0, 0]]], 'one small select per since table');
+  assert.deepEqual(sb.calls.map((c) => [c.table, c.columns, c.range]),
+    [['accounts', 'id', [0, 0]], ['crm_contacts', 'id', [0, 0]], ['crm_entries', 'id', [0, 0]]], 'one small select per since table');
+  sb.calls.length = 0;
   sync.subscribe(() => {});
   const tables = sb.channels.at(-1).handlers.map((h) => h.filter.table);
   assert.ok(!tables.includes('crm_entries') && tables.includes('deals') && tables.length === TABLES.length - 1, 'left out of realtime');
+  sb.calls.length = 0;
   const rows = await sync.loadAll();
   assert.equal(rows.crm_entries.size, 0);
   assert.equal(rows.deals.size, 1);
-  assert.equal(sb.calls.filter((c) => c.table === 'crm_entries').length, 1, 'not loaded');
+  assert.equal(sb.calls.filter((c) => c.table === 'crm_entries').length, 0, 'not loaded (only probed)');
   sync.queue([up('crm_entries', 'e1'), up('deals', 'd2')]);
   sync.queue([del('crm_entries', 'e2')]);
   await sync.flush();
   assert.deepEqual(sb.calls.filter((c) => c.method !== 'select').map((c) => `${c.method} ${c.table}`), ['upsert deals'], 'no writes to it');
   assert.deepEqual([sync.missing(), sync.hasPending()], [['crm_entries'], false]);
+  sync.dispose();
+});
+
+await check('sync: columns a migration adds to an existing table (TABLES later) are left out of writes until its new table is there', async () => {
+  assert.deepEqual(TABLES.filter((t) => t.later).map((t) => [t.name, t.later.map((l) => l.table)]), [['deals', ['accounts']], ['crm_entries', ['accounts']]]);
+  const { sb, sync } = setup();
+  sb.failures.push({ table: 'accounts', method: 'select', ...NOT_FOUND, sticky: true });
+  sb.failures.push({ table: 'crm_contacts', method: 'select', ...NOT_FOUND, sticky: true });
+  assert.deepEqual(await sync.probe(), ['accounts', 'crm_contacts']);
+  const deal = { id: 'd1', name: 'D', stage: 'Interested', account_id: 'a1', contact_ids: ['p1'], currency: 'GBP', close_on: null, probability: 30,
+    waiting_on: 'us', lost_reason: '', stage_at: '2026-10-01T00:00:00.000Z', position: 0 };
+  const entry = { id: 'e1', deal_id: 'd1', kind: 'note', body: 'x', account_id: null, contact_id: null };
+  sync.queue([up('deals', 'd1', deal), up('crm_entries', 'e1', entry), up('accounts', 'a1', { id: 'a1', name: 'A' })]);
+  await sync.flush();
+  const sent = Object.fromEntries(sb.calls.filter((c) => c.method === 'upsert').map((c) => [c.table, c.rows[0]]));
+  assert.deepEqual(Object.keys(sent).sort(), ['crm_entries', 'deals'], 'the missing table takes no writes');
+  assert.deepEqual(sent.deals, { id: 'd1', name: 'D', stage: 'Interested', position: 0 }, 'the deal without 0014’s columns');
+  assert.deepEqual(sent.crm_entries, { id: 'e1', deal_id: 'd1', kind: 'note', body: 'x' });
+  sb.failures.length = 0;
+  assert.deepEqual(await sync.probe(), [], '0014 has run');
+  sb.calls.length = 0;
+  sync.queue([up('deals', 'd1', deal)]);
+  await sync.flush();
+  assert.deepEqual(sb.calls.find((c) => c.method === 'upsert').rows[0], deal, 'then they go');
   sync.dispose();
 });
 
@@ -2446,7 +2515,7 @@ await check('crm: the demo seed — Northside’s deal has a meeting with its no
   const wt = crm.timelineOf(s, { clientId: westbay.id });
   assert.ok(wt.some((e) => e.kind === 'meeting' && e.dealId), 'the deal’s meeting, now the client’s');
   assert.ok(crm.linksOf(s, { clientId: westbay.id }).some((l) => l.label === 'Demo' && !l.fixed));
-  assert.ok(s.crmEntries.every((e) => e.user && e.createdAt && (e.dealId || e.clientId)));
+  assert.ok(s.crmEntries.every((e) => e.user && e.createdAt && (e.dealId || e.clientId || e.accountId || e.contactId)));
 });
 
 // The starting boards and first group the app uses are the ones the database makes: 0006 for Projects and Marketing,
@@ -2676,9 +2745,14 @@ await check("automations: contactPipelineLocal dates the follow-up on its owner'
 await check('automations: contactPipelineLocal creates the deal and the follow-up once', () => {
   const st = outreachState();
   const out = auto.contactPipelineLocal(st, 'c1', 'Sent', { day: '2026-10-12' });
-  assert.deepEqual({ ...out.deal, id: '' }, {
-    id: '', name: 'Example Water', sector: '', value: 0, priority: 'P2', stage: 'Opportunities', contact: 'stu', next: 'Reply to Pat Doe', contactId: 'c1',
+  const account = st.accounts.find((a) => a.name === 'Example Water');
+  const pat = st.crmContacts.find((c) => c.name === 'Pat Doe');
+  assert.deepEqual({ ...out.deal, id: '', stageAt: '' }, {
+    id: '', name: 'Example Water', sector: '', value: 0, priority: 'P2', stage: 'Interested', contact: 'stu', next: 'Reply to Pat Doe', contactId: 'c1',
+    accountId: account.id, contactIds: [pat.id], currency: 'AUD', closeOn: '', probability: null, waitingOn: 'us', lostReason: '', stageAt: '',
   });
+  assert.deepEqual([account.kind, account.lifecycle, account.owner, pat.accountId, pat.owner], ['prospect', 'engaged', 'stu', account.id, 'stu'],
+    '0014: the organisation as an engaged prospect, the person as its contact');
   assert.equal(st.deals.at(-1), out.deal, 'at the end of the pipeline');
   assert.deepEqual({ ...out.todo, id: '' }, {
     id: '', assignee: 'stu', createdBy: 'al', title: 'Follow up: Pat Doe replied', notes: '', day: '2026-10-12', start: '', minutes: 30,
@@ -2688,11 +2762,14 @@ await check('automations: contactPipelineLocal creates the deal and the follow-u
   st.contacts[0].status = 'Meeting booked';
   const again = auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-12' });
   assert.equal(again.deal, out.deal);
-  assert.equal(out.deal.stage, 'First meetings', 'a booking moves it on');
+  assert.equal(out.deal.stage, 'Meeting booked', 'a booking moves it on');
+  assert.equal(account.lifecycle, 'meeting', 'and the account');
+  assert.deepEqual([st.accounts.length, st.crmContacts.length], [1, 1], 'found again, not added twice');
   assert.equal(again.todo, null, 'one follow-up per contact and day');
   st.contacts[0].status = 'Replied';
   auto.contactPipelineLocal(st, 'c1', 'Meeting booked', { day: '2026-10-13' });
-  assert.equal(out.deal.stage, 'First meetings', 'never moves back');
+  assert.equal(out.deal.stage, 'Meeting booked', 'never moves back');
+  assert.equal(account.lifecycle, 'meeting', 'nor does the account');
   assert.equal(st.todos.at(-1).title, 'Follow up: Pat Doe replied');
   assert.equal(st.deals.length, 2);
   assert.equal(st.todos.length, 2);
@@ -2702,35 +2779,59 @@ await check('automations: contactPipelineLocal names, owners and stages', () => 
   const st = outreachState();
   const booked = auto.contactPipelineLocal(st, 'c2', '', { day: '2026-10-12' });
   assert.equal(booked.deal.name, 'Lee Roe', 'blank org: the contact name');
-  assert.equal(booked.deal.stage, 'First meetings');
+  assert.equal(booked.deal.stage, 'Meeting booked');
   assert.equal(booked.deal.next, 'Prepare meeting with Lee Roe');
   assert.equal(booked.deal.contact, 'al', 'no owner: whoever changed it');
   assert.equal(booked.todo.title, 'Prepare: meeting with Lee Roe');
   assert.equal(booked.todo.assignee, 'al');
   assert.equal(auto.contactPipelineLocal(st, 'c3', 'Sent'), null, 'Opened does nothing');
   assert.equal(auto.contactPipelineLocal(st, 'missing', ''), null);
-  st.deals.push({ id: 'd-demo', name: 'Org', sector: '', value: 0, priority: 'P2', stage: 'Demos', contact: 'stu', next: '', contactId: 'c3' });
+  st.deals.push({ id: 'd-demo', name: 'Org', sector: '', value: 0, priority: 'P2', stage: 'Demo held', contact: 'stu', next: '', contactId: 'c3' });
   st.contacts[2].status = 'Meeting booked';
-  assert.equal(auto.contactPipelineLocal(st, 'c3', 'Opened', { day: '2026-10-12' }).deal.stage, 'Demos', 'Demos stays put');
+  assert.equal(auto.contactPipelineLocal(st, 'c3', 'Opened', { day: '2026-10-12' }).deal.stage, 'Demo held', 'Demo held stays put');
+  // An account set aside keeps its lifecycle; a customer too.
+  const aside = outreachState();
+  aside.accounts = [{ id: 'a-x', name: 'Example Water', lifecycle: 'suppressed' }];
+  auto.contactPipelineLocal(aside, 'c1', 'Sent', { day: '2026-10-12' });
+  assert.deepEqual([aside.accounts.length, aside.accounts[0].lifecycle], [1, 'suppressed']);
 });
 
-await check('automations: a booking moves a deal on from Opportunities or Contacted, never back from later stages (0008)', () => {
+await check('automations: a booking moves a deal on from Interested (or the names before 0014), never back from later stages', () => {
   const at = (stage) => {
     const st = outreachState();
     st.deals.push({ id: 'd-x', name: 'Org', sector: '', value: 0, priority: 'P2', stage, contact: 'stu', next: '', contactId: 'c3' });
     st.contacts[2].status = 'Meeting booked';
     return auto.contactPipelineLocal(st, 'c3', 'Opened', { day: '2026-10-12' }).deal.stage;
   };
-  assert.deepEqual(['Opportunities', 'Contacted', 'First meetings', 'Demos'].map(at), ['First meetings', 'First meetings', 'First meetings', 'Demos']);
+  assert.deepEqual(['Interested', 'Opportunities', 'Contacted', 'Meeting booked', 'Intro held', 'Demo held', 'Contract sent', 'Lost'].map(at),
+    ['Meeting booked', 'Meeting booked', 'Meeting booked', 'Meeting booked', 'Intro held', 'Demo held', 'Contract sent', 'Lost']);
+  // 0014's trigger has the same rule.
+  const sql14 = readFileSync(new URL('0014_crm_accounts.sql', migrationsDir), 'utf8');
+  assert.match(sql14, /elsif v_booked and v_stage in \('Interested', 'Opportunities', 'Contacted'\) then/);
 });
 
-await check('pipeline: stages Opportunities → Contacted → First meetings → Demos; dealStage() shows the old Won in Demos', async () => {
+await check('pipeline: stages Interested → … → Contract sent and Lost (0014); dealStage() shows the old names as 0014 renamed them', async () => {
   const data = await import('../src/data/boards.js');
-  assert.deepEqual(data.DEAL_STAGES, ['Opportunities', 'Contacted', 'First meetings', 'Demos']);
+  assert.deepEqual(data.DEAL_STAGES, ['Interested', 'Meeting booked', 'Intro held', 'Demo held', 'Proposal sent', 'Contract sent']);
+  assert.deepEqual(data.ALL_DEAL_STAGES, [...data.DEAL_STAGES, 'Lost']);
   assert.deepEqual(data.DEAL_PRIORITIES, ['P1', 'P2', 'P3']);
-  assert.deepEqual(['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Won', '', 'Lost', undefined].map((stage) => data.dealStage({ stage })),
-    ['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Demos', 'Opportunities', 'Opportunities', 'Opportunities']);
-  assert.equal(data.dealStage(null), 'Opportunities');
+  assert.deepEqual(['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Won', '', 'Lost', 'Proposal sent', 'Mystery', undefined]
+    .map((stage) => data.dealStage({ stage })),
+  ['Interested', 'Interested', 'Meeting booked', 'Demo held', 'Demo held', 'Interested', 'Lost', 'Proposal sent', 'Interested', 'Interested']);
+  assert.equal(data.dealStage(null), 'Interested');
+  // Probability: the deal's own, else its stage's; days in stage from stageAt.
+  assert.deepEqual(data.DEAL_STAGES.map((stage) => data.dealProbability({ stage })), [10, 20, 30, 50, 60, 80]);
+  assert.deepEqual([data.dealProbability({ stage: 'Lost' }), data.dealProbability({ stage: 'Interested', probability: 0 }),
+    data.dealProbability({ stage: 'Interested', probability: null })], [0, 0, 10]);
+  const now = Date.parse('2026-10-28T12:00:00Z');
+  assert.deepEqual([data.daysInStage({ stageAt: '2026-10-14T13:00:00Z' }, now), data.daysInStage({ stageAt: '2026-10-28T11:00:00Z' }, now),
+    data.daysInStage({ stageAt: '' }, now), data.daysInStage({ stageAt: '2026-11-01T00:00:00Z' }, now)], [13, 0, null, 0]);
+  // 0014 makes the same renames in the database, before its stage_at trigger exists.
+  const sql14 = readFileSync(new URL('0014_crm_accounts.sql', migrationsDir), 'utf8');
+  assert.match(sql14, /when 'Opportunities' then 'Interested' when 'Contacted' then 'Interested'\s+when 'First meetings' then 'Meeting booked' else 'Demo held' end/);
+  assert.ok(sql14.indexOf("stage in ('Opportunities', 'Contacted', 'First meetings', 'Demos', 'Won')") < sql14.indexOf('create trigger deal_stage_at'));
+  assert.deepEqual(Object.entries(data.OLD_DEAL_STAGES), [['Opportunities', 'Interested'], ['Contacted', 'Interested'], ['First meetings', 'Meeting booked'],
+    ['Demos', 'Demo held'], ['Won', 'Demo held']]);
   // 0008 makes the same moves in the database: Won → Demos, the booking rule from Opportunities or Contacted.
   const sql8 = readFileSync(new URL('0008_pipeline_stages.sql', migrationsDir), 'utf8');
   assert.match(sql8, /update public\.deals set stage = 'Demos' where stage = 'Won';/);
@@ -2760,11 +2861,144 @@ await check('pipeline: Work in Progress has a row per client with Details (text)
   assert.deepEqual([rec.name, rec.values.details, rec.values.status, rec.values.people], ['Example Council', 'Onboarding call', 'In progress', ['u1']]);
 });
 
+// ── The CRM (0014): accounts, their contacts, the deals on them ─────────────────────────────────────────────────
+
+const accounts = await import('../src/lib/accounts.js');
+
+await check('accounts: cleanAccount and cleanPerson keep valid fields only — known kinds, lifecycles, roles and statuses, http(s) links, a domain, owners and referrers that exist', () => {
+  const users = ['u1'];
+  assert.deepEqual(accounts.cleanAccount({
+    name: '  Example Shire ', kind: 'partner', lifecycle: 'rfp', lifecycleNote: ' Tender in March ', revisitOn: '2027-03-01', sector: ' Councils ',
+    country: 'Australia', region: 'QLD', timezone: 'Australia/Brisbane', domain: 'https://www.Shire.example.com/about', website: 'shire.example.com',
+    size: '300', guardrails: ' No Olympic line ', prepUrl: 'docs.google.com/document/d/x', referredBy: 'a2', owner: 'u1',
+  }, { userIds: users, accountIds: ['a1', 'a2'], self: 'a1' }), {
+    name: 'Example Shire', kind: 'partner', lifecycle: 'rfp', lifecycleNote: 'Tender in March', revisitOn: '2027-03-01', sector: 'Councils',
+    country: 'Australia', region: 'QLD', timezone: 'Australia/Brisbane', domain: 'shire.example.com', website: 'https://shire.example.com/',
+    size: '300', guardrails: 'No Olympic line', prepUrl: 'https://docs.google.com/document/d/x', referredBy: 'a2', owner: 'u1',
+  });
+  assert.deepEqual(accounts.cleanAccount({ name: '  ', kind: 'rival', lifecycle: 'won', revisitOn: '1/3/2027', website: 'javascript:alert(1)', domain: 'not a domain',
+    referredBy: 'a1', owner: 'ghost' }, { userIds: users, accountIds: ['a1'], self: 'a1' }),
+  { revisitOn: '', website: '', domain: '', referredBy: '', owner: '' }, 'no blank name, unknown kind or lifecycle; never referred by itself');
+  assert.equal(accounts.cleanAccount({ guardrails: 'x'.repeat(6000) }).guardrails.length, 5000);
+  assert.deepEqual(accounts.cleanPerson({ name: ' Jo Example ', email: ' Jo@Example.COM ', role: 'champion', status: 'left', linkedin: 'linkedin.com/in/jo',
+    accountId: 'a1', owner: 'u1' }, { userIds: users, accountIds: ['a1'] }),
+  { name: 'Jo Example', email: 'jo@example.com', role: 'champion', status: 'left', linkedin: 'https://linkedin.com/in/jo', accountId: 'a1', owner: 'u1' });
+  assert.deepEqual(accounts.cleanPerson({ role: 'boss', status: 'gone', accountId: 'a9' }, { accountIds: ['a1'] }), {});
+  assert.deepEqual(['jo@shire.example.com', 'https://www.example.org:8080/x?y', 'example', ''].map(accounts.domainOf),
+    ['shire.example.com', 'example.org', '', '']);
+});
+
+await check('accounts: lifecycleAfter moves forward only (as 0014’s contact_pipeline), never over a lifecycle set aside', () => {
+  const { lifecycleAfter } = accounts;
+  assert.deepEqual(['new', 'contacted', 'engaged', 'meeting', 'opportunity', 'customer'].map((l) => lifecycleAfter(l, 'replied')),
+    ['engaged', 'engaged', 'engaged', 'meeting', 'opportunity', 'customer']);
+  assert.deepEqual(['new', 'engaged', 'meeting', 'opportunity'].map((l) => lifecycleAfter(l, 'booked')), ['meeting', 'meeting', 'meeting', 'opportunity']);
+  assert.deepEqual(['nurture', 'rfp', 'not_now', 'suppressed'].map((l) => lifecycleAfter(l, 'booked')), ['nurture', 'rfp', 'not_now', 'suppressed']);
+  assert.deepEqual([lifecycleAfter('', 'replied'), lifecycleAfter('new', 'other')], ['engaged', 'new']);
+  // 0014 says the same.
+  const sql14 = readFileSync(new URL('0014_crm_accounts.sql', migrationsDir), 'utf8');
+  assert.match(sql14, /where id = v_account and \(lifecycle in \('new', 'contacted'\) or \(v_booked and lifecycle = 'engaged'\)\);/);
+});
+
+await check('accounts: lookups — an account by name (any case), its people and deals (open ones too), a contact’s deals; search text', () => {
+  const st = {
+    accounts: [{ id: 'a1', name: 'Example Shire', sector: 'Councils', country: 'Australia', region: '', domain: 'shire.example.com' }],
+    crmContacts: [{ id: 'p1', accountId: 'a1', name: 'Jo', title: 'Manager', email: 'jo@example.com', phone: '' }, { id: 'p2', accountId: 'a2', name: 'Lee' }],
+    deals: [
+      { id: 'd1', accountId: 'a1', stage: 'Interested', contactIds: ['p1', 'gone'] },
+      { id: 'd2', accountId: 'a1', stage: 'Lost', contactIds: [] },
+      { id: 'd3', accountId: 'a1', stage: 'Demo held', clientId: 'c1', contactIds: ['p1'] },
+    ],
+  };
+  assert.equal(accounts.accountNamed(st, '  example SHIRE ').id, 'a1');
+  assert.equal(accounts.accountNamed(st, 'Nowhere'), null);
+  assert.deepEqual(accounts.peopleOf(st, 'a1').map((p) => p.id), ['p1']);
+  assert.deepEqual(accounts.dealPeople(st, st.deals[0]).map((p) => p.id), ['p1'], 'a contact that’s gone is left out');
+  assert.deepEqual([accounts.dealsOfAccount(st, 'a1').length, accounts.dealsOfAccount(st, 'a1', { open: true }).map((d) => d.id)], [3, ['d1']]);
+  assert.deepEqual(accounts.dealsOfPerson(st, 'p1').map((d) => d.id), ['d1', 'd3']);
+  assert.ok(accounts.accountText(st.accounts[0]).includes('shire.example.com'));
+  assert.ok(accounts.personText(st, st.crmContacts[0]).includes('example shire'), 'a contact is found by their account’s name');
+});
+
+await check('crm: entries on an account or a contact (0014) — Pipeline’s rules; an account’s timeline has its own, its people’s, its deals’ and its client’s', () => {
+  const st = {
+    ...crmState(),
+    accounts: [{ id: 'a1', name: 'Won deal', clientId: 'c-won' }, { id: 'a2', name: 'Other' }],
+    crmContacts: [{ id: 'p1', accountId: 'a1', name: 'Jo' }, { id: 'p9', accountId: 'a2', name: 'Lee' }],
+  };
+  st.deals = [{ id: 'd-open', name: 'Open deal', clientId: '', accountId: 'a1' }, { id: 'd-won', name: 'Won deal', clientId: 'c-won', accountId: 'a1' }];
+  st.crmEntries.push(
+    { id: 'e7', accountId: 'a1', kind: 'note', body: 'Budget in Feb', user: 'sam', createdAt: '2026-10-25T00:00:00.000Z' },
+    { id: 'e8', contactId: 'p1', kind: 'note', body: 'Prefers calls', user: 'ann', createdAt: '2026-10-26T00:00:00.000Z' },
+    { id: 'e9', contactId: 'p9', kind: 'note', body: 'Someone else', user: 'ann', createdAt: '2026-10-27T00:00:00.000Z' },
+  );
+  assert.deepEqual(['ann', 'stu', 'sam', 'off'].map((u) => crm.canAddEntry(st, { accountId: 'a1' }, u)), [true, false, true, false], 'Pipeline edit');
+  assert.deepEqual(['ann', 'stu', 'sam'].map((u) => crm.canAddEntry(st, { contactId: 'p1' }, u)), [true, false, true]);
+  assert.deepEqual(['stu', 'off'].map((u) => crm.canReadEntry(st, st.crmEntries.find((e) => e.id === 'e8'), u)), [true, false], 'Pipeline view reads');
+  const noPipeline = { ...st, moduleAccess: [...st.moduleAccess, { userId: 'stu', module: 'pipeline', level: 'none' }] };
+  assert.equal(crm.canReadEntry(noPipeline, st.crmEntries.find((e) => e.id === 'e7'), 'stu'), false);
+  assert.deepEqual(crm.timelineOf(st, { accountId: 'a1' }).map((e) => e.id), ['e8', 'e7', 'e5', 'e2', 'e1', 'e4', 'note:n1'],
+    'its own, Jo’s, both deals’ and its client’s (with its older notes); not Lee’s; links aside');
+  assert.deepEqual(crm.linksOf(st, { accountId: 'a1' }).map((l) => l.id), ['fixed:Demo', 'e3'], 'the client’s Demo link, a deal’s link; never an unsafe one');
+  assert.deepEqual(crm.timelineOf(st, { contactId: 'p1' }).map((e) => e.id), ['e8'], 'a contact’s own');
+  // 0014's read policy says the same.
+  const sql14 = readFileSync(new URL('0014_crm_accounts.sql', migrationsDir), 'utf8');
+  assert.match(sql14, /or \(\(deal_id is not null or account_id is not null or contact_id is not null\) and public\.can_view\('pipeline'\)\)/);
+});
+
+await check('automations: crmBackfillLocal (0014’s one-off steps) — stages renamed, every client and deal its account, a deal’s outreach contact on it; run again, nothing changes', () => {
+  let n = 0;
+  const uid = () => `id-${++n}`;
+  const st = {
+    clients: [{ id: 'c1', name: 'Example Council', sector: 'Government', contact: 'u1' }],
+    contacts: [{ id: 'o1', name: 'Pat Doe', email: 'Pat@Example.com', owner: 'u2' }],
+    deals: [
+      { id: 'd1', name: 'Example Council', stage: 'Demos', clientId: 'c1', contact: 'u1' },
+      { id: 'd2', name: 'Example Water', stage: 'Contacted', contact: 'u2', contactId: 'o1', sector: 'Utilities' },
+      { id: 'd3', name: 'example water', stage: 'First meetings', contact: 'u2' },
+      { id: 'd4', name: 'Example Port', stage: 'Opportunities', contact: '', waitingOn: 'us' },
+    ],
+  };
+  auto.crmBackfillLocal(st, { uid });
+  assert.deepEqual(st.deals.map((d) => [d.stage, d.waitingOn]), [['Demo held', ''], ['Interested', 'them'], ['Meeting booked', ''], ['Interested', 'us']]);
+  const [council, water, port] = st.accounts;
+  assert.deepEqual(st.accounts.map((a) => [a.name, a.kind, a.lifecycle, a.clientId, a.owner]), [
+    ['Example Council', 'customer', 'customer', 'c1', 'u1'], ['Example Water', 'prospect', 'opportunity', '', 'u2'], ['Example Port', 'prospect', 'opportunity', '', ''],
+  ]);
+  assert.deepEqual(st.deals.map((d) => d.accountId), [council.id, water.id, water.id, port.id], 'a client’s deal its account; the same name, one account');
+  assert.deepEqual(st.crmContacts.map((c) => [c.accountId, c.name, c.email, c.owner]), [[water.id, 'Pat Doe', 'pat@example.com', 'u2']]);
+  assert.deepEqual(st.deals[1].contactIds, [st.crmContacts[0].id]);
+  assert.deepEqual(st.deals[0].contactIds, []);
+  const before = JSON.stringify(st);
+  auto.crmBackfillLocal(st, { uid });
+  assert.equal(JSON.stringify(st), before, 'nothing left to do');
+});
+
+await check('format: money in a deal’s currency, and totals per currency (AUD first, never converted)', () => {
+  assert.deepEqual([format.compactIn(250000), format.compactIn(40000, 'GBP'), format.compactIn(1200000, 'NZD'), format.compactIn(5000, 'AED'), format.compactIn(0, 'USD')],
+    ['$250k', '£40k', 'NZ$1.2M', 'AED 5k', 'US$0']);
+  assert.deepEqual(format.totalsList([{ currency: 'GBP', value: 1000 }, { value: 2000 }, { currency: 'NZD', value: 5000 }, { currency: 'GBP', value: 9000 }]),
+    ['$2k', '£10k', 'NZ$5k'], 'AUD first, then the largest');
+  assert.equal(format.totalsIn([]), '$0');
+  assert.equal(format.totalsIn([{ currency: 'GBP', value: 0 }]), '$0');
+});
+
 await check('pipeline: cleanDealPatch keeps valid edits only (Edit deal)', async () => {
   const { cleanDealPatch } = await import('../src/data/boards.js');
   const users = ['u1', 'u2'];
-  assert.deepEqual(cleanDealPatch({ name: '  Example Water ', sector: ' Utilities ', next: ' Call ', value: '250000', priority: 'P1', stage: 'Contacted', contact: 'u2' }, users),
-    { name: 'Example Water', sector: 'Utilities', next: 'Call', value: 250000, priority: 'P1', stage: 'Contacted', contact: 'u2' });
+  assert.deepEqual(cleanDealPatch({ name: '  Example Water ', sector: ' Utilities ', next: ' Call ', value: '250000', priority: 'P1', stage: 'Proposal sent', contact: 'u2' }, users),
+    { name: 'Example Water', sector: 'Utilities', next: 'Call', value: 250000, priority: 'P1', stage: 'Proposal sent', contact: 'u2' });
+  // 0014's fields: a known currency and waiting on, a probability from 0 to 100 ('' is the stage's), a date, Lost and its
+  // reason, an account and contacts among those given (each once).
+  const ids = { accountIds: ['a1'], contactIds: ['p1', 'p2'] };
+  assert.deepEqual(cleanDealPatch({ currency: 'GBP', waitingOn: 'them', probability: '35', closeOn: '2026-12-01', stage: 'Lost', lostReason: ' Timing ',
+    accountId: 'a1', contactIds: ['p2', 'p1', 'p2', 'ghost', ''] }, users, ids),
+  { currency: 'GBP', waitingOn: 'them', probability: 35, closeOn: '2026-12-01', stage: 'Lost', lostReason: 'Timing', accountId: 'a1', contactIds: ['p2', 'p1'] });
+  assert.deepEqual(cleanDealPatch({ currency: 'XYZ', waitingOn: 'nobody', probability: 101, closeOn: '1/12/2026', accountId: 'a9' }, users, ids), {},
+    'an unknown currency, waiting on or account, a probability past 100 and a date that isn’t YYYY-MM-DD are left out');
+  assert.deepEqual(cleanDealPatch({ probability: '', waitingOn: '', closeOn: '', accountId: '' }, users, ids),
+    { probability: null, waitingOn: '', closeOn: '', accountId: '' }, 'each can be cleared');
+  assert.deepEqual(cleanDealPatch({ probability: 2.5 }, users), {}, 'whole numbers only');
   assert.deepEqual(cleanDealPatch({ name: '   ', value: -5, priority: 'P9', stage: 'Won', contact: 'ghost' }, users), { contact: '' },
     'no blank name, negative value, unknown priority or stage; an unknown owner is none');
   assert.deepEqual(cleanDealPatch({ value: '' }, users), {}, 'an empty value is no change');
@@ -2821,15 +3055,16 @@ await check('automations: a plan more than two years behind (a mistyped year) is
   assert.ok(st.clients[0].invoices.every((i) => i.planId === 'two'));
 });
 
-await check('import: deal stages map to the new columns (won, signed, quote or contract → Demos, contacted → Contacted, uncontacted → Opportunities)', async () => {
+await check('import: deal stages map to 0014’s (won, signed, contract or client → Contract sent; lost → Lost; negated → Interested)', async () => {
   const { normalise } = await import('../src/lib/importers.js');
   const stage = (v) => normalise('deals', ['Example Water', v], { name: 0, stage: 1 }, { users: [], me: 'u-me' }).stage;
-  assert.deepEqual(['Opportunities', 'contacted', 'Emailed', 'Reached out', 'First meetings', 'Discovery call', 'Demo booked', 'Proposal',
-    'Quote sent', 'Contract out', 'Won', 'Closed won', 'Signed', 'Client', 'Lost', "Won't proceed", 'Not signed', 'Uncontacted',
-    'Un-contacted', 'Not yet contacted', '', 'Prospect'].map(stage),
-  ['Opportunities', 'Contacted', 'Contacted', 'Contacted', 'First meetings', 'First meetings', 'Demos', 'Demos',
-    'Demos', 'Demos', 'Demos', 'Demos', 'Demos', 'Demos', 'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities',
-    'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities']);
+  assert.deepEqual(['Opportunities', 'contacted', 'Emailed', 'Reached out', 'First meetings', 'Discovery call', 'Intro call', 'Intro held',
+    'Demo booked', 'Proposal', 'Quote sent', 'proposal SENT', 'Contract out', 'Won', 'Closed won', 'Signed', 'Client', 'Lost', 'Closed lost',
+    'Dead', "Won't proceed", 'Not signed', 'Uncontacted', 'Un-contacted', 'Not yet contacted', '', 'Prospect', 'Demos'].map(stage),
+  ['Interested', 'Interested', 'Interested', 'Interested', 'Meeting booked', 'Meeting booked', 'Intro held', 'Intro held',
+    'Demo held', 'Proposal sent', 'Proposal sent', 'Proposal sent', 'Contract sent', 'Contract sent', 'Contract sent', 'Contract sent',
+    'Contract sent', 'Lost', 'Lost', 'Lost', 'Interested', 'Interested', 'Interested', 'Interested', 'Interested', 'Interested', 'Interested',
+    'Demo held']);
 });
 
 await check('import: contact statuses as written, Meeting booked included (negated wording is not a booking)', async () => {
@@ -3611,12 +3846,12 @@ if (createSeed && migrate) {
     s.mailboxes.filter((m) => m.owner).forEach((m) => assert.ok(s.users.some((u) => u.id === m.owner), m.owner));
   });
 
-  await check('pipeline demo: every deal in a column, none at Won; Westbay made a client; older Won deals move to Demos once', async () => {
-    const { DEAL_STAGES } = await import('../src/data/boards.js');
+  await check('pipeline demo: every deal on a stage, something in every column, one Lost; Westbay made a client; older stage names renamed once', async () => {
+    const { ALL_DEAL_STAGES, DEAL_STAGES } = await import('../src/data/boards.js');
     const s = createSeed();
-    assert.ok(s.deals.every((d) => DEAL_STAGES.includes(d.stage)), JSON.stringify(s.deals.map((d) => d.stage)));
-    assert.deepEqual(DEAL_STAGES.map((st) => s.deals.filter((d) => d.stage === st && !d.clientId).length).map((n) => n > 0), [true, true, true, true],
-      'something in every column');
+    assert.ok(s.deals.every((d) => ALL_DEAL_STAGES.includes(d.stage)), JSON.stringify(s.deals.map((d) => d.stage)));
+    assert.ok(DEAL_STAGES.every((st) => s.deals.some((d) => d.stage === st && !d.clientId)), 'something in every column');
+    assert.equal(s.deals.filter((d) => d.stage === 'Lost').length, 1);
     const westbay = s.deals.find((d) => d.name === 'Westbay Council');
     assert.ok(westbay.clientId && s.clients.some((c) => c.id === westbay.clientId), 'made a client: off the board');
     assert.equal(s.deals.filter((d) => d.clientId).length, 1);
@@ -3624,7 +3859,7 @@ if (createSeed && migrate) {
     old.deals.forEach((d) => { if (d.clientId) d.stage = 'Won'; });
     old.deals.push({ id: 'd-won', name: 'Old win', sector: '', value: 1, priority: 'P2', stage: 'Won', contact: 'david', next: '', contactId: '' });
     const m = migrate(structuredClone(old));
-    assert.deepEqual([m.deals.find((d) => d.id === westbay.id).stage, m.deals.find((d) => d.id === 'd-won').stage], ['Demos', 'Demos']);
+    assert.deepEqual([m.deals.find((d) => d.id === westbay.id).stage, m.deals.find((d) => d.id === 'd-won').stage], ['Demo held', 'Demo held']);
     assert.equal(m.deals.find((d) => d.id === westbay.id).clientId, westbay.clientId, 'its client kept');
     assert.deepEqual(migrate(structuredClone(m)), m, 'running it again changes nothing');
   });

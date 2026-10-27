@@ -14,6 +14,7 @@ const pkOf = (table) => (table.onConflict ? table.onConflict.split(',') : ['id']
 // Errors about a row's data rather than the request (bad value, constraint, refused by RLS).
 const rowError = (err) => !err.offline && /^(22|23)|^42501$/.test(err.code || '');
 // The tables each one nests under (parent chain): deleting a row there cascades into this table.
+const LATER = Object.fromEntries(TABLES.filter((t) => t.later).map((t) => [t.name, t.later]));
 const ANCESTORS = Object.fromEntries(TABLES.map((t) => {
   const out = [];
   for (let p = t.parent?.[0]; p; p = TABLES.find((x) => x.name === p)?.parent?.[0]) out.push(p);
@@ -61,8 +62,18 @@ export function createSync({ supabase, onStatus = () => {}, onRealtime = () => {
     if (sig !== reported) { reported = sig; onStatus(next); }
   }
 
+  // A column a migration adds to an existing table (TABLES `later`) is left out of writes until that migration's new
+  // table is there, so an app released before its migration still saves the rest of the row.
+  const withoutLater = (op) => {
+    const drop = (LATER[op.table] || []).filter((l) => missing.has(l.table)).flatMap((l) => l.columns);
+    if (!drop.length || !op.row) return op;
+    const row = { ...op.row };
+    drop.forEach((c) => { delete row[c]; });
+    return { ...op, row };
+  };
+
   function queue(ops) {
-    ops = ops?.filter((op) => !missing.has(op.table)); // a table that isn't there takes no writes
+    ops = ops?.filter((op) => !missing.has(op.table)).map(withoutLater); // a table that isn't there takes no writes
     if (!ops?.length || disposed) return;
     ops.forEach((op) => {
       const id = opId(op.table, op.key);

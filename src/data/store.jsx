@@ -5,7 +5,7 @@
 // can't do it; RLS is the real enforcement.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createSeed, demoMeetings, migrate } from './seed';
-import { BOARD_SCHEMAS, DEAL_STAGES, cleanDealPatch, hasDates, withPeople } from './boards';
+import { BOARD_SCHEMAS, DEAL_STAGES, cleanDealPatch, dealStage, hasDates, withPeople } from './boards';
 import { LIVE, supabase } from '@/data/backend/client';
 import { TABLES, assemble, diff, flatten, normalizeRow, stable } from '@/data/backend/schema';
 import { createSync } from '@/data/backend/sync';
@@ -13,9 +13,10 @@ import { GateScreen, Spinner } from '@/components/auth/AuthGate';
 import { LEVELS, MODULES, ROLES, STAFF_DEFAULTS, canEdit, canEditBoard, canView, canViewBoard, isAdmin, isSuperadmin } from '@/lib/access';
 import { BOARD_MODULES, FIRST_GROUP, FIRST_GROUP_COLOR, GROUP_COLORS, findBoard, sameAudience, sortedItems, withItemPlaced } from '@/lib/boards';
 import {
-  PLAN_MONTHS, addDays, addMonths, clientCreatedLocal, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isPlanDate,
-  isYmd, makeTodo, mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
+  PLAN_MONTHS, accountDefaults, addDays, addMonths, clientCreatedLocal, contactPipelineLocal, dealDefaults, ensureTodosLocal,
+  generateDueInvoicesLocal, isPlanDate, isYmd, makeTodo, mondayOf, nextInvoiceNumber, personDefaults, termsOf, toHhmm, uid,
 } from '@/lib/automations';
+import { accountNamed, cleanAccount, cleanPerson as cleanCrmPerson } from '@/lib/accounts';
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
 import { acceptedValues, boardValues, itemRef, mailsOwner, newTaskValues, nextValues, ownerOf, todoForItem, todoItemId } from '@/lib/work';
 import { canAddEntry, canChangeEntry, carryDealEntriesLocal, cleanEntry, dropDealEntriesLocal } from '@/lib/crm';
@@ -178,7 +179,10 @@ const newContact = (d, r) => ({
 
 const newDeal = (r) => {
   const { clientId: _clientId, ...rest } = r;
-  return { sector: '', value: 0, priority: 'P2', stage: 'Opportunities', contact: '', next: '', contactId: '', ...rest, id: uid() };
+  return {
+    sector: '', value: 0, priority: 'P2', stage: DEAL_STAGES[0], contact: '', next: '', contactId: '', ...dealDefaults(nowIso()), ...rest,
+    id: uid(),
+  };
 };
 
 
@@ -348,8 +352,21 @@ function createActions(mutate, mode) {
           filled++;
           return false;
         });
-        d.deals.push(...takeNew(d.deals, rest, newDeal, result));
+        const added = takeNew(d.deals, rest, newDeal, result);
+        d.deals.push(...added);
         result.added += filled;
+        // 0014: each on its account (the one with its name, else a new one).
+        if (!absent('accounts')) {
+          added.forEach((x) => {
+            let a = accountNamed(d, x.name);
+            if (!a) {
+              a = { id: uid(), ...accountDefaults(nowIso()), name: String(x.name).trim().slice(0, 200), lifecycle: 'opportunity',
+                sector: String(x.sector || '').slice(0, 100), owner: x.contact || '' };
+              (d.accounts ||= []).push(a);
+            }
+            x.accountId = a.id;
+          });
+        }
       } else {
         const board = target;
         const items = takeNew(board.groups.flatMap((g) => g.items), records, (r) => newItem(r), result);
@@ -803,23 +820,55 @@ function createActions(mutate, mode) {
 
     // ── Pipeline ──
 
+    // A deal on an account: `accountId`, or `accountName` (that account, or a new prospect with that name). Named after
+    // its account unless it has its own name. Fields as Edit deal cleans them (cleanDealPatch). → id
     addDeal: (deal = {}) => editing('pipeline', (d) => {
-      const x = newDeal(deal);
+      const userIds = d.users.map((u) => u.id);
+      const crm = !absent('accounts');
+      let account = crm && deal.accountId ? (d.accounts || []).find((a) => a.id === deal.accountId) : null;
+      if (crm && !account && String(deal.accountName ?? '').trim()) {
+        account = accountNamed(d, deal.accountName);
+        if (!account) {
+          account = { id: uid(), ...accountDefaults(nowIso()), ...cleanAccount({ name: deal.accountName, lifecycle: 'opportunity', owner: deal.contact || d.me }, { userIds }) };
+          (d.accounts ||= []).push(account);
+        }
+      }
+      const { accountId: _a, accountName: _n, contactIds: _c, ...rest } = deal;
+      const clean = cleanDealPatch({ ...rest, ...(account ? { contactIds: deal.contactIds || [] } : {}) }, userIds, {
+        contactIds: (d.crmContacts || []).filter((c) => c.accountId === account?.id).map((c) => c.id),
+      });
+      const name = clean.name || account?.name || '';
+      if (!name) return false;
+      if (!('contact' in rest)) delete clean.contact; // no owner given: none, as before
+      const x = newDeal({ ...clean, name, accountId: account?.id || '' });
+      if (account && ['new', 'contacted', 'engaged', 'meeting'].includes(account.lifecycle)) account.lifecycle = 'opportunity';
       d.deals.push(x);
       return x.id;
     }),
+    // To one of the open stages (the board's columns), now.
     moveDeal: (dealId, stage) => editing('pipeline', (d) => {
       const x = d.deals.find((v) => v.id === dealId);
       if (!x || !DEAL_STAGES.includes(stage)) return false;
+      if (dealStage(x) !== stage) x.stageAt = nowIso();
       x.stage = stage;
       return true;
     }),
-    // Organisation, sector, value, priority, owner, next step and stage (cleanDealPatch). Refused when nothing valid
-    // changes.
+    // Edit deal's fields (cleanDealPatch): its account (one that exists) and contacts (people at its account), value and
+    // currency, close date, probability, priority, owner, waiting on, next step, stage (Lost too) and lost reason.
+    // Refused when nothing valid changes.
     updateDeal: (dealId, patch = {}) => editing('pipeline', (d) => {
       const x = d.deals.find((v) => v.id === dealId);
-      const clean = x && cleanDealPatch(patch, d.users.map((u) => u.id));
-      if (!x || !Object.keys(clean).length) return false;
+      if (!x) return false;
+      const crmPatch = absent('accounts') ? Object.fromEntries(Object.entries(patch).filter(([k]) => !['accountId', 'contactIds'].includes(k))) : patch;
+      const accountId = 'accountId' in crmPatch ? crmPatch.accountId : x.accountId;
+      const clean = cleanDealPatch(crmPatch, d.users.map((u) => u.id), {
+        accountIds: (d.accounts || []).map((a) => a.id),
+        contactIds: (d.crmContacts || []).filter((c) => c.accountId === accountId).map((c) => c.id),
+      });
+      if (!Object.keys(clean).length) return false;
+      if ('accountId' in clean && clean.accountId !== x.accountId && !('contactIds' in clean)) clean.contactIds = []; // another account's people
+      if ('stage' in clean && clean.stage !== dealStage(x)) clean.stageAt = nowIso();
+      if ('stage' in clean && clean.stage !== 'Lost' && !('lostReason' in clean)) clean.lostReason = '';
       Object.assign(x, clean);
       return true;
     }),
@@ -829,28 +878,106 @@ function createActions(mutate, mode) {
       if (!mode.live) dropDealEntriesLocal(d, dealId); // live: 0012's crm_drop_deal_entries trigger and on delete set null
       return true;
     }),
+
+    // ── Accounts and their contacts (0014; Pipeline edit, as deals) ──
+
+    // → id
+    addAccount: (fields = {}) => !absent('accounts') && editing('pipeline', (d) => {
+      const userIds = d.users.map((u) => u.id);
+      const clean = cleanAccount({ owner: d.me, ...fields }, { userIds, accountIds: (d.accounts || []).map((a) => a.id) });
+      if (!clean.name) return false;
+      const a = { id: uid(), ...accountDefaults(nowIso()), ...clean };
+      (d.accounts ||= []).push(a);
+      return a.id;
+    }),
+    updateAccount: (id, patch = {}) => !absent('accounts') && editing('pipeline', (d) => {
+      const a = (d.accounts || []).find((x) => x.id === id);
+      if (!a) return false;
+      const clean = cleanAccount(patch, { userIds: d.users.map((u) => u.id), accountIds: d.accounts.map((x) => x.id), self: id });
+      if (!Object.keys(clean).length) return false;
+      Object.assign(a, clean);
+      return true;
+    }),
+    // With its contacts and its own and their timeline (on delete cascade); its deals stay, without an account.
+    removeAccount: (id) => !absent('accounts') && editing('pipeline', (d) => {
+      if (!(d.accounts || []).some((x) => x.id === id)) return false;
+      const people = new Set((d.crmContacts || []).filter((c) => c.accountId === id).map((c) => c.id));
+      d.accounts = d.accounts.filter((x) => x.id !== id);
+      d.accounts.forEach((x) => { if (x.referredBy === id) x.referredBy = ''; });
+      d.crmContacts = (d.crmContacts || []).filter((c) => c.accountId !== id);
+      d.crmEntries = (d.crmEntries || []).filter((e) => e.accountId !== id && !people.has(e.contactId));
+      d.deals.forEach((x) => {
+        if (x.accountId === id) { x.accountId = ''; x.contactIds = []; }
+      });
+      return true;
+    }),
+    // A person at an account (`accountId`). → id
+    addPerson: (fields = {}) => !absent('accounts') && editing('pipeline', (d) => {
+      const clean = cleanCrmPerson(fields, { userIds: d.users.map((u) => u.id), accountIds: (d.accounts || []).map((a) => a.id) });
+      if (!clean.accountId || !(clean.name || clean.email)) return false;
+      const c = { id: uid(), ...personDefaults(nowIso()), owner: d.me, ...clean };
+      (d.crmContacts ||= []).push(c);
+      return c.id;
+    }),
+    // Moving someone to another account takes them off the old account's deals.
+    updatePerson: (id, patch = {}) => !absent('accounts') && editing('pipeline', (d) => {
+      const c = (d.crmContacts || []).find((x) => x.id === id);
+      if (!c) return false;
+      const clean = cleanCrmPerson(patch, { userIds: d.users.map((u) => u.id), accountIds: (d.accounts || []).map((a) => a.id) });
+      if ('name' in clean && !clean.name && !(clean.email ?? c.email)) delete clean.name;
+      if (!Object.keys(clean).length) return false;
+      if (clean.accountId && clean.accountId !== c.accountId) {
+        d.deals.forEach((x) => { if (x.accountId !== clean.accountId) x.contactIds = (x.contactIds || []).filter((p) => p !== id); });
+      }
+      Object.assign(c, clean);
+      return true;
+    }),
+    // With their timeline (on delete cascade); they come off their deals.
+    removePerson: (id) => !absent('accounts') && editing('pipeline', (d) => {
+      if (!(d.crmContacts || []).some((x) => x.id === id)) return false;
+      d.crmContacts = d.crmContacts.filter((x) => x.id !== id);
+      d.crmEntries = (d.crmEntries || []).filter((e) => e.contactId !== id);
+      d.deals.forEach((x) => { x.contactIds = (x.contactIds || []).filter((p) => p !== id); });
+      return true;
+    }),
     // Needs edit access to the pipeline and to clients. → client id
     // Once: a deal already made a client (by a teammate meanwhile) is refused.
     convertDeal: (dealId) => mutate((d) => {
       const deal = d.deals.find((v) => v.id === dealId);
       if (!deal || deal.clientId || !canEdit(d, 'pipeline') || !canEdit(d, 'clients')) return false;
-      const existing = d.clients.find((c) => normName(c.name) === normName(deal.name));
+      // 0014: the deal's account becomes a customer, linked to its client (the account's own, when it has one).
+      const account = deal.accountId ? (d.accounts || []).find((a) => a.id === deal.accountId) : null;
+      const becomeCustomer = (clientId) => {
+        if (!account) return;
+        const taken = (d.accounts || []).some((a) => a !== account && a.clientId === clientId);
+        if (!account.clientId && !taken) account.clientId = clientId;
+        account.kind = 'customer';
+        account.lifecycle = 'customer';
+      };
+      const existing = (account?.clientId && d.clients.find((c) => c.id === account.clientId))
+        || d.clients.find((c) => normName(c.name) === normName(deal.name) || (account && normName(c.name) === normName(account.name)));
       if (existing) {
         deal.clientId = existing.id;
+        becomeCustomer(existing.id);
         if (!mode.live) carryDealEntriesLocal(d, deal.id, existing.id); // live: 0012's crm_carry_to_client trigger
         return existing.id;
       }
       // The deal owner keeps the client; fall back to whoever converts it.
       const owner = userExists(d, deal.contact) ? deal.contact : d.me;
-      // The outreach contact the deal came from becomes the client's first, billing contact.
+      // The deal's contacts become the client's (the first one billing), else the outreach contact it came from.
+      const people = (deal.contactIds || []).map((id) => (d.crmContacts || []).find((c) => c.id === id)).filter((c) => c && (c.name || c.email));
       const from = d.contacts.find((c) => c.id === deal.contactId);
+      const contacts = people.length
+        ? people.map((c, i) => ({ name: c.name, email: c.email, role: c.title, phone: c.phone, billing: i === 0 }))
+        : from && (from.name || from.email) ? [{ name: from.name, email: from.email, billing: true }] : [];
       const client = newClient(d, {
-        name: deal.name, priority: deal.priority === 'P3' ? 'P2' : deal.priority, next: 'Schedule onboarding kick-off',
-        sector: deal.sector, contact: owner, team: Array.from(new Set([owner, d.me])), lastContact: localYmd(),
-        contacts: from && (from.name || from.email) ? [{ name: from.name, email: from.email, billing: true }] : [],
+        name: account?.name || deal.name, priority: deal.priority === 'P3' ? 'P2' : deal.priority, next: 'Schedule onboarding kick-off',
+        sector: deal.sector || account?.sector || '', contact: owner, team: Array.from(new Set([owner, d.me])), lastContact: localYmd(),
+        contacts,
       });
       d.clients.unshift(client);
       deal.clientId = client.id;
+      becomeCustomer(client.id);
       if (!mode.live) {
         clientCreatedLocal(d, client.id); // live: the client_contract_todo trigger
         carryDealEntriesLocal(d, deal.id, client.id); // live: 0012's crm_carry_to_client trigger
@@ -866,9 +993,13 @@ function createActions(mutate, mode) {
       const deal = fields.dealId ? d.deals.find((x) => x.id === fields.dealId) : null;
       const dealId = deal?.id || '';
       const clientId = (fields.clientId && d.clients.some((x) => x.id === fields.clientId) ? fields.clientId : '') || deal?.clientId || '';
+      // 0014: on an account or one of its people instead (Pipeline edit).
+      const crm = !absent('accounts') && !dealId && !clientId;
+      const accountId = crm && fields.accountId && (d.accounts || []).some((x) => x.id === fields.accountId) ? fields.accountId : '';
+      const contactId = crm && !accountId && fields.contactId && (d.crmContacts || []).some((x) => x.id === fields.contactId) ? fields.contactId : '';
       const clean = cleanEntry(fields);
-      if (!clean || !canAddEntry(d, { dealId, clientId })) return false;
-      const e = { id: uid(), dealId, clientId, ...clean, user: d.me, createdAt: nowIso() };
+      if (!clean || !canAddEntry(d, { dealId, clientId, accountId, contactId })) return false;
+      const e = { id: uid(), dealId, clientId, accountId, contactId, ...clean, user: d.me, createdAt: nowIso() };
       (d.crmEntries ||= []).unshift(e);
       return e.id;
     }),

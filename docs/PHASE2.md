@@ -108,9 +108,17 @@ mailboxes:      [{ id, name, addresses /* [lower-case address] */, owner /* user
 outreachNotes:  [{ id, mailbox /* '' = all mailboxes */, pinned, body, author, createdAt }],         // newest first
 outreachSheet:  '<the sheet link>',                     // undefined in live mode without Outreach access
 outreachEmails: [{ id, mailbox, sender, sentOn, … }],   // demo only (emailFromRow() shape, §12)
-// 0012 (§19): a deal's or client's CRM profile. Newest first.
-crmEntries:     [{ id, dealId, clientId, kind /* 'note'|'meeting'|'link' */, title, body, url, label, happenedOn,
-                   attendees, user, createdAt }],
+// 0012 (§19): a deal's or client's CRM profile. Newest first. 0014 (§22): or an account's or a contact's.
+crmEntries:     [{ id, dealId, clientId, accountId, contactId, kind /* 'note'|'meeting'|'link' */, title, body, url, label,
+                   happenedOn, attendees, user, createdAt }],
+// 0014 (§22): the CRM. Accounts in order, then the people at them.
+accounts:       [{ id, name, kind /* 'prospect'|'customer'|'partner'|'supplier' */, lifecycle /* LIFECYCLES */,
+                   lifecycleNote, revisitOn, sector, country, region, timezone, domain, website, size, guardrails, prepUrl,
+                   referredBy /* '' | account id */, owner, clientId /* '' | the customer's client */, createdAt }],
+crmContacts:    [{ id, accountId, name, title, email, phone, linkedin, timezone, role /* ''|CONTACT_ROLES */,
+                   status /* 'active'|'left'|'do_not_contact' */, owner, createdAt }],
+//   deal: { ..., accountId, contactIds: [crm contact id], currency, closeOn, probability /* null = the stage's */,
+//           waitingOn /* ''|'us'|'them' */, lostReason, stageAt /* iso: when it reached its stage */ }
 ```
 Empty strings, never `null`, for absent text/ids/dates in state (as phase 1). Money and counts are numbers.
 Lists that live views read newest-first are stored with the same position convention as phase 1.
@@ -1175,3 +1183,64 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   `scripts/test-sync.mjs` (`mailsOwner`).
 - **Later, not built**: a per-person switch to opt out, a daily digest instead of each change, emails for other edits
   (status, due date) or to Also on, sending with nobody's Cortex open (`pg_cron` + `pg_net` calling the function).
+
+## 22. 0014: the CRM — accounts, contacts, and opportunities with HubSpot-style stages
+
+- **Owner's ask**: turn the Pipeline into a full HubSpot-style CRM with accounts, contacts, opportunities and stages,
+  designed for the business (a small team selling a high-value platform to councils, housing, utilities, rail, mining
+  and renewables in six countries, with an outreach agent doing cold email). Then a Leads page (later, §23).
+- **Owner's decisions** (the brainstorm's recommendations, accepted): HubSpot's core objects, not all of HubSpot.
+  **Accounts** (one per organisation; kind Prospect, Customer, Partner or Supplier; sector, country, region, time zone,
+  domain, website, size; **guardrails**, what not to say; a **prep pack** link; who **referred** it; an owner). A
+  **lifecycle**: New lead → Contacted → Engaged → Meeting booked → Opportunity → Customer, or set aside: Nurture (with a
+  revisit date), Watching for RFP, Not now, Suppressed (with why). **Contacts** at an account (title, email, phone,
+  LinkedIn, time zone, **role in the deal**: decision maker, champion, influencer, gatekeeper, assistant / PA, user,
+  other; Active, Left or Do not contact). **Opportunities** on an account with its contacts, stages **Interested →
+  Meeting booked → Intro held → Demo held → Proposal sent → Contract sent**, then **Won = Make client** or **Lost with
+  a reason**; value in its **currency** (AUD, NZD, GBP, USD, EUR, CAD, AED, SAR; never converted), expected close,
+  probability (each stage's default: 10, 20, 30, 50, 60, 80 %), **waiting on** us or them, **days in stage** (stalled from
+  14). **One timeline** on accounts, contacts and deals. Clients stay as they are, linked to their account
+  (`accounts.client_id`), not merged.
+- **Database** (`0014_crm_accounts.sql`): `accounts` and `crm_contacts` (synced, realtime; Pipeline's access level:
+  `can_view` / `can_edit('pipeline')`; deleting an account deletes its contacts and leaves its deals without one); deals
+  get `account_id`, `contact_ids uuid[]`, `currency`, `close_on`, `probability` (null = the stage's), `waiting_on`,
+  `lost_reason` and `stage_at` (the database's: the `deal_stage_at` trigger stamps it when the stage changes and keeps it
+  otherwise; the rename keeps it, running before the trigger). The old stages are renamed once (Opportunities and
+  Contacted → Interested, the latter waiting on them; First meetings → Meeting booked; Demos and Won → Demo held).
+  `crm_entries` gets `account_id` and `contact_id` (cascade); `crm_select` reads them with Pipeline view and
+  `protect_crm_entry` keeps them on edit. `contact_pipeline()` also finds or adds the organisation's account (engaged on
+  a reply, meeting on a booking: `lifecycleAfter()`, never back or over a lifecycle set aside) and the person (by email,
+  else name), puts the person on the deal and uses the new stages. Existing data, once per row: every client a customer
+  account; every deal its account (its client's, else the one with its name, else a new one); a deal from an outreach
+  contact that person.
+- **Release**: the app copes without 0014 (Accounts and Contacts hidden, the new deal columns left out of writes:
+  `later` in `TABLES` and `withoutLater()` in the sync engine; admins see the *Database update needed* notice), and 0014
+  copes with the app now live (old stage names show as their new ones: `dealStage()` / `OLD_DEAL_STAGES`).
+- **App**: **Pipeline** has three sections. **Opportunities**: the numbers (open deals, the pipeline and its weighted
+  value per currency, made clients), search, owner, **All open / Waiting on us / Stalled 14d+ / Lost**, a board by stage
+  (drag or the stage select; each card: priority, waiting on, days in stage, close date, value in its currency, owner,
+  **Make client** on Contract sent) or a table. **New deal / Edit deal** (`DealForm`): account (one there is or a new one
+  by name), deal name (the account's unless set), its contacts, value and currency, close date, owner, priority, stage (and
+  Lost with a reason when editing), probability, waiting on, sector, next step; **Won: make client**, **Delete deal**. A
+  deal's profile adds its account (with its guardrails), contacts and the time where they are. **Accounts**: search, kind,
+  lifecycle (*Active* hides the set-aside ones), owner; a table (a card each on a phone); an account's profile (details,
+  guardrails, prep pack, contacts with **Add contact**, deals with **New deal**, one timeline across the account, its
+  contacts, its deals and its client, and links) and **New / Edit account** (Delete asks). **Contacts**: search, role,
+  status; a contact's profile (account, how to reach them, the time where they are, their deals, their own timeline) and
+  **New / Edit contact**. Make client now names the client after the account, gives it the deal's contacts (the first one
+  billing) and makes the account a customer linked to it. Imported deals get their account by name. Rules in
+  `src/lib/accounts.js` (`cleanAccount()`, `cleanPerson()`, `lifecycleAfter()`, lookups), `src/data/boards.js` (stages,
+  `dealProbability()`, `daysInStage()`, `cleanDealPatch()`), `src/lib/crm.js` (entries on accounts and contacts) and
+  `src/lib/format.js` (`compactIn()`, `totalsIn()`).
+- **Demo seed**: accounts for every deal and client, people with roles and time zones at Shire of Southcliff, Northside
+  Diocese and Kingsford Housing Trust, a partner (Example Partners Ltd) who referred Kingsford (in GBP), an NZ council in
+  NZD, guardrails, a nurture account with a Lost deal, a suppressed one, stalled deals; `migrate()` does 0014's steps once
+  (`crmBackfillLocal()`).
+- **Tests**: `scripts/test-db.mjs` phase 14 (re-runs and the done row; the backfill; Pipeline access; the checks and
+  `stage_at`; entries on accounts and contacts; the outreach automation); `scripts/test-sync.mjs` (the mapping and the
+  held-back columns, stages, probability and days, `cleanDealPatch()`, accounts and contacts, lifecycle, the account
+  timeline, the backfill, imports, money per currency, the seed).
+- **Later, not built**: the **Leads** page (lead lists from Apollo and CSV, de-duplication by domain and email, the
+  suppress list, handing a list to the outreach agent, a segment scoreboard), email history on the timeline (a summary of
+  each sales email), the daily *waiting on you* brief, stage exit checklists, merging the Outreach contact list into
+  Contacts, and client people (`client_contacts`) as account contacts.

@@ -1,6 +1,9 @@
 // CSV import mapping (docs/BACKEND.md §4): which columns feed which fields, and one CSV row → one record in
 // state shape for actions.importRecords(), which adds ids and skips names that already exist. Pure functions.
-import { BOARD_SCHEMAS, CLIENT_STATUSES, CONTACT_STATUSES, DEAL_STAGES, PRIORITY, STATUS } from '@/data/boards';
+import {
+  ALL_DEAL_STAGES, BOARD_SCHEMAS, CLIENT_STATUSES, CONTACT_STATUSES, DEAL_STAGES, LOST, OLD_DEAL_STAGES, PRIORITY, STATUS,
+  dealStage as boardStage,
+} from '@/data/boards';
 import { localYmd } from '@/lib/format';
 
 // Field types drive parsing and the preview: text | user (one staff member) | users | date (YYYY-MM-DD) |
@@ -264,20 +267,24 @@ function priority(v, allowP3) {
   return 'P2';
 }
 
-const [OPPORTUNITIES, CONTACTED, MEETINGS, DEMOS] = DEAL_STAGES;
-// Lost or negated ("Won't proceed", "Not signed", "Uncontacted") is back to Opportunities. Won, signed or client wording is the last
-// stage, Demos, where Make client is (there's no Won column); a client or onboarding mention only once demo and meeting
-// wording is ruled out ("Client demo", "Onboarding call"). Contacted, emailed or reached out is Contacted.
+const [INTERESTED, BOOKED, INTRO, DEMO, PROPOSAL, CONTRACT] = DEAL_STAGES;
+// Pipeline's stages (0014): the names as they are (or as they were before 0014); lost or dead is Lost; negated ("Won't
+// proceed", "Not signed", "Uncontacted") is Interested; won, signed, closed, a contract, a client or onboarding is
+// Contract sent, the last open stage (Make client is the deal's Won); then proposal or quote wording, demo, pilot or trial,
+// an intro, and a meeting or call; anything else is Interested.
 function dealStage(v) {
   const s = norm(v);
-  return exactly(s, DEAL_STAGES)
-    || (/lost|\bnot\b|\bnever\b|\bno\b|won['’]t|\bun ?-?(contacted|sent|emailed|reached)/.test(s) && OPPORTUNITIES)
-    || (/\bwon\b|closed|\bsigned\b/.test(s) && DEMOS)
-    || (/demo|proposal|quote|contract|pilot|trial|negotiat/.test(s) && DEMOS)
-    || (/meeting|call|discovery/.test(s) && MEETINGS)
-    || (/contacted|emailed|reached|outreach|\bsent\b/.test(s) && CONTACTED)
-    || (/client|onboard/.test(s) && DEMOS)
-    || OPPORTUNITIES;
+  const named = exactly(s, ALL_DEAL_STAGES) || exactly(s, Object.keys(OLD_DEAL_STAGES).filter((k) => k !== 'Won'));
+  if (named) return boardStage({ stage: named });
+  return (/\blost\b|\bdead\b|lost to|closed.?lost/.test(s) && LOST)
+    || (/\bnot\b|\bnever\b|\bno\b|won['’]t|\bun ?-?(contacted|sent|emailed|reached|signed)/.test(s) && INTERESTED)
+    || (/\bwon\b|closed|\bsigned\b|contract/.test(s) && CONTRACT)
+    || (/proposal|quote|pricing|negotiat/.test(s) && PROPOSAL)
+    || (/demo|pilot|trial/.test(s) && DEMO)
+    || (/intro/.test(s) && INTRO)
+    || (/meeting|call|discovery/.test(s) && BOOKED)
+    || (/client|onboard/.test(s) && CONTRACT)
+    || INTERESTED;
 }
 
 // Outreach stages are free text; the usual ones are tidied, others kept as written.

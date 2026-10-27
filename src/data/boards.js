@@ -118,16 +118,38 @@ export function withPeople(values) {
   return { ...rest, people: [...new Set([owner, ...list].filter(Boolean).map(String))] };
 }
 
-// Pipeline's columns, in order (0008). A deal made a client leaves the board (it lives in Clients); there's no Won.
-export const DEAL_STAGES = ['Opportunities', 'Contacted', 'First meetings', 'Demos'];
+// Pipeline's open stages, the board's columns in order (0014, docs/PHASE2.md §22). Lost is a closed stage, off the board;
+// Won is Make client (the deal leaves the board for Clients).
+export const DEAL_STAGES = ['Interested', 'Meeting booked', 'Intro held', 'Demo held', 'Proposal sent', 'Contract sent'];
+export const LOST = 'Lost';
+export const ALL_DEAL_STAGES = [...DEAL_STAGES, LOST];
 export const DEAL_PRIORITIES = ['P1', 'P2', 'P3'];
-/** The column a deal shows in: its stage, or for a stage the board no longer has, Demos for the old Won (0008 moves
- *  those in the database; an old browser tab may still write one) and Opportunities for anything else. */
-export const dealStage = (deal) => (DEAL_STAGES.includes(deal?.stage) ? deal.stage : deal?.stage === 'Won' ? 'Demos' : 'Opportunities');
+// The stages before 0014, as it renamed them (an old browser tab may still write one).
+export const OLD_DEAL_STAGES = { Opportunities: 'Interested', Contacted: 'Interested', 'First meetings': 'Meeting booked', Demos: 'Demo held', Won: 'Demo held' };
+/** The stage a deal shows in: its own, an old one as 0014 renamed it, anything else Interested. */
+export const dealStage = (deal) => (ALL_DEAL_STAGES.includes(deal?.stage) ? deal.stage : OLD_DEAL_STAGES[deal?.stage] || DEAL_STAGES[0]);
+/** The chance of winning at each stage, in %, when a deal doesn't set its own. */
+export const STAGE_PROBABILITY = {
+  Interested: 10, 'Meeting booked': 20, 'Intro held': 30, 'Demo held': 50, 'Proposal sent': 60, 'Contract sent': 80, Lost: 0,
+};
+/** A deal's chance of winning, in %: its own, else its stage's. */
+export const dealProbability = (deal) => (Number.isInteger(deal?.probability) ? deal.probability : STAGE_PROBABILITY[dealStage(deal)]);
+export const CURRENCIES = ['AUD', 'NZD', 'GBP', 'USD', 'EUR', 'CAD', 'AED', 'SAR'];
+export const WAITING_ON = { us: 'Us', them: 'Them' };
+export const LOST_REASONS = ['No budget', 'Existing system', 'Timing', 'Went to tender', 'Chose a competitor', 'No response', 'Not a fit', 'Other'];
+/** A deal this long in one stage is stalled (amber); twice as long, red. */
+export const STALE_DAYS = 14;
+/** Whole days since the deal reached its stage; null when that isn't known. */
+export function daysInStage(deal, now = Date.now()) {
+  const at = Date.parse(deal?.stageAt || '');
+  return Number.isFinite(at) ? Math.max(0, Math.floor((now - at) / 86400000)) : null;
+}
 
-/** A deal's edited fields, cleaned (Pipeline's Edit deal): text trimmed, a value of 0 or more, a known priority and
- *  stage, and an owner among `userIds` ('' for none). Fields that aren't valid are left out, so the deal keeps them. */
-export function cleanDealPatch(patch = {}, userIds = []) {
+/** A deal's edited fields, cleaned (Pipeline's New and Edit deal): text trimmed, a value of 0 or more, a known priority,
+ *  stage, currency and waiting on, a probability from 0 to 100 ('' or null: the stage's), a close date as YYYY-MM-DD,
+ *  an owner among `userIds` ('' for none), an account among `accountIds` and contacts among `contactIds` (each once).
+ *  Fields that aren't valid are left out, so the deal keeps them. */
+export function cleanDealPatch(patch = {}, userIds = [], { accountIds = null, contactIds = null } = {}) {
   const text = (v) => String(v ?? '').trim();
   const out = {};
   if ('name' in patch && text(patch.name)) out.name = text(patch.name);
@@ -137,8 +159,21 @@ export function cleanDealPatch(patch = {}, userIds = []) {
     out.value = Number(patch.value);
   }
   if ('priority' in patch && DEAL_PRIORITIES.includes(patch.priority)) out.priority = patch.priority;
-  if ('stage' in patch && DEAL_STAGES.includes(patch.stage)) out.stage = patch.stage;
+  if ('stage' in patch && ALL_DEAL_STAGES.includes(patch.stage)) out.stage = patch.stage;
   if ('contact' in patch) out.contact = userIds.includes(patch.contact) ? patch.contact : '';
+  if ('currency' in patch && CURRENCIES.includes(patch.currency)) out.currency = patch.currency;
+  if ('waitingOn' in patch && (patch.waitingOn === '' || patch.waitingOn in WAITING_ON)) out.waitingOn = patch.waitingOn;
+  if ('probability' in patch) {
+    const p = patch.probability;
+    if (p === '' || p === null) out.probability = null;
+    else if (Number.isInteger(Number(p)) && Number(p) >= 0 && Number(p) <= 100) out.probability = Number(p);
+  }
+  if ('closeOn' in patch && (patch.closeOn === '' || /^\d{4}-\d{2}-\d{2}$/.test(String(patch.closeOn)))) out.closeOn = patch.closeOn;
+  if ('lostReason' in patch) out.lostReason = text(patch.lostReason).slice(0, 500);
+  if ('accountId' in patch && (patch.accountId === '' || !accountIds || accountIds.includes(patch.accountId))) out.accountId = patch.accountId;
+  if ('contactIds' in patch && Array.isArray(patch.contactIds)) {
+    out.contactIds = [...new Set(patch.contactIds.filter((id) => id && (!contactIds || contactIds.includes(id))).map(String))];
+  }
   return out;
 }
 export const CLIENT_STATUSES = {

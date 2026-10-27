@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { isOpenDeal } from '@/lib/accounts';
 import { createPortal } from 'react-dom';
 import { Check, Plus, Search, User, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
@@ -326,7 +327,7 @@ export function ClientPicker({ value, onChange, label = 'Client', className, rea
  *  that's been made a client). `readOnly` shows the name. */
 export function DealPicker({ value, onChange, label = 'Deal', className, readOnly = false }) {
   const { state } = useStore();
-  const deals = (state.deals || []).filter((d) => !d.clientId || d.id === value).sort((a, b) => a.name.localeCompare(b.name));
+  const deals = (state.deals || []).filter((d) => isOpenDeal(d) || d.id === value).sort((a, b) => a.name.localeCompare(b.name)); // not made a client or lost
   const current = deals.find((d) => d.id === value);
   if (readOnly) {
     return <span className={cn('block truncate py-1.5', !current && 'dimmer', className)}><span className="sr-only">{label}: </span>{current?.name || '—'}</span>;

@@ -80,7 +80,8 @@ Contacted → First meetings → Demos, and Work in Progress under the deals; `d
 `docs/PHASE2.md` §16), then `0011_team_access_read.sql` (everyone reads everyone's access levels, for the Team pages;
 `docs/PHASE2.md` §18), then `0012_crm_profile.sql` (a deal's and a client's profile: meetings, notes and links;
 `docs/PHASE2.md` §19), then `0013_task_emails.sql` (a task's owner is emailed when a task is handed to them or an update
-is posted on it; section 15; `docs/PHASE2.md` §21).
+is posted on it; section 15; `docs/PHASE2.md` §21), then `0014_crm_accounts.sql` (the CRM: accounts, contacts and the new
+opportunity stages; `docs/PHASE2.md` §22).
 
 Later schema changes arrive as new numbered files in `supabase/migrations/` (`0014_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one. From `0013`, each file ends with a line that
@@ -187,6 +188,14 @@ app that's live now works with it). Nobody needs to close Cortex, and it is safe
 until merged, take it from its branch on GitHub). The last row shows `Cortex 0013 applied`. It adds the task email queue
 and its rules (section 15). Nothing existing changes and nobody is emailed until an admin turns task emails on. It can
 run before or after the new app goes live. Nobody needs to close Cortex, and it is safe to run again.
+
+**0014 on an existing database**: run it after `0013`, the same way (`supabase/migrations/0014_crm_accounts.sql`;
+until merged, take it from its branch on GitHub). The last row shows `Cortex 0014 applied`. It adds accounts and their
+contacts, renames the Pipeline's stages (Opportunities and Contacted become Interested, First meetings becomes Meeting
+booked, Demos becomes Demo held), and files every existing client and deal under an account. To check it ran:
+`select to_regclass('public.accounts');` shows `accounts`. Run it **before** the new app goes live: the new app works
+without it, but Accounts and Contacts stay hidden and a deal's new fields don't save until it has run. The app that's live
+now works with it. Nobody needs to close Cortex, and it is safe to run again.
 
 ### Upgrading an existing project
 

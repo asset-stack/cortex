@@ -4,10 +4,11 @@
 // placeholders (example.com). Never put real client names, ABNs, bank or contact details in this file.
 // Relative imports with extensions, so scripts/test-sync.mjs can load this file in Node.
 import {
-  addDays, addMonths, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isoDow, makeTodo, uid,
+  accountDefaults, addDays, addMonths, contactPipelineLocal, crmBackfillLocal, dealDefaults, ensureTodosLocal, generateDueInvoicesLocal,
+  isoDow, makeTodo, personDefaults, uid,
 } from '../lib/automations.js';
 import { TEAM_TIMEZONE, localYmd } from '../lib/format.js';
-import { withPeople } from './boards.js';
+import { OLD_DEAL_STAGES, withPeople } from './boards.js';
 import { TOOL_PRESETS } from '../lib/tools.js';
 import { BOARD_MODULES, EXISTING_BOARD, FIRST_GROUP, FIRST_GROUP_COLOR, STARTING_BOARDS } from '../lib/boards.js';
 
@@ -199,7 +200,8 @@ function crmDemo(deals, clients) {
   const westbayDeal = dealOf('Westbay Council');
   const westbay = clientOf('Westbay Council');
   const entry = (fields) => ({
-    id: id('crm'), dealId: '', clientId: '', kind: 'note', title: '', body: '', url: '', label: '', happenedOn: '', attendees: '', ...fields,
+    id: id('crm'), dealId: '', clientId: '', accountId: '', contactId: '', kind: 'note', title: '', body: '', url: '', label: '', happenedOn: '',
+    attendees: '', ...fields,
   });
   return [
     entry({ dealId: northside?.id || '', kind: 'link', label: 'Proposal', title: 'Asset program proposal', url: 'https://example.com/northside-proposal', user: 'josh', createdAt: hoursAgo(20) }),
@@ -215,8 +217,71 @@ function crmDemo(deals, clients) {
   ];
 }
 
-const deal = (name, sector, value, priority, stage, contact, next, contactId = '') => ({
-  id: id('d'), name, sector, value, priority, stage, contact, next, contactId,
+// A deal; `days` in its stage so far (0014: the board flags 14 and more as stalled).
+// The demo CRM's accounts and people (placeholders only), on the accounts crmBackfillLocal() made from the deals and
+// clients: kinds, lifecycles, time zones, guardrails, a partner who referred one, a nurture and a suppressed account.
+function crmAccountsDemo(state, today) {
+  const named = (name) => state.accounts.find((a) => a.name === name);
+  const add = (fields) => { const a = { id: id('ac'), ...fields }; state.accounts.push(a); return a; };
+  const set = (name, fields) => { const a = named(name); if (a) Object.assign(a, fields); return a; };
+  const person = (account, fields) => {
+    if (!account) return null;
+    const found = state.crmContacts.find((c) => c.accountId === account.id && c.name === fields.name);
+    if (found) return Object.assign(found, fields);
+    const c = { id: id('pc'), ...personDefaults(hoursAgo(240)), accountId: account.id, ...fields };
+    state.crmContacts.push(c);
+    return c;
+  };
+  const blank = accountDefaults(hoursAgo(400));
+  const partner = add({ ...blank, name: 'Example Partners Ltd', kind: 'partner', lifecycle: 'engaged', country: 'United Kingdom', region: 'London',
+    timezone: 'Europe/London', domain: 'partners.example.com', sector: 'Engineering consultancy', owner: 'josh' });
+  add({ ...blank, name: 'Pinecrest Council', lifecycle: 'suppressed', lifecycleNote: 'Already has a system', country: 'Australia',
+    region: 'NSW', timezone: 'Australia/Sydney', sector: 'Government', owner: 'hello' });
+  set('Lakeview Shire', { lifecycle: 'nurture', lifecycleNote: 'Just renewed their current system', revisitOn: addMonths(today, 11),
+    country: 'Australia', region: 'VIC', timezone: 'Australia/Sydney' });
+  set('Shire of Southcliff', { lifecycle: 'meeting', country: 'Australia', region: 'SA', timezone: 'Australia/Adelaide', domain: 'southcliff.example.com',
+    size: '320 staff', prepUrl: 'https://docs.google.com/document/d/example-southcliff-prep/edit' });
+  set('Northside Diocese', { country: 'Australia', region: 'QLD', timezone: 'Australia/Brisbane', domain: 'northside.example.com',
+    guardrails: 'Their board approves in November: don’t push for a signature before then.' });
+  set('Kingsford Housing Trust', { country: 'United Kingdom', region: 'Kent', timezone: 'Europe/London', referredBy: partner.id,
+    guardrails: 'A non-profit: use the non-profit pricing.' });
+  set('Harbourside District Council', { country: 'New Zealand', timezone: 'Pacific/Auckland' });
+  set('Coastal Rail', { country: 'Australia', region: 'NSW', timezone: 'Australia/Sydney' });
+  set('Eastgate University Facilities', { country: 'Australia', region: 'WA', timezone: 'Australia/Perth' });
+  person(named('Shire of Southcliff'), { name: 'Morgan Hale', title: 'Asset Manager', role: 'champion', timezone: 'Australia/Adelaide' });
+  const director = person(named('Shire of Southcliff'), { name: 'Sam Ortiz', title: 'Director of Infrastructure', email: 'sam.ortiz@example.com',
+    role: 'decision_maker', timezone: 'Australia/Adelaide', owner: 'josh' });
+  person(named('Shire of Southcliff'), { name: 'Pat Lee', title: 'Executive Assistant', email: 'pat.lee@example.com', role: 'assistant',
+    timezone: 'Australia/Adelaide', owner: 'josh' });
+  person(named('Northside Diocese'), { name: 'Jordan Price', title: 'Facilities Manager', role: 'champion', timezone: 'Australia/Brisbane' });
+  const cfo = person(named('Northside Diocese'), { name: 'Robin Ellis', title: 'Chief Financial Officer', email: 'robin.ellis@example.com',
+    role: 'decision_maker', timezone: 'Australia/Brisbane', owner: 'josh' });
+  const kingsford = person(named('Kingsford Housing Trust'), { name: 'Charlie Webb', title: 'Head of Assets', email: 'charlie.webb@example.com',
+    role: 'decision_maker', timezone: 'Europe/London', owner: 'josh' });
+  person(partner, { name: 'Jamie Fox', title: 'Director', email: 'jamie.fox@example.com', role: 'other', timezone: 'Europe/London', owner: 'josh' });
+  const onDeal = (name, contact) => {
+    const d = state.deals.find((x) => x.name === name);
+    if (d && contact && !d.contactIds.includes(contact.id)) d.contactIds.push(contact.id);
+  };
+  onDeal('Shire of Southcliff', director);
+  onDeal('Northside Diocese', cfo);
+  onDeal('Kingsford Housing Trust', kingsford);
+  const southcliff = named('Shire of Southcliff');
+  state.crmEntries.push({
+    id: id('crm'), dealId: '', clientId: '', accountId: southcliff?.id || '', contactId: '', kind: 'note', title: '', url: '', label: '',
+    happenedOn: '', attendees: '', body: 'Budget is set in their February review. Sam signs off anything over $50k.', user: 'josh', createdAt: hoursAgo(30),
+  });
+  if (director) {
+    state.crmEntries.push({
+      id: id('crm'), dealId: '', clientId: '', accountId: '', contactId: director.id, kind: 'meeting', title: 'Intro call', url: '', label: '',
+      happenedOn: localYmd(new Date(now - 5 * 864e5)), attendees: 'Sam Ortiz, Josh',
+      body: 'Wants to see the condition audit on their road assets.', user: 'josh', createdAt: hoursAgo(120),
+    });
+  }
+}
+
+const deal = (name, sector, value, priority, stage, contact, next, contactId = '', { days = 3, ...extra } = {}) => ({
+  id: id('d'), name, sector, value, priority, stage, contact, next, contactId, ...dealDefaults(hoursAgo(days * 24)), ...extra,
 });
 
 const invoice = (number, issued, due, status, desc, rate, extra = {}) => ({
@@ -594,14 +659,21 @@ export function createSeed() {
 
   // Deals that came from an outreach contact keep the link, so a later reply or booking moves them on.
   const deals = [
-    deal('City of Lakeside', 'Government', 70000, 'P2', 'Opportunities', 'josh', 'Intro call'),
-    deal('Riverbend Water', 'Utilities', 220000, 'P1', 'Opportunities', 'david', 'Send digital twin brief', contactId('Riley Shaw')),
-    deal('Coastal Rail', 'Transport', 160000, 'P2', 'Contacted', 'hello', 'PDF walkthrough', contactId('Casey Ng')),
-    deal('Shire of Southcliff', 'Government', 55000, 'P2', 'First meetings', 'josh', 'Thursday 10am walkthrough', contactId('Morgan Hale')),
-    deal('Eastgate University Facilities', 'Education', 90000, 'P3', 'First meetings', 'david', 'Confirm campus list'),
-    deal('Northside Diocese', 'Healthcare', 110000, 'P1', 'Demos', 'josh', 'Scope document', contactId('Jordan Price')),
-    deal('Harbour Construction', 'Construction', 190000, 'P1', 'Demos', 'david', 'Pilot review'),
-    deal('Westbay Council', 'Government', 130000, 'P1', 'Demos', 'david', 'Onboarding', contactId('Alex Taylor')),
+    deal('City of Lakeside', 'Government', 70000, 'P2', 'Interested', 'josh', 'Intro call', '', { days: 2, waitingOn: 'us' }),
+    deal('Riverbend Water', 'Utilities', 220000, 'P1', 'Interested', 'david', 'Send digital twin brief', contactId('Riley Shaw'), { days: 1, waitingOn: 'us' }),
+    deal('Coastal Rail', 'Transport', 160000, 'P2', 'Interested', 'hello', 'PDF walkthrough', contactId('Casey Ng'), { days: 20, waitingOn: 'them' }),
+    deal('Shire of Southcliff', 'Government', 55000, 'P2', 'Meeting booked', 'josh', 'Thursday 10am walkthrough', contactId('Morgan Hale'),
+      { days: 1, closeOn: addMonths(today, 3) }),
+    deal('Eastgate University Facilities', 'Education', 90000, 'P3', 'Intro held', 'david', 'Confirm campus list', '', { days: 35, waitingOn: 'them' }),
+    deal('Harbourside District Council', 'Government', 85000, 'P2', 'Intro held', 'josh', 'Send the asset plan example', '',
+      { days: 6, currency: 'NZD', waitingOn: 'us' }),
+    deal('Northside Diocese', 'Healthcare', 110000, 'P1', 'Demo held', 'josh', 'Scope document', contactId('Jordan Price'),
+      { days: 4, closeOn: addMonths(today, 1), waitingOn: 'us' }),
+    deal('Kingsford Housing Trust', 'Community housing', 60000, 'P1', 'Proposal sent', 'josh', 'Non-profit pricing in the proposal', '',
+      { days: 9, currency: 'GBP', closeOn: addMonths(today, 2), probability: 70, waitingOn: 'them' }),
+    deal('Harbour Construction', 'Construction', 190000, 'P1', 'Contract sent', 'david', 'Pilot review', '', { days: 5, waitingOn: 'them' }),
+    deal('Westbay Council', 'Government', 130000, 'P1', 'Demo held', 'david', 'Onboarding', contactId('Alex Taylor'), { days: 30 }),
+    deal('Lakeview Shire', 'Government', 40000, 'P3', 'Lost', 'josh', '', '', { days: 12, lostReason: 'Existing system' }),
   ];
   // Westbay was made a client: its deal is linked, so it has left the board and counts in Made clients.
   deals.forEach((dl) => {
@@ -645,6 +717,7 @@ export function createSeed() {
     routineRuns: [], // demo only: the routine runs ensureTodosLocal has made (routine_runs in the database)
     seededBoards: [...BOARD_MODULES], // demo only: modules whose starting boards this demo has (migrate() adds new ones once)
     calendarSeeded: true, // demo only: Posting schedule's calendar was switched on (migrate() does it once for older data)
+    crmSeeded: true, // demo only: 0014's one-off steps are done (migrate() does them once for older data)
     calendarEvents: demoCalendarEvents(today, id),
     payments: [
       { id: id('pay'), invoiceId: invoiceNo(westbay, 'INV-1012'), clientId: westbay.id, amount: 5000, receivedOn: '2026-10-07', reference: 'Part payment INV-1012', statementId: statement.id },
@@ -673,6 +746,10 @@ export function createSeed() {
     }),
   };
 
+  // The CRM (0014): every client and deal its account, then the demo accounts' details and people.
+  crmBackfillLocal(state, { uid: () => id('ac') });
+  crmAccountsDemo(state, today);
+
   // The automations, run the way the app runs them, so the demo data follows the same rules.
   const opts = { uid: () => id('td') };
   generateDueInvoicesLocal(state, today, { uid: () => id('i') }); // Westbay's licence for this month: Awaiting approval
@@ -697,7 +774,7 @@ export function createSeed() {
 }
 
 const COLLECTIONS = ['moduleAccess', 'todos', 'routines', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'timeEntries', 'tools',
-  'crmEntries'];
+  'crmEntries', 'accounts', 'crmContacts'];
 
 // Brings demo data saved by older builds (localStorage) up to the current shape. Safe to run more than once.
 export function migrate(data) {
@@ -772,8 +849,12 @@ export function migrate(data) {
 
   (data.contacts || []).forEach((c) => { c.owner ??= ''; });
   (data.deals || []).forEach((dl) => { dl.contactId ??= ''; });
-  // Won is no longer a stage (0008): a deal there moves to Demos (one made a client has left the board anyway).
-  (data.deals || []).forEach((dl) => { if (dl.stage === 'Won') dl.stage = 'Demos'; });
+  // The stages before 0014 (Won went in 0008), renamed as 0014 does; a Contacted deal was waiting on them.
+  (data.deals || []).forEach((dl) => {
+    if (!OLD_DEAL_STAGES[dl.stage]) return;
+    if (dl.stage === 'Contacted' && !dl.waitingOn) dl.waitingOn = 'them';
+    dl.stage = OLD_DEAL_STAGES[dl.stage];
+  });
   (data.clients || []).forEach((c) => {
     c.abn ??= '';
     c.billingAddress ??= '';
@@ -810,6 +891,13 @@ export function migrate(data) {
   }
   if (!Array.isArray(data.calendarEvents)) data.calendarEvents = demoCalendarEvents(localYmd());
   if (typeof data.outreachSheet !== 'string') data.outreachSheet = '';
+  // The CRM (0014), once (as its migration does): stages renamed, every client and deal its account, a deal's outreach
+  // contact on it. Once only, so a deal taken off its account stays off.
+  if (!data.crmSeeded) {
+    crmBackfillLocal(data);
+    data.crmSeeded = true;
+  }
+  (data.crmEntries || []).forEach((e) => { e.accountId ??= ''; e.contactId ??= ''; });
   // Demo only: which routine runs ensureTodosLocal has made (the database's routine_runs), from the to-dos older
   // builds made, so a deleted one doesn't come back.
   data.routineRuns ??= data.todos.filter((t) => t.routineId).map((t) => `${t.day}|${t.routineId}|${t.assignee}`);

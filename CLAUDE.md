@@ -4,7 +4,7 @@ Cortex is AssetStack's internal ops platform (Vite + React 18 + Tailwind 3 + luc
 It is separate from the marketing site (`AssetLanding`) and from the signed-in product
 (bunburycouncil.assetstack.site). The backend contract is `docs/BACKEND.md` (phase 1) plus `docs/PHASE2.md`
 (team workflow: roles, module access, the Dashboard (was My Work), finance, timesheets, boards, Outreach, Calendar,
-Outreach from Gmail, owners and priorities, Team, task emails);
+Outreach from Gmail, owners and priorities, Team, task emails, the CRM);
 setup steps are in `DEPLOY.md`.
 
 ## Rules
@@ -16,8 +16,8 @@ setup steps are in `DEPLOY.md`.
 - Keep demo mode working. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` the app runs on localStorage
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
-  migration that has been applied** (`0001`–`0012` are live in production; `0013` is written, not yet run): fix forward in
-  the next file (`0014_….sql`). A migration must never mention `module_level` unless it redefines it
+  migration that has been applied** (`0001`–`0012` are live in production; `0013` and `0014` are written, not yet run): fix
+  forward in the next file (`0015_….sql`). A migration must never mention `module_level` unless it redefines it
   (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table
   keeps row-level security on with policies that require `is_staff()` (directly or through `is_admin()` /
   `can_view()` / `can_edit()` / the board helpers), and is added to the `supabase_realtime` publication if it is synced. Extend
@@ -59,6 +59,14 @@ setup steps are in `DEPLOY.md`.
   database (`crm_carry_to_client`; `carryDealEntriesLocal()` in demo mode, never client-side in live mode). A meeting
   keeps a link to its notes and a summary: Cortex never reads the Doc. Next steps are board tasks (`values.deal` /
   `values.client`, `dealTasks()` / `clientTasks()`), never entries.
+- **The CRM (0014)**: Pipeline is accounts (`state.accounts`), the people at them (`state.crmContacts`, table
+  `crm_contacts`; not Outreach's `contacts`) and deals on them, all on the Pipeline access level. Stages are
+  `DEAL_STAGES` (the board's open ones) plus Lost; Won is Make client. Old stage names are shown through `dealStage()`
+  / `OLD_DEAL_STAGES`, never written. `stage_at` is the database's (the `deal_stage_at` trigger). Currencies are never
+  converted (`totalsIn()`). A column added to an existing table goes in that table's `later` (with its migration's new
+  table) so the app saves the rest of the row before the migration runs. The outreach automation's account and person
+  rules are `contact_pipeline()` ⇄ `contactPipelineLocal()` / `lifecycleAfter()`; 0014's one-off steps ⇄
+  `crmBackfillLocal()`.
 - **A new module gets a module key**: add it to `MODULES` and `STAFF_DEFAULTS` in `src/lib/access.js`, to the
   `module_access.module` check and the defaults in `public.module_level()` (in a new migration), give its tables
   `can_view` / `can_edit` policies on that key, and set `module` on its `NAV` entry in `Sidebar.jsx`.
