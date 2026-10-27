@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { ALLOWED_DOMAIN, LIVE, supabase } from '@/data/backend/client';
+import Logo from '@/components/Logo';
 
 const MESSAGES = {
   domain: `Only @${ALLOWED_DOMAIN} Google accounts can sign in.`,
@@ -18,7 +19,7 @@ export function GateScreen({ children }) {
       <div className="backdrop-grain" aria-hidden="true" />
       <main className="relative z-[2] grid h-full place-items-center overflow-y-auto p-4">
         <section className="glass glass-rim w-full max-w-[380px] rounded-[30px] px-7 py-8 text-center">
-          <div className="btn-primary mx-auto grid h-12 w-12 place-items-center rounded-2xl"><div className="h-4 w-4 rounded-[5px] border-[3px] border-white" /></div>
+          <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-white shadow-[0_8px_24px_rgba(35,55,238,0.35)]"><Logo size={32} /></div>
           <h1 className="page-title mt-4 text-[34px] leading-none">Cortex</h1>
           <div className="mt-6">{children}</div>
         </section>

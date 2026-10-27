@@ -10,6 +10,7 @@ import { ROLE_LABELS, roleOf, useAccess } from '@/lib/access';
 import { MENU_BOARD_MODULES, MODULE_HOMES, MODULE_LABELS, boardHref, boardTitle, resolveBoard } from '@/lib/boards';
 import { hashParam } from '@/lib/router';
 import { cn } from '@/lib/cn';
+import Logo from '@/components/Logo';
 
 // Everything a page can link to, in nav order. `module` pages show only when the user can at least view that module
 // (src/lib/access.js); the former Admin board is part of Projects, shown as Operations (§18).
@@ -229,7 +230,7 @@ export default function Sidebar({ route, sub }) {
     <aside className={cn('glass glass-rim hidden md:flex shrink-0 flex-col m-4 mr-0 rounded-[30px] transition-[width] duration-300', collapsed ? 'w-[76px]' : 'w-[220px]')}>
       <div className="flex items-center gap-2.5 px-5 pt-5 pb-5">
         <div className="relative shrink-0">
-          <div className="btn-primary grid h-9 w-9 place-items-center rounded-xl"><div className="h-3.5 w-3.5 rounded-[4px] border-[3px] border-white" /></div>
+          <div className="grid h-9 w-9 place-items-center rounded-xl bg-white shadow-[0_6px_18px_rgba(35,55,238,0.35)]"><Logo size={24} /></div>
           <SyncDot className="absolute -right-1 -top-1" />
         </div>
         {!collapsed && <div className="font-extrabold text-[16px]">Cortex</div>}
