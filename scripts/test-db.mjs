@@ -13,7 +13,8 @@
 // the Gmail sync's RPCs, cold threads and their messages, the forgetting, and the dashboard RPCs, which must give the same
 // numbers and lists as src/lib/outreach.js); then 0011_team_access_read.sql (every active teammate reads everyone's module
 // access levels, for the Team pages); then 0012_crm_profile.sql (deals' and clients' notes, meetings and links, who reads
-// and writes them, and how they follow a deal to its client). Last, the sync engine's writes of every synced table (flatten() rows as
+// and writes them, and how they follow a deal to its client); then 0013_lead.sql (the Lead on deals and clients, LYCO or
+// AssetStack direct: its values, and who reads and sets it). Last, the sync engine's writes of every synced table (flatten() rows as
 // PostgREST upserts), personal pages, Outreach and calendar events included.
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
@@ -36,6 +37,7 @@ const migration9 = await readFile(new URL('supabase/migrations/0009_calendar.sql
 const migration10 = await readFile(new URL('supabase/migrations/0010_outreach_gmail.sql', root), 'utf8');
 const migration11 = await readFile(new URL('supabase/migrations/0011_team_access_read.sql', root), 'utf8');
 const migration12 = await readFile(new URL('supabase/migrations/0012_crm_profile.sql', root), 'utf8');
+const migration13 = await readFile(new URL('supabase/migrations/0013_lead.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -5220,7 +5222,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
     clients: [{
       id: cli, name: 'Example Client', group: 'Active', status: 'Active', priority: 'P1', next: 'Call', sector: 'Utilities',
       contact: david, team: [david, alice], lastContact: '2026-10-01', demo: '', demoUrl: '', platformUrl: 'https://example-client.example.com',
-      avatar: '#3b82f6', abn: '', billingAddress: '1 Example St',
+      avatar: '#3b82f6', abn: '', billingAddress: '1 Example St', source: 'lyco',
       contacts: [{ id: uid(), name: 'Pat', role: 'Finance', email: 'pat@example.com', phone: '0400 000 000', billing: true }],
       contracts: [{
         id: uid(), status: 'Signed', title: 'Software Subscription Agreement', docId: 'doc', docUrl: 'https://docs.google.com/document/d/doc/edit',
@@ -5239,7 +5241,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
     }],
     deals: [{
       id: dl, name: 'Example Client', sector: 'Utilities', value: '1,500.50', priority: 'P1', stage: 'Won', contact: alice, next: '',
-      clientId: cli, contactId: con,
+      clientId: cli, contactId: con, source: 'lyco', // the Lead (0013), carried to its client by Make client
     }],
     // A client's meeting (from its deal) and link (0012).
     crmEntries: [
@@ -5669,6 +5671,159 @@ async function phase12(ctx) {
   return ctx;
 }
 
+// ── 0013: the Lead (deals.source, clients.source) ─────────────────────────────────────────────────────────────────
+
+async function phase13(ctx) {
+  const { alice, boss, david, hello, carol, newcomer } = ctx;
+
+  // A deal and a client from before 0013: the Lead comes to rows that already exist.
+  await as(boss);
+  const deal = (await one("insert into deals (name, stage) values ('Example Ridge', 'Demos') returning id")).id;
+  const client = (await one("insert into clients (name) values ('Example Ridge') returning id")).id;
+
+  // 105. Runs on top of 0012, whole, again, and statement by statement, and ends (after commit) with its done row.
+  await as(null);
+  const run = async () => db.exec(migration13).then(
+    (r) => ({ error: null, done: r.at(-1)?.rows?.[0]?.done ?? null }),
+    async (e) => { await db.exec('rollback').catch(() => {}); return { error: e.message, done: null }; });
+  const first = await run();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration13, { continueOnError: true });
+  const body = migration13.replace(/--.*$/gm, '').trim();
+  const named = (await rows(`select conname from pg_constraint where contype = 'c' and pg_get_constraintdef(oid) ~ '\\msource\\M'
+    and conrelid in ('public.deals'::regclass, 'public.clients'::regclass) order by conname`)).map((r) => r.conname);
+  const published = (await one(`select count(*)::int as n from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename in ('deals', 'clients')`)).n;
+  check('105. 0013 runs on top of 0012, re-runs whole and statement by statement (one named check per table, never two), never '
+    + 'mentions module_level, and its last statement, after commit, is its done row; deals and clients are already in realtime',
+    first.error === null && second.error === null && !splitErrors.length && first.done === 'Cortex 0013 applied'
+      && second.done === 'Cortex 0013 applied' && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0013 applied' as done;$/i.test(body)
+      && !migration13.includes('module_level') && stable(named) === stable(['clients_source_check', 'deals_source_check']) && published === 2,
+    { first, second, splitErrors, named, published });
+  if (first.error) return null;
+
+  // 106. Existing deals and clients start at '' (not set), as does one added without a Lead; it is never null.
+  const before = await one(`select (select count(*)::int from deals) as deals, (select count(*)::int from deals where source <> '') as deals_set,
+    (select count(*)::int from clients) as clients, (select count(*)::int from clients where source <> '') as clients_set,
+    (select source from deals where id = $1) as deal, (select source from clients where id = $2) as client`, [deal, client]);
+  const columns = (await rows(`select table_name, data_type, is_nullable, column_default from information_schema.columns
+    where table_schema = 'public' and table_name in ('deals', 'clients') and column_name = 'source' order by table_name`))
+    .map((r) => [r.table_name, r.data_type, r.is_nullable, r.column_default]);
+  await as(boss);
+  const added = {
+    deal: await one("insert into deals (name, stage) values ('Example Heights', 'Opportunities') returning id, source"),
+    client: await one("insert into clients (name) values ('Example Heights') returning id, source"),
+  };
+  const nulls = {
+    deal: await error('update deals set source = null where id = $1', [deal]),
+    client: await error('update clients set source = null where id = $1', [client]),
+  };
+  check('106. existing deals and clients get the Lead \'\' (not set); its default is \'\', as a new deal or client added without one shows; null is refused',
+    before.deals > 0 && before.deals_set === 0 && before.clients > 0 && before.clients_set === 0 && before.deal === '' && before.client === ''
+      && stable(columns) === stable([['clients', 'text', 'NO', "''::text"], ['deals', 'text', 'NO', "''::text"]])
+      && added.deal.source === '' && added.client.source === '' && nulls.deal !== null && nulls.client !== null,
+    { before, columns, added, nulls });
+
+  // 107. Only '', lyco and assetstack, on both tables, whether saved or added (the check, not RLS: an admin is writing).
+  const values = {};
+  for (const [table, id] of [['deals', deal], ['clients', client]]) {
+    const set = (v) => error(`update ${table} set source = $2 where id = $1`, [id, v]);
+    values[table] = {
+      lyco: await set('lyco'), assetstack: await set('assetstack'), none: await set(''),
+      partner: await set('partner'), upper: await set('LYCO'), spaced: await set('lyco '),
+      added: await error(`insert into ${table} (name, source) values ('Example Nope', 'partner')`),
+    };
+  }
+  const refusedBy = (table, e) => typeof e === 'string' && e.includes(`${table}_source_check`);
+  check('107. the Lead takes \'\', lyco or assetstack on deals and clients; any other value (partner, LYCO, a stray space) is refused by the check, saved or added',
+    Object.entries(values).every(([table, v]) => v.lyco === null && v.assetstack === null && v.none === null
+      && refusedBy(table, v.partner) && refusedBy(table, v.upper) && refusedBy(table, v.spaced) && refusedBy(table, v.added)),
+    values);
+
+  // 108. Who reads and sets it: 0002's module policies, as for every other column of deals and clients. Alice (staff):
+  // Pipeline edit, Clients view; Hello (staff): Pipeline view, Clients edit; Newcomer (staff): neither, for now; Carol is
+  // inactive.
+  await as(david);
+  const newcomerHad = await rows("select module, level from module_access where user_id = $1 and module in ('pipeline', 'clients')", [newcomer]);
+  await db.query("delete from module_access where user_id = any($1) and module in ('pipeline', 'clients')", [[alice, hello, newcomer]]);
+  await db.query(`insert into module_access (user_id, module, level) values ($1, 'pipeline', 'edit'), ($1, 'clients', 'view'),
+    ($2, 'pipeline', 'view'), ($2, 'clients', 'edit'), ($3, 'pipeline', 'none'), ($3, 'clients', 'none')`, [alice, hello, newcomer]);
+  await as(boss);
+  const adminSets = {
+    deal: await affected("update deals set source = 'lyco' where id = $1", [deal]),
+    client: await affected("update clients set source = 'lyco' where id = $1", [client]),
+  };
+  const lead = async (who) => {
+    await as(who);
+    return [(await one('select source from deals where id = $1', [deal]))?.source ?? null,
+      (await one('select source from clients where id = $1', [client]))?.source ?? null];
+  };
+  const reads = { alice: await lead(alice), hello: await lead(hello), newcomer: await lead(newcomer), carol: await lead(carol) };
+  await as(hello);
+  const viewDeal = await affected("update deals set source = 'assetstack' where id = $1", [deal]);
+  await as(alice);
+  const viewClient = await affected("update clients set source = 'assetstack' where id = $1", [client]);
+  await as(newcomer);
+  const noneSets = [await affected("update deals set source = 'assetstack' where id = $1", [deal]),
+    await affected("update clients set source = 'assetstack' where id = $1", [client])];
+  const unchanged = await lead(null);
+  await as(alice);
+  const editDeal = await affected("update deals set source = 'assetstack' where id = $1", [deal]);
+  await as(hello);
+  const editClient = await affected("update clients set source = 'assetstack' where id = $1", [client]);
+  const edited = await lead(null);
+  check('108. Pipeline view reads a deal’s Lead but can’t change it, Pipeline edit can; the same for a client’s with Clients view and edit; '
+    + 'admins set both; without access (or inactive) neither is read',
+    adminSets.deal === 1 && adminSets.client === 1 && stable(reads) === stable({
+      alice: ['lyco', 'lyco'], hello: ['lyco', 'lyco'], newcomer: [null, null], carol: [null, null],
+    }) && viewDeal === 0 && viewClient === 0 && stable(noneSets) === stable([0, 0]) && stable(unchanged) === stable(['lyco', 'lyco'])
+      && editDeal === 1 && editClient === 1 && stable(edited) === stable(['assetstack', 'assetstack']),
+    { adminSets, reads, viewDeal, viewClient, noneSets, unchanged, editDeal, editClient, edited });
+
+  // 109. The sync engine's saves (flatten() rows, as PostgREST upserts) carry the Lead for whoever may write the row:
+  // a deal's with Pipeline edit, a client's with Clients edit (Make client: the deal's Lead on its client). View-only
+  // saves are refused and change nothing.
+  const syncRows = (table, st) => [...flatten({ users: [], org: {}, ...st })[table].values()];
+  const dealRow = syncRows('deals', { deals: [{
+    id: deal, name: 'Example Ridge', sector: 'Councils', value: '24,000', priority: 'P1', stage: 'Demos', contact: alice, next: 'Send the proposal',
+    contactId: '', source: 'lyco',
+  }] });
+  const clientRow = syncRows('clients', { clients: [{
+    id: client, name: 'Example Ridge', group: 'Councils', status: 'Onboarding', priority: 'P1', next: 'Kick-off', sector: 'Councils',
+    contact: '', team: [hello], lastContact: '', demo: '', demoUrl: '', platformUrl: '', avatar: '#3b82f6', abn: '', billingAddress: '',
+    source: 'assetstack',
+  }] });
+  const saveRows = async (user, table, list) => { await as(user); const e = await postgrestUpsert(table, list); await as(null); return e; };
+  const back = async (table, id) => normalizeRow(table, (await one(`select row_to_json(x) as r from public.${table} x where id = $1`, [id])).r);
+  const synced = {
+    viewDeal: await saveRows(hello, 'deals', [{ ...dealRow[0], source: 'assetstack' }]),
+    viewClient: await saveRows(alice, 'clients', [{ ...clientRow[0], source: 'lyco' }]),
+    editDeal: await saveRows(alice, 'deals', dealRow),
+    editClient: await saveRows(hello, 'clients', clientRow),
+  };
+  const dealBack = await back('deals', deal);
+  const clientBack = await back('clients', client);
+  check('109. sync: a deal’s and a client’s Lead (lyco, assetstack) save from flatten() as PostgREST sends them, for Pipeline / Clients edit, '
+    + 'and read back unchanged; view-only saves are refused',
+    dealRow.length === 1 && dealRow[0].source === 'lyco' && clientRow.length === 1 && clientRow[0].source === 'assetstack'
+      && typeof synced.viewDeal === 'string' && typeof synced.viewClient === 'string' && synced.editDeal === null && synced.editClient === null
+      && stable(dealBack) === stable(dealRow[0]) && stable(clientBack) === stable(clientRow[0]),
+    { synced, dealRow, dealBack, clientRow, clientBack });
+
+  // Tidy up: the rows added here, and Newcomer's levels as they were.
+  await as(boss);
+  await db.query('delete from deals where id = any($1)', [[deal, added.deal.id]]);
+  await db.query('delete from clients where id = any($1)', [[client, added.client.id]]);
+  await as(david);
+  await db.query("delete from module_access where user_id = $1 and module in ('pipeline', 'clients')", [newcomer]);
+  for (const r of newcomerHad) {
+    await db.query('insert into module_access (user_id, module, level) values ($1, $2, $3)', [newcomer, r.module, r.level]);
+  }
+  await as(null);
+  return ctx;
+}
+
 async function runSplit(dbx, sql, { continueOnError = false, skip = () => false } = {}) {
   const errors = [];
   for (const st of splitSql(sql)) {
@@ -5786,7 +5941,8 @@ try {
   const ctx10 = ctx9 && await phase10(ctx9);
   const ctx11 = ctx10 && await phase11(ctx10);
   const ctx12 = ctx11 && await phase12(ctx11);
-  if (ctx12) await syncWriteCheck(ctx12);
+  const ctx13 = ctx12 && await phase13(ctx12);
+  if (ctx13) await syncWriteCheck(ctx13);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);

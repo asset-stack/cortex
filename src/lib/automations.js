@@ -218,7 +218,7 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day, m
     deal = {
       id: newId(), name: String(c.org ?? '').trim() || c.name, sector: '', value: 0, priority: 'P2',
       stage: booked ? 'First meetings' : 'Opportunities', contact: owner,
-      next: booked ? `Prepare meeting with ${name}` : `Reply to ${name}`, contactId: c.id,
+      next: booked ? `Prepare meeting with ${name}` : `Reply to ${name}`, contactId: c.id, source: '', // no Lead yet (0013's default)
     };
     state.deals.push(deal);
   } else if (booked && EARLY_STAGES.includes(deal.stage)) {

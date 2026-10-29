@@ -62,10 +62,11 @@ const COLUMNS = {
   clients: {
     id: 'id', name: t, group_name: t, status: t, priority: t, next_step: t, sector: t, contact_id: 'fk', team: 'uuids',
     last_contact: 'date', demo: t, demo_url: t, platform_url: t, avatar: t, abn: t, billing_address: t, position: 'int',
+    source: t, // the Lead (0013): '' | 'lyco' | 'assetstack'
   },
   deals: {
     id: 'id', name: t, sector: t, priority: t, stage: t, next_step: t, value: 'num', owner_id: 'fk', client_id: 'fk', contact_id: 'fk',
-    position: 'int',
+    position: 'int', source: t, // the Lead (0013), as on clients
   },
   client_notes: { id: 'id', client_id: 'id', user_id: 'fk', text: t, created_at: 'ts' },
   client_tasks: { id: 'id', client_id: 'id', position: 'int', text: t, done: 'bool' },
@@ -274,7 +275,7 @@ export function flatten(state) {
     put('clients', {
       id: c.id, name: c.name, group_name: c.group, status: c.status, priority: c.priority, next_step: c.next, sector: c.sector,
       contact_id: c.contact, team: c.team, last_contact: c.lastContact, demo: c.demo, demo_url: c.demoUrl, platform_url: c.platformUrl,
-      avatar: c.avatar, abn: c.abn, billing_address: c.billingAddress, position: fromEnd(state.clients, ci),
+      avatar: c.avatar, abn: c.abn, billing_address: c.billingAddress, position: fromEnd(state.clients, ci), source: c.source,
     });
     // A client's own people (client.contacts) — not the outreach contacts (state.contacts).
     (c.contacts || []).forEach((x, i) => put('client_contacts', {
@@ -309,7 +310,7 @@ export function flatten(state) {
 
   (state.deals || []).forEach((d, i) => put('deals', {
     id: d.id, name: d.name, sector: d.sector, priority: d.priority, stage: d.stage, next_step: d.next, value: d.value,
-    owner_id: d.contact, client_id: d.clientId, contact_id: d.contactId, position: i,
+    owner_id: d.contact, client_id: d.clientId, contact_id: d.contactId, position: i, source: d.source,
   }));
 
   (state.contacts || []).forEach((c, i) => put('contacts', {
@@ -448,7 +449,7 @@ export function assemble(rowsByTable, { me } = {}) {
   const clients = all('clients').sort(byPosDesc).map((c) => ({
     id: c.id, name: c.name, group: c.group_name, status: c.status, priority: c.priority, next: c.next_step, sector: c.sector,
     contact: c.contact_id ?? '', team: [...c.team], lastContact: c.last_contact ?? '', demo: c.demo, demoUrl: c.demo_url,
-    platformUrl: c.platform_url, avatar: c.avatar, abn: c.abn, billingAddress: c.billing_address,
+    platformUrl: c.platform_url, avatar: c.avatar, abn: c.abn, billingAddress: c.billing_address, source: c.source,
     contacts: kids(people, c.id, byPos).map((x) => ({
       id: x.id, name: x.name, role: x.role, email: x.email, phone: x.phone, billing: x.billing,
     })),
@@ -499,7 +500,8 @@ export function assemble(rowsByTable, { me } = {}) {
     boards,
     deals: all('deals').sort(byPos).map((d) => ({
       id: d.id, name: d.name, sector: d.sector, value: d.value, priority: d.priority, stage: d.stage,
-      contact: d.owner_id ?? '', next: d.next_step, contactId: d.contact_id ?? '', ...(d.client_id ? { clientId: d.client_id } : {}),
+      contact: d.owner_id ?? '', next: d.next_step, contactId: d.contact_id ?? '', source: d.source,
+      ...(d.client_id ? { clientId: d.client_id } : {}),
     })),
     clients,
     contacts: all('contacts').sort(byPosDesc).map((c) => ({

@@ -689,6 +689,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 
 ## 14. 0008: Pipeline — Opportunities → Contacted → First meetings → Demos; editable deals; Work in Progress
 
+(§21 adds **Proposal sent** after Demos, and Make client moves there.)
+
 - **Owner's ask**: deals editable; Won replaced by **Contacted**, between Opportunities and First meetings.
 - **Owner's decisions**: **Make client** is on the **Demos** column (the last); a deal made a client leaves the board (it
   lives in Clients) and counts in the **Made clients** KPI (was Won). Existing Won deals: those made clients stay off the
@@ -1138,3 +1140,36 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   `dropPlace` / `stepPlace`, `itemMatches`, `categoryOf` / timesheets / calendar / imports).
 - **Later, not built**: Move up/down from the keyboard on the board page itself (it has drag and group moves), a
   personal order separate from the board's, and Also on from an `@Name`.
+
+## 21. 0013: Proposal sent, and a Lead (LYCO or AssetStack) on deals and clients
+
+- **Owner's decisions (2026-10-29)**: Pipeline's columns are Opportunities → Contacted → First meetings → Demos →
+  **Proposal sent**. Every deal and client says whether the work came through **LYCO** (co-pitched) or is
+  **AssetStack direct**, as a small icon (the owner's two marks) and a coloured edge on a deal's block. The live pipeline was
+  then reloaded from the owner's list (a one-off SQL script run in the SQL editor, never in this repo).
+- **Stages**: `DEAL_STAGES` gains `'Proposal sent'` (sentence case, like *First meetings* and the clients' *Proposal sent*
+  status). `deals.stage` is free text, so the stage needs no SQL. **Make client** sits on the last column, now Proposal
+  sent (card and Edit deal); `dealStage()` shows a stray Won there. The booking rule (0008's `contact_pipeline()`,
+  `contactPipelineLocal()`) only moves Opportunities and Contacted, so it never touches Demos or Proposal sent. The
+  Pipeline KPI *Demos* became *Proposals sent*. Imports: proposal, quote, tender or contract wording → Proposal sent; won,
+  signed or client wording → the last column; demo, pilot or trial → Demos (`dealStage()` in `src/lib/importers.js`
+  names its stages, so adding one can't shift them).
+- **Lead** (`0013_lead.sql`): `deals.source` and `clients.source`, `text not null default ''`, checked to
+  `'' | 'lyco' | 'assetstack'`; the existing module policies cover them (Pipeline edit sets a deal's, Clients edit a
+  client's), and both tables were already in realtime. In the app: `LEADS`, `isLead()`, `leadOf()` (`src/data/boards.js`);
+  `cleanDealPatch()` and `updateClient` take only a known Lead or none; `convertDeal` (Make client) gives a new client
+  the deal's Lead, and an existing client without one the deal's. Deals made by the outreach automation start with none.
+  Imports read a *Lead* / *Lead source* / *Source* / *Partner* column (LYCO, co-pitched or partner wording → LYCO;
+  AssetStack or direct → AssetStack).
+- **Screens**: the marks are `src/components/LeadIcon.jsx` (inline SVG, traced from the owner's icons; it names itself,
+  e.g. "LYCO lead · co-pitched", unless the words are beside it). A deal's block shows the mark before its name and a
+  4px left edge in the Lead's colour; Edit / New deal has a Lead select; the deal's profile shows it in its header.
+  Clients show the mark by the name (cards and list) and a Lead select in the drawer (read-only at view). Pipeline and
+  Clients each have an **All · LYCO · AssetStack** filter (component state): on Pipeline the columns and KPIs follow it;
+  on Clients the clients and their counts do, while money (Owed, Invoices) stays the whole business.
+- **Release order**: 0013 adds columns that the app sends with every deal and client save, so it **must run before the
+  release is published** (no `since` fallback for a column): the owner runs it and the information_schema check in
+  `DEPLOY.md` §2 returns two rows, then main is updated.
+- **Tests**: `scripts/test-sync.mjs` (the stages and `dealStage()`, `LEADS` / `isLead` / `leadOf`, `cleanDealPatch`'s Lead,
+  the import stage and Lead mapping, the deal and client round trip with `source`, a seed deal in every column and both
+  Leads); `scripts/test-db.mjs` (0013: re-runs, the check, who may set it, and the sync writing it).

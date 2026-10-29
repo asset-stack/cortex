@@ -118,15 +118,26 @@ export function withPeople(values) {
   return { ...rest, people: [...new Set([owner, ...list].filter(Boolean).map(String))] };
 }
 
-// Pipeline's columns, in order (0008). A deal made a client leaves the board (it lives in Clients); there's no Won.
-export const DEAL_STAGES = ['Opportunities', 'Contacted', 'First meetings', 'Demos'];
+// Pipeline's columns, in order (0008, Proposal sent §21). A deal made a client leaves the board (it lives in Clients);
+// there's no Won: Make client sits on the last column.
+export const DEAL_STAGES = ['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Proposal sent'];
 export const DEAL_PRIORITIES = ['P1', 'P2', 'P3'];
-/** The column a deal shows in: its stage, or for a stage the board no longer has, Demos for the old Won (0008 moves
- *  those in the database; an old browser tab may still write one) and Opportunities for anything else. */
-export const dealStage = (deal) => (DEAL_STAGES.includes(deal?.stage) ? deal.stage : deal?.stage === 'Won' ? 'Demos' : 'Opportunities');
+/** The column a deal shows in: its stage, or for a stage the board no longer has, the last column for the old Won (an
+ *  old browser tab may still write one) and Opportunities for anything else. */
+export const dealStage = (deal) => (DEAL_STAGES.includes(deal?.stage) ? deal.stage
+  : deal?.stage === 'Won' ? DEAL_STAGES[DEAL_STAGES.length - 1] : 'Opportunities');
 
-/** A deal's edited fields, cleaned (Pipeline's Edit deal): text trimmed, a value of 0 or more, a known priority and
- *  stage, and an owner among `userIds` ('' for none). Fields that aren't valid are left out, so the deal keeps them. */
+// A deal's or client's Lead (0013, §21): the work came through LYCO (co-pitched) or is AssetStack's own. '' = not set.
+// `edge` colours a deal's block; the icon is src/components/LeadIcon.jsx.
+export const LEADS = {
+  lyco: { label: 'LYCO', title: 'LYCO lead · co-pitched', edge: '#22e36b' },
+  assetstack: { label: 'AssetStack', title: 'AssetStack direct', edge: '#2337ee' },
+};
+export const isLead = (v) => typeof v === 'string' && Object.hasOwn(LEADS, v);
+export const leadOf = (x) => (isLead(x?.source) ? x.source : '');
+
+/** A deal's edited fields, cleaned (Pipeline's Edit deal): text trimmed, a value of 0 or more, a known priority,
+ *  stage and Lead, and an owner among `userIds` ('' for none). Fields that aren't valid are left out, so the deal keeps them. */
 export function cleanDealPatch(patch = {}, userIds = []) {
   const text = (v) => String(v ?? '').trim();
   const out = {};
@@ -138,6 +149,7 @@ export function cleanDealPatch(patch = {}, userIds = []) {
   }
   if ('priority' in patch && DEAL_PRIORITIES.includes(patch.priority)) out.priority = patch.priority;
   if ('stage' in patch && DEAL_STAGES.includes(patch.stage)) out.stage = patch.stage;
+  if ('source' in patch && (patch.source === '' || isLead(patch.source))) out.source = patch.source;
   if ('contact' in patch) out.contact = userIds.includes(patch.contact) ? patch.contact : '';
   return out;
 }

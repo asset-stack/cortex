@@ -79,7 +79,14 @@ Contacted → First meetings → Demos, and Work in Progress under the deals; `d
 `docs/PHASE2.md` §15), then `0010_outreach_gmail.sql` (Outreach counted from each mailbox's Gmail; section 14;
 `docs/PHASE2.md` §16), then `0011_team_access_read.sql` (everyone reads everyone's access levels, for the Team pages;
 `docs/PHASE2.md` §18), then `0012_crm_profile.sql` (a deal's and a client's profile: meetings, notes and links;
-`docs/PHASE2.md` §19).
+`docs/PHASE2.md` §19), then `0013_lead.sql` (a deal's and a client's Lead: LYCO, co-pitched, or AssetStack direct;
+`docs/PHASE2.md` §21).
+
+**0013 must run before the release that needs it is published.** It adds a column (`source`) to `deals` and
+`clients`, and that release saves it with every deal and client: until the file has run, those saves fail. Run it, check
+it, then publish:
+`select table_name from information_schema.columns where table_schema = 'public' and column_name = 'source' and table_name in ('deals', 'clients');`
+must return two rows (`clients`, `deals`).
 
 Later schema changes arrive as new numbered files in `supabase/migrations/` (`0013_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one. From `0013`, each file ends with a line that
@@ -87,8 +94,9 @@ prints `Cortex 00NN applied`: if the SQL editor doesn't show that row, the file 
 it). To check that a file with a new table ran, `select to_regclass('public.<table>');` shows the table's name, or
 NULL when it isn't there (for 0012: `select to_regclass('public.crm_entries');`).
 
-If the app reaches the live site before its file has run, Cortex still opens: what the file adds is off (no rows, no
-saving), and admins see a notice naming the file to run. Run it, then reload.
+If the app reaches the live site before a file that adds a **table** has run, Cortex still opens: what the file adds is
+off (no rows, no saving), and admins see a notice naming the file to run. Run it, then reload. A file that adds a
+**column** to an existing table (0013) has no such fallback: run it first.
 
 **0003 on a database that already has 0002**: **SQL Editor** → **+** → **Create a new snippet**, paste
 `supabase/migrations/0003_timezones_projects_view.sql` and **Run** *before* deploying the code that needs it (the

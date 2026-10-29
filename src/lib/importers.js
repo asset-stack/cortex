@@ -1,6 +1,6 @@
 // CSV import mapping (docs/BACKEND.md §4): which columns feed which fields, and one CSV row → one record in
 // state shape for actions.importRecords(), which adds ids and skips names that already exist. Pure functions.
-import { BOARD_SCHEMAS, CLIENT_STATUSES, CONTACT_STATUSES, DEAL_STAGES, PRIORITY, STATUS } from '@/data/boards';
+import { BOARD_SCHEMAS, CLIENT_STATUSES, CONTACT_STATUSES, DEAL_STAGES, LEADS, PRIORITY, STATUS } from '@/data/boards';
 import { localYmd } from '@/lib/format';
 
 // Field types drive parsing and the preview: text | user (one staff member) | users | date (YYYY-MM-DD) |
@@ -33,6 +33,7 @@ export const FIELDS = {
     field('demoUrl', 'Demo link', 'text', ['demo url', 'demo link']),
     field('abn', 'ABN', 'text', ['abn', 'australian business number']),
     field('billingAddress', 'Billing address', 'text', ['billing address', 'address', 'postal address']),
+    field('source', 'Lead', 'text', ['lead', 'lead source', 'source', 'partner', 'channel']),
     field('notes', 'Notes', 'note', NOTES),
     field('created', 'Created', 'ts', CREATED),
   ],
@@ -53,6 +54,7 @@ export const FIELDS = {
     field('stage', 'Stage', 'text', ['stage', 'status', 'deal stage', 'pipeline stage']),
     field('contact', 'Owner', 'user', ['owner', 'contact', 'deal owner', 'assigned to', 'assignee', 'account manager']),
     field('next', 'Next step', 'text', ['next step', 'next steps', 'next action', 'next']),
+    field('source', 'Lead', 'text', ['lead', 'lead source', 'source', 'partner', 'channel']),
   ],
   tasks: [
     field('name', 'Name', 'text', ['name', 'task', 'title', 'task name', 'item'], NAME),
@@ -264,20 +266,35 @@ function priority(v, allowP3) {
   return 'P2';
 }
 
-const [OPPORTUNITIES, CONTACTED, MEETINGS, DEMOS] = DEAL_STAGES;
+// By name, so a stage added or moved can't shift them. Make client is on the last column; there's no Won.
+const [OPPORTUNITIES, CONTACTED, MEETINGS, DEMOS, PROPOSALS] = ['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Proposal sent'];
+const LAST = DEAL_STAGES[DEAL_STAGES.length - 1];
 // Lost or negated ("Won't proceed", "Not signed", "Uncontacted") is back to Opportunities. Won, signed or client wording is the last
-// stage, Demos, where Make client is (there's no Won column); a client or onboarding mention only once demo and meeting
-// wording is ruled out ("Client demo", "Onboarding call"). Contacted, emailed or reached out is Contacted.
+// stage, where Make client is; a client or onboarding mention only once proposal, demo and meeting wording is ruled out ("Client
+// demo", "Onboarding call"). Proposal, quote, tender or contract wording is Proposal sent ("Quote sent" before Contacted's "sent");
+// demo, pilot or trial is Demos. Contacted, emailed or reached out is Contacted.
 function dealStage(v) {
   const s = norm(v);
   return exactly(s, DEAL_STAGES)
     || (/lost|\bnot\b|\bnever\b|\bno\b|won['’]t|\bun ?-?(contacted|sent|emailed|reached)/.test(s) && OPPORTUNITIES)
-    || (/\bwon\b|closed|\bsigned\b/.test(s) && DEMOS)
-    || (/demo|proposal|quote|contract|pilot|trial|negotiat/.test(s) && DEMOS)
+    || (/\bwon\b|closed|\bsigned\b/.test(s) && LAST)
+    || (/proposal|quote|tender|contract|negotiat/.test(s) && PROPOSALS)
+    || (/demo|pilot|trial/.test(s) && DEMOS)
     || (/meeting|call|discovery/.test(s) && MEETINGS)
     || (/contacted|emailed|reached|outreach|\bsent\b/.test(s) && CONTACTED)
-    || (/client|onboard/.test(s) && DEMOS)
+    || (/client|onboard/.test(s) && LAST)
     || OPPORTUNITIES;
+}
+
+// A Lead as written ("LYCO", "Co-pitched", "Partner" → lyco; "AssetStack", "Direct" → assetstack), else none.
+function leadSource(v) {
+  const s = norm(v);
+  const exact = Object.keys(LEADS).find((k) => k === s.replace(/\s/g, '') || norm(LEADS[k].label) === s);
+  if (exact) return exact;
+  if (NOT_PRIORITY.test(s)) return ''; // "Not LYCO", "Non-partner": not a Lead we can name
+  if (/lyco|co ?-?pitch|partner/.test(s)) return 'lyco';
+  if (/asset ?stack|direct/.test(s)) return 'assetstack';
+  return '';
 }
 
 // Outreach stages are free text; the usual ones are tidied, others kept as written.
@@ -375,7 +392,7 @@ export function normalise(kind, row, mapping, { users = [], me = '', board, now 
         next: get('next'), sector: get('sector'), contact, team: [...new Set([contact, ...matchUsers(get('team'), users)].filter(Boolean))],
         lastContact: toYmd(get('lastContact')), demo: get('demo'), demoUrl: get('demoUrl'), platformUrl: get('platformUrl'),
         contacts: person.name || person.email || person.phone ? [person] : [],
-        avatar: avatarFor(name), abn: get('abn'), billingAddress: get('billingAddress'),
+        avatar: avatarFor(name), abn: get('abn'), billingAddress: get('billingAddress'), source: leadSource(get('source')),
         notes: note(), tasks: [], invoices: [], access: [],
       };
     }
@@ -387,7 +404,7 @@ export function normalise(kind, row, mapping, { users = [], me = '', board, now 
     case 'deals':
       return {
         name, sector: get('sector'), value: parseMoney(get('value')), priority: priority(get('priority'), true),
-        stage: dealStage(get('stage')), contact: owner('contact') || me, next: get('next'),
+        stage: dealStage(get('stage')), contact: owner('contact') || me, next: get('next'), source: leadSource(get('source')),
       };
     case 'tasks': {
       const status = taskStatus(get('status'));

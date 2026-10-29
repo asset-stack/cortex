@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowRight, Link2, Pencil } from 'lucide-react';
 import { useStore } from '@/data/store';
-import { DEAL_PRIORITIES, DEAL_STAGES, dealStage } from '@/data/boards';
+import { DEAL_PRIORITIES, DEAL_STAGES, LEADS, dealStage, leadOf } from '@/data/boards';
 import { useAccess } from '@/lib/access';
-import { Avatar, ConfirmModal, KpiRow, Modal, PageHeader, PersonPicker } from '@/components/ui';
+import { Avatar, ConfirmModal, KpiRow, Modal, PageHeader, PersonPicker, Segmented } from '@/components/ui';
 import { compactMoney } from '@/lib/format';
 import { teamBoards } from '@/lib/boards';
 import Board from '@/components/board/Board';
 import DealProfile from '@/components/crm/DealProfile';
+import LeadIcon from '@/components/LeadIcon';
 import { cn } from '@/lib/cn';
 
 const PRIORITY_BG = { P1: 'bg-rose-500', P2: 'bg-amber-500', P3: 'bg-sky-500' };
-const LAST_STAGE = DEAL_STAGES[DEAL_STAGES.length - 1]; // Demos: where Make client is
+const LAST_STAGE = DEAL_STAGES[DEAL_STAGES.length - 1]; // Proposal sent: where Make client is
 
 // '250,000' | '$250k' | '85 000' | '1.2m' -> number; '' -> 0; anything else -> null.
 function parseValue(s) {
@@ -22,11 +23,19 @@ function parseValue(s) {
   return Math.round(Number(m[1]) * (m[2] === 'm' ? 1e6 : m[2] === 'k' ? 1e3 : 1));
 }
 
-const FIELDS = ['name', 'sector', 'priority', 'contact', 'next', 'stage'];
+const FIELDS = ['name', 'sector', 'priority', 'contact', 'next', 'stage', 'source'];
 const formOf = (deal) => ({
   name: deal.name, sector: deal.sector || '', value: deal.value ? String(deal.value) : '', priority: deal.priority || 'P2',
-  contact: deal.contact || '', next: deal.next || '', stage: dealStage(deal),
+  contact: deal.contact || '', next: deal.next || '', stage: dealStage(deal), source: leadOf(deal),
 });
+
+// The Lead filter above the board (§21): everything, or one Lead's deals.
+const LEAD_FILTER = [
+  { id: '', label: 'All' },
+  ...Object.entries(LEADS).map(([id, l]) => ({ id, label: l.label, icon: (p) => <LeadIcon lead={id} decorative {...p} /> })),
+];
+// A deal's Lead colours its block's left edge (on top of the chip's own inset highlight).
+const edgeOf = (deal) => (leadOf(deal) ? { boxShadow: `inset 4px 0 0 ${LEADS[leadOf(deal)].edge}, inset 0 1px 0 rgba(255,255,255,.3)` } : undefined);
 
 // After a dialog closes, keyboard focus goes back to the deal's Edit button (its card may have moved column), else to
 // New deal (it was deleted or made a client), else (Pipeline view: no New deal) to the page's title.
@@ -48,15 +57,15 @@ function ConfirmMakeClient({ name, open, onClose, onConfirm }) {
 }
 
 /**
- * New deal (no `deal`) or Edit deal: organisation, sector, value, owner, priority, next step and, when editing, the
- * stage, Delete and (on Demos) Make client. Editing saves only the fields you changed, so a change someone else (or the
+ * New deal (no `deal`) or Edit deal: organisation, sector, value, owner, priority, Lead, next step and, when editing, the
+ * stage, Delete and (on Proposal sent) Make client. Editing saves only the fields you changed, so a change someone else (or the
  * booking automation) made while it was open stays; it closes if the deal is deleted or made a client meanwhile.
  */
 function DealForm({ deal: opened, onClose, canConvert }) {
   const { state, actions } = useStore();
   const editing = Boolean(opened);
   const deal = editing ? state.deals.find((x) => x.id === opened.id) : null;
-  const start = useRef(editing ? formOf(opened) : { name: '', sector: '', value: '', priority: 'P2', contact: state.me, next: '' }); // contact = owner's user id
+  const start = useRef(editing ? formOf(opened) : { name: '', sector: '', value: '', priority: 'P2', contact: state.me, next: '', source: '' }); // contact = owner's user id
   const [f, setF] = useState(start.current);
   const [err, setErr] = useState('');
   const [confirm, setConfirm] = useState(null); // 'delete' | 'client': asks on top of the form
@@ -114,6 +123,10 @@ function DealForm({ deal: opened, onClose, canConvert }) {
             </select>
           </div>
           {err && <div role="alert" className="text-[12.5px] text-rose-200">{err}</div>}
+          <select className="field" aria-label="Lead" value={f.source} onChange={set('source')}>
+            <option value="">Lead not set</option>
+            {Object.entries(LEADS).map(([id, l]) => <option key={id} value={id}>{l.title}</option>)}
+          </select>
           <input className="field" placeholder="Next step" aria-label="Next step" value={f.next} onChange={set('next')} />
           {editing && (
             <select className="field" aria-label="Stage" value={f.stage} onChange={set('stage')}>
@@ -163,6 +176,7 @@ export default function Pipeline() {
   const [form, setForm] = useState(null); // null | 'new' | the deal being edited
   const [making, setMaking] = useState(null); // id of the deal Make client asks about
   const [profile, setProfile] = useState(null); // id of the deal whose profile is open
+  const [lead, setLead] = useState(''); // the Lead filter: '' (all) | 'lyco' | 'assetstack'
   // A deal moved by its stage select lands in another column: keep focus on its select there.
   const refocusStage = (dealId) => window.setTimeout(() => {
     document.querySelector(`[data-deal="${CSS.escape(dealId)}"] select`)?.focus({ preventScroll: true });
@@ -172,13 +186,15 @@ export default function Pipeline() {
   // A deal made a client has left the board (it lives in Clients); the rest show in their stage's column.
   const closeForm = useCallback(() => setForm(null), []);
   const deals = state.deals.filter((d) => !d.clientId);
+  const ofLead = (d) => !lead || leadOf(d) === lead;
+  const shown = deals.filter(ofLead); // the columns and KPIs follow the Lead filter
   // The confirm closes if the deal is deleted or made a client meanwhile.
   const makingDeal = making ? deals.find((d) => d.id === making) : null;
   useEffect(() => { if (making && !makingDeal) { setMaking(null); refocus(null); } }, [making, makingDeal]);
   // So does the open profile.
   const profileGone = Boolean(profile) && !deals.some((d) => d.id === profile);
   useEffect(() => { if (profileGone) { setProfile(null); refocus(null); } }, [profileGone]);
-  const value = deals.reduce((t, d) => t + (d.value || 0), 0);
+  const value = shown.reduce((t, d) => t + (d.value || 0), 0);
   const drop = (stage) => (editable ? {
     onDragOver: (e) => { e.preventDefault(); setOver(stage); },
     onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(null); },
@@ -189,15 +205,18 @@ export default function Pipeline() {
     <div>
       <PageHeader title="Pipeline" action={editable ? 'New deal' : undefined} onAction={() => setForm('new')} />
       <KpiRow items={[
-        { value: deals.length, label: 'Open deals', tint: '#334155' },
+        { value: shown.length, label: 'Open deals', tint: '#334155' },
         { value: compactMoney(value), label: 'Pipeline value', tint: '#7c3aed' },
-        { value: deals.filter((d) => dealStage(d) === 'Demos').length, label: 'Demos', tint: '#0f9f8f' },
-        { value: state.deals.filter((d) => d.clientId).length, label: 'Made clients', tint: '#f59e0b' },
+        { value: shown.filter((d) => dealStage(d) === LAST_STAGE).length, label: 'Proposals sent', tint: '#0f9f8f' },
+        { value: state.deals.filter((d) => d.clientId && ofLead(d)).length, label: 'Made clients', tint: '#f59e0b' },
       ]} />
-      <div className="mt-7 overflow-x-auto scroll-thin pb-2">
-        <div className="grid gap-4 min-w-[900px]" style={{ gridTemplateColumns: `repeat(${DEAL_STAGES.length}, minmax(0, 1fr))` }}>
+      <div className="mt-6">
+        <Segmented label="Lead" options={LEAD_FILTER} value={lead} onChange={setLead} />
+      </div>
+      <div className="mt-4 overflow-x-auto scroll-thin pb-2">
+        <div className="grid gap-4 min-w-[1120px]" style={{ gridTemplateColumns: `repeat(${DEAL_STAGES.length}, minmax(0, 1fr))` }}>
           {DEAL_STAGES.map((stage) => {
-            const items = deals.filter((d) => dealStage(d) === stage);
+            const items = shown.filter((d) => dealStage(d) === stage);
             return (
               <div key={stage} className={cn('rounded-[24px] glass p-3', over === stage && 'drag-over')} {...drop(stage)}>
                 <div className="mb-3 flex items-center justify-between px-2 pt-1 font-bold">
@@ -206,9 +225,10 @@ export default function Pipeline() {
                 <div className="flex flex-col gap-2 min-h-[90px]">
                   {items.map((d) => (
                     <div key={d.id} data-deal={d.id} draggable={editable} onDragStart={editable ? (e) => e.dataTransfer.setData('text/plain', d.id) : undefined}
-                      className={cn('float rounded-[18px] chip p-3.5', editable && 'cursor-grab active:cursor-grabbing')}>
+                      className={cn('float rounded-[18px] chip p-3.5', editable && 'cursor-grab active:cursor-grabbing')} style={edgeOf(d)}>
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex min-w-0 items-center gap-1.5 font-bold">
+                          <LeadIcon lead={leadOf(d)} className="shrink-0" />
                           <button type="button" onClick={() => setProfile(d.id)} draggable={false} onMouseDown={(e) => e.stopPropagation()}
                             className="min-w-0 text-left hover:underline" aria-label={`Open ${d.name}`}>{d.name}</button>
                           {d.contactId && <FromContact contactId={d.contactId} />}
@@ -223,13 +243,13 @@ export default function Pipeline() {
                         </span>
                       </div>
                       {d.next && <div className="mt-1 text-[12.5px] dim">{d.next}</div>}
-                      <div className="mt-2 flex items-center justify-between gap-2">
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <span className="font-extrabold tnum text-[16px]">{compactMoney(d.value)}</span>
                           {d.contact && <Avatar userId={d.contact} size={22} />}
                         </div>
                         {stage === LAST_STAGE && canConvert && (
-                          <button type="button" onClick={() => setMaking(d.id)} className="inline-flex items-center gap-1 rounded-full chip-on px-2.5 py-1 text-[12px] font-semibold">
+                          <button type="button" onClick={() => setMaking(d.id)} className="inline-flex items-center gap-1 whitespace-nowrap rounded-full chip-on px-2.5 py-1 text-[12px] font-semibold">
                             Make client<ArrowRight className="h-3.5 w-3.5" />
                           </button>
                         )}

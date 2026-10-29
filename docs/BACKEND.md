@@ -87,11 +87,13 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
              groups: [{ id, name, color,
                items: [{ id, name, values: { people /* [userId] */, status, ... }, done,
                          updates: [{ id, user, text, ts }], subtasks: [{ id, text, done }] }] }] }],
-  deals:   [{ id, name, sector, value, priority, stage /* Opportunities | Contacted | First meetings | Demos (0008) */,
-             contact /* owner user id */, next, clientId? /* made a client: off the board */, contactId }],
+  deals:   [{ id, name, sector, value, priority,
+             stage /* Opportunities | Contacted | First meetings | Demos (0008) | Proposal sent (PHASE2 §21) */,
+             contact /* owner user id */, next, clientId? /* made a client: off the board */, contactId,
+             source /* 0013, the Lead: '' | 'lyco' (LYCO, co-pitched) | 'assetstack' (AssetStack direct) */ }],
   clients: [{ id, name, group, status, priority, next, sector, contact /* user id */, team: [userId],
               lastContact /* 'YYYY-MM-DD' | '' */, demo, demoUrl, platformUrl /* 0004 */, avatar,
-              abn, billingAddress,
+              abn, billingAddress, source /* 0013, the Lead, as on deals; Make client carries the deal's */,
               // 0004 (replaces keyContact / email): the client's people; invoices go to billing ones
               contacts: [{ id, name, role, email, phone, billing }],
               contracts: [{ id, status, title, docId, docUrl, startDate, endDate, annualFee, paymentTerms, userLimit,
@@ -154,8 +156,8 @@ maintained by a `touch()` trigger (the sync engine never sends these two columns
 | `items` | `board_key text not null`, `board_id uuid not null` (0006; its group's board), `group_id uuid not null → board_groups cascade` (0006: `(group_id, board_id)` → `board_groups (id, board_id)`), `position int`, `name text`, `values jsonb not null default '{}'` (`people`: user ids; 0002 replaced `owner`), `done bool not null default false` | `groups[].items[]` |
 | `item_updates` | `item_id → items cascade`, `user_id uuid → profiles`, `text text`, `created_at timestamptz` | `items[].updates[]` (newest first in state; order by `created_at desc`) |
 | `subtasks` | `item_id → items cascade`, `position int`, `text text`, `done bool` | `items[].subtasks[]` |
-| `clients` | `name, group_name, status, priority, next_step, sector text`, `contact_id uuid null → profiles`, `team uuid[] not null default '{}'`, `last_contact date null`, `demo, key_contact, email, demo_url, avatar, abn, billing_address text not null default ''`, `position int`; 0004: `platform_url text`, and `key_contact` / `email` are no longer synced (moved into `client_contacts`) | `clients[]` |
-| `deals` | `name, sector, priority, stage, next_step text`, `value numeric not null default 0`, `owner_id uuid null → profiles`, `client_id uuid null → clients on delete set null`, `contact_id uuid null → contacts on delete set null` (0002), `position int` | `deals[]` |
+| `clients` | `name, group_name, status, priority, next_step, sector text`, `contact_id uuid null → profiles`, `team uuid[] not null default '{}'`, `last_contact date null`, `demo, key_contact, email, demo_url, avatar, abn, billing_address text not null default ''`, `position int`; 0004: `platform_url text`, and `key_contact` / `email` are no longer synced (moved into `client_contacts`); 0013: `source text not null default '' check in ('', 'lyco', 'assetstack')` | `clients[]` |
+| `deals` | `name, sector, priority, stage, next_step text`, `value numeric not null default 0`, `owner_id uuid null → profiles`, `client_id uuid null → clients on delete set null`, `contact_id uuid null → contacts on delete set null` (0002), `position int`; 0013: `source text not null default '' check in ('', 'lyco', 'assetstack')` | `deals[]` |
 | `client_notes` | `client_id → clients cascade`, `user_id → profiles`, `text text`, `created_at timestamptz` | `clients[].notes[]` (newest first) |
 | `crm_entries` (0012) | `deal_id uuid null → deals on delete set null`, `client_id uuid null → clients cascade` (one or both), `kind text check in ('note','meeting','link')`, `title, body, url, label, attendees text`, `happened_on date null`, `user_id → profiles on delete set null`, `created_at timestamptz` | `crmEntries[]` (newest first) |
 | `client_tasks` | `client_id cascade`, `position int`, `text text`, `done bool` | `clients[].tasks[]` |

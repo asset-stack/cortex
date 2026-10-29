@@ -91,14 +91,15 @@ const fixture = () => ({
     { id: 'b-events', module: 'marketing', name: 'Events', owner: '', calendar: false, groups: [] },
   ],
   deals: [
-    { id: 'd-1', name: 'Deal one', sector: 'Government', value: 70000, priority: 'P2', stage: 'Opportunities', contact: U1, next: 'Call', contactId: 'p-1' },
-    { id: 'd-2', name: 'Client one', sector: 'Utilities', value: '1,500', priority: 'P1', stage: 'Won', contact: '', next: '', contactId: '', clientId: 'c-1' },
+    { id: 'd-1', name: 'Deal one', sector: 'Government', value: 70000, priority: 'P2', stage: 'Opportunities', contact: U1, next: 'Call', contactId: 'p-1', source: 'lyco' },
+    { id: 'd-2', name: 'Client one', sector: 'Utilities', value: '1,500', priority: 'P1', stage: 'Won', contact: '', next: '', contactId: '', source: '', clientId: 'c-1' },
   ],
   clients: [
     {
       id: 'c-1', name: 'Client one', group: 'Onboarding', status: 'Onboarding', priority: 'P1', next: 'Kick-off', sector: 'Utilities',
       contact: U1, team: [U1, U2], lastContact: '2026-10-01', demo: 'Live', demoUrl: 'https://demo.example.com',
       platformUrl: 'https://client-one.example.com', avatar: '#3b82f6', abn: '11 111 111 111', billingAddress: '2 Example Rd',
+      source: 'assetstack',
       contacts: [
         { id: 'pc-1', name: 'Pat Doe', role: 'Asset manager', email: 'pat@example.com', phone: '0400 000 000', billing: false },
         { id: 'pc-2', name: 'Accounts', role: 'Finance', email: 'accounts@example.com', phone: '', billing: true },
@@ -143,7 +144,7 @@ const fixture = () => ({
     },
     {
       id: 'c-0', name: 'Client two', group: 'Active', status: 'Passive', priority: 'P2', next: '', sector: '', contact: '', team: [],
-      lastContact: '', demo: '', demoUrl: '', platformUrl: '', avatar: '#f59e0b', abn: '', billingAddress: '',
+      lastContact: '', demo: '', demoUrl: '', platformUrl: '', avatar: '#f59e0b', abn: '', billingAddress: '', source: '',
       contacts: [], contracts: [], notes: [], tasks: [], invoices: [], access: [], plans: [], usage: [],
     },
   ],
@@ -277,8 +278,10 @@ await check('flatten: DB column shapes', () => {
   });
   assert.deepEqual(rows.deals.get('d-2'), {
     id: 'd-2', name: 'Client one', sector: 'Utilities', priority: 'P1', stage: 'Won', next_step: '', value: 1500,
-    owner_id: null, client_id: 'c-1', contact_id: null, position: 1,
+    owner_id: null, client_id: 'c-1', contact_id: null, position: 1, source: '',
   });
+  assert.equal(rows.deals.get('d-1').source, 'lyco');
+  assert.equal(rows.clients.get('c-1').source, 'assetstack', 'the Lead (0013)');
   assert.equal(rows.clients.get('c-0').last_contact, null);
   // position is the array index ('c-0' sits second, so id order can't stand in for it), counted from the end for
   // the lists that grow at the top (clients, contacts, a client's invoices).
@@ -2663,7 +2666,7 @@ await check('automations: contactPipelineLocal creates the deal and the follow-u
   const st = outreachState();
   const out = auto.contactPipelineLocal(st, 'c1', 'Sent', { day: '2026-10-12' });
   assert.deepEqual({ ...out.deal, id: '' }, {
-    id: '', name: 'Example Water', sector: '', value: 0, priority: 'P2', stage: 'Opportunities', contact: 'stu', next: 'Reply to Pat Doe', contactId: 'c1',
+    id: '', name: 'Example Water', sector: '', value: 0, priority: 'P2', stage: 'Opportunities', contact: 'stu', next: 'Reply to Pat Doe', contactId: 'c1', source: '',
   });
   assert.equal(st.deals.at(-1), out.deal, 'at the end of the pipeline');
   assert.deepEqual({ ...out.todo, id: '' }, {
@@ -2707,15 +2710,18 @@ await check('automations: a booking moves a deal on from Opportunities or Contac
     st.contacts[2].status = 'Meeting booked';
     return auto.contactPipelineLocal(st, 'c3', 'Opened', { day: '2026-10-12' }).deal.stage;
   };
-  assert.deepEqual(['Opportunities', 'Contacted', 'First meetings', 'Demos'].map(at), ['First meetings', 'First meetings', 'First meetings', 'Demos']);
+  assert.deepEqual(['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Proposal sent'].map(at),
+    ['First meetings', 'First meetings', 'First meetings', 'Demos', 'Proposal sent']);
 });
 
-await check('pipeline: stages Opportunities → Contacted → First meetings → Demos; dealStage() shows the old Won in Demos', async () => {
+await check('pipeline: stages Opportunities → Contacted → First meetings → Demos → Proposal sent; dealStage() shows the old Won in the last', async () => {
   const data = await import('../src/data/boards.js');
-  assert.deepEqual(data.DEAL_STAGES, ['Opportunities', 'Contacted', 'First meetings', 'Demos']);
+  assert.deepEqual(data.DEAL_STAGES, ['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Proposal sent']);
   assert.deepEqual(data.DEAL_PRIORITIES, ['P1', 'P2', 'P3']);
-  assert.deepEqual(['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Won', '', 'Lost', undefined].map((stage) => data.dealStage({ stage })),
-    ['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Demos', 'Opportunities', 'Opportunities', 'Opportunities']);
+  assert.deepEqual(['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Proposal sent', 'Won', '', 'Lost', 'Proposal Sent', undefined]
+    .map((stage) => data.dealStage({ stage })),
+  ['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Proposal sent', 'Proposal sent', 'Opportunities', 'Opportunities', 'Opportunities',
+    'Opportunities']);
   assert.equal(data.dealStage(null), 'Opportunities');
   // 0008 makes the same moves in the database: Won → Demos, the booking rule from Opportunities or Contacted.
   const sql8 = readFileSync(new URL('0008_pipeline_stages.sql', migrationsDir), 'utf8');
@@ -2757,6 +2763,20 @@ await check('pipeline: cleanDealPatch keeps valid edits only (Edit deal)', async
   assert.deepEqual(cleanDealPatch({ value: 0, sector: '' }, users), { value: 0, sector: '' });
   assert.deepEqual(cleanDealPatch({}, users), {});
   assert.deepEqual(cleanDealPatch({ id: 'x', clientId: 'c', contactId: 'p' }, users), {}, 'links and ids are never edited');
+  assert.deepEqual(['lyco', 'assetstack', '', 'partner', 'LYCO', 'toString', null].map((source) => cleanDealPatch({ source }, users)),
+    [{ source: 'lyco' }, { source: 'assetstack' }, { source: '' }, {}, {}, {}, {}], 'a known Lead or none (0013)');
+});
+
+await check('pipeline: the Lead (0013, §21) is LYCO or AssetStack, never anything else', async () => {
+  const { LEADS, isLead, leadOf } = await import('../src/data/boards.js');
+  assert.deepEqual(Object.keys(LEADS), ['lyco', 'assetstack']);
+  assert.deepEqual(Object.values(LEADS).map((l) => [l.label, l.title]), [['LYCO', 'LYCO lead · co-pitched'], ['AssetStack', 'AssetStack direct']]);
+  assert.deepEqual(['lyco', 'assetstack', '', 'Lyco', 'constructor', '__proto__', undefined, 1].map(isLead),
+    [true, true, false, false, false, false, false, false]);
+  assert.deepEqual([{ source: 'lyco' }, { source: 'x' }, {}, null].map(leadOf), ['lyco', '', '', '']);
+  // 0013 allows the same values in the database.
+  const sql13 = readFileSync(new URL('0013_lead.sql', migrationsDir), 'utf8');
+  assert.match(sql13, /source in \('', 'lyco', 'assetstack'\)/);
 });
 
 await check('automations: generateDueInvoicesLocal catches up every period, numbered in order', () => {
@@ -2807,15 +2827,30 @@ await check('automations: a plan more than two years behind (a mistyped year) is
   assert.ok(st.clients[0].invoices.every((i) => i.planId === 'two'));
 });
 
-await check('import: deal stages map to the new columns (won, signed, quote or contract → Demos, contacted → Contacted, uncontacted → Opportunities)', async () => {
+await check('import: deal stages map to the columns (proposal, quote, tender or contract → Proposal sent; won or signed → the last; demo or trial → Demos; contacted → Contacted; uncontacted → Opportunities)', async () => {
   const { normalise } = await import('../src/lib/importers.js');
   const stage = (v) => normalise('deals', ['Example Water', v], { name: 0, stage: 1 }, { users: [], me: 'u-me' }).stage;
   assert.deepEqual(['Opportunities', 'contacted', 'Emailed', 'Reached out', 'First meetings', 'Discovery call', 'Demo booked', 'Proposal',
     'Quote sent', 'Contract out', 'Won', 'Closed won', 'Signed', 'Client', 'Lost', "Won't proceed", 'Not signed', 'Uncontacted',
-    'Un-contacted', 'Not yet contacted', '', 'Prospect'].map(stage),
-  ['Opportunities', 'Contacted', 'Contacted', 'Contacted', 'First meetings', 'First meetings', 'Demos', 'Demos',
-    'Demos', 'Demos', 'Demos', 'Demos', 'Demos', 'Demos', 'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities',
-    'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities']);
+    'Un-contacted', 'Not yet contacted', '', 'Prospect', 'Proposal Sent', 'Tender submitted', 'Pilot', 'Trial', 'Client demo', 'Onboarding call'].map(stage),
+  ['Opportunities', 'Contacted', 'Contacted', 'Contacted', 'First meetings', 'First meetings', 'Demos', 'Proposal sent',
+    'Proposal sent', 'Proposal sent', 'Proposal sent', 'Proposal sent', 'Proposal sent', 'Proposal sent', 'Opportunities', 'Opportunities',
+    'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities', 'Opportunities', 'Proposal sent', 'Proposal sent',
+    'Demos', 'Demos', 'Demos', 'First meetings']);
+});
+
+await check('import: a Lead column fills deals and clients (LYCO, co-pitched, partner → lyco; AssetStack, direct → assetstack)', async () => {
+  const { autoMap, normalise } = await import('../src/lib/importers.js');
+  const values = ['LYCO', 'lyco', 'Co-pitched', 'co pitched', 'Partner', 'AssetStack', 'Asset Stack', 'assetstack', 'Direct', '', 'Other',
+    'Not LYCO', 'Non-partner'];
+  const want = ['lyco', 'lyco', 'lyco', 'lyco', 'lyco', 'assetstack', 'assetstack', 'assetstack', 'assetstack', '', '', '', ''];
+  ['deals', 'clients'].forEach((kind) => {
+    const map = autoMap(['Name', 'Lead'], kind);
+    assert.equal(map.source, 1, `${kind}: a Lead header maps`);
+    assert.equal(autoMap(['Name', 'Lead source'], kind).source, 1);
+    assert.deepEqual(values.map((v) => normalise(kind, ['Example Org', v], map, { users: [], me: 'u-me' }).source), want, kind);
+    assert.equal(normalise(kind, ['Example Org'], { name: 0 }, { users: [], me: 'u-me' }).source, '', `${kind}: no Lead column is none`);
+  });
 });
 
 await check('import: contact statuses as written, Meeting booked included (negated wording is not a booking)', async () => {
@@ -3601,8 +3636,11 @@ if (createSeed && migrate) {
     const { DEAL_STAGES } = await import('../src/data/boards.js');
     const s = createSeed();
     assert.ok(s.deals.every((d) => DEAL_STAGES.includes(d.stage)), JSON.stringify(s.deals.map((d) => d.stage)));
-    assert.deepEqual(DEAL_STAGES.map((st) => s.deals.filter((d) => d.stage === st && !d.clientId).length).map((n) => n > 0), [true, true, true, true],
+    assert.deepEqual(DEAL_STAGES.map((st) => s.deals.filter((d) => d.stage === st && !d.clientId).length).map((n) => n > 0), [true, true, true, true, true],
       'something in every column');
+    // Both Leads and none on the board; the client Westbay became carries its deal's (§21).
+    assert.deepEqual(['lyco', 'assetstack', ''].map((src) => s.deals.some((d) => d.source === src && !d.clientId)), [true, true, true]);
+    assert.ok(s.deals.concat(s.clients).every((x) => ['', 'lyco', 'assetstack'].includes(x.source)));
     const westbay = s.deals.find((d) => d.name === 'Westbay Council');
     assert.ok(westbay.clientId && s.clients.some((c) => c.id === westbay.clientId), 'made a client: off the board');
     assert.equal(s.deals.filter((d) => d.clientId).length, 1);

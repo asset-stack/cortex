@@ -50,6 +50,12 @@ Open the deal (**Pipeline**, click its name) or the client (**Clients**) and, on
    Dashboard like any other task.
 3. **Add link** for anything else worth keeping: a demo, deck, proposal or recording.
 
+## Moving a deal along
+Pipeline's columns are **Opportunities → Contacted → First meetings → Demos → Proposal sent**. Move a deal when it
+happens (drag it, or use its stage list): Proposal sent means the proposal is with them. **Make client** is on Proposal
+sent, once they sign. Set each deal's **Lead** when you add it: **LYCO** (co-pitched) or **AssetStack** (direct). Its icon
+and coloured edge show on the card, and the All · LYCO · AssetStack filter on Pipeline and Clients shows one side's work.
+
 When a deal is made a client, its profile comes with it. Adding a meeting, note or link needs **Edit** on Pipeline (a
 deal) or Clients (a client). A deal's next steps are tasks on the Outreach boards (Sales Tasks), so seeing and adding
 them needs Outreach access; a client's are on the Clients boards. Ask an admin if you only have View.

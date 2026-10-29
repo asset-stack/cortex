@@ -53,6 +53,11 @@ setup steps are in `DEPLOY.md`.
   counts in `workload()`, never waits on them, never lists the owner. A task's **Department** is `departmentOf()` (a
   module key; '' = its board's). Both are `team` columns: render a board's columns from `schemaOf(board)`, never
   `BOARD_SCHEMAS[module]` (personal pages don't have them), and save values through `boardValues()`.
+- **Pipeline (0008, §21)**: stages are `DEAL_STAGES` (Opportunities → Contacted → First meetings → Demos → Proposal sent);
+  Make client is on the last. A deal's and a client's **Lead** is `source` (0013: `'' | 'lyco' | 'assetstack'`, LYCO
+  co-pitched or AssetStack direct; `LEADS` / `leadOf()` in `src/data/boards.js`, the marks in `src/components/LeadIcon.jsx`),
+  and Make client carries it. Real deals and clients never go in this repo: the live pipeline is loaded with SQL run in
+  the SQL editor.
 - **CRM profile (0012)**: a deal's or client's notes, meetings and links are `crm_entries` (`state.crmEntries`; rules in
   `src/lib/crm.js` ⇄ 0012's policies and triggers). An entry on a client follows Clients access, one on a deal that isn't
   a client yet Pipeline's; its author or an admin changes it. Make client gives a deal's entries its client in the

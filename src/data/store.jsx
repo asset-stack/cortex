@@ -5,7 +5,7 @@
 // can't do it; RLS is the real enforcement.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createSeed, demoMeetings, migrate } from './seed';
-import { BOARD_SCHEMAS, DEAL_STAGES, cleanDealPatch, hasDates, withPeople } from './boards';
+import { BOARD_SCHEMAS, DEAL_STAGES, cleanDealPatch, hasDates, isLead, leadOf, withPeople } from './boards';
 import { LIVE, supabase } from '@/data/backend/client';
 import { TABLES, assemble, diff, flatten, normalizeRow, stable } from '@/data/backend/schema';
 import { createSync } from '@/data/backend/sync';
@@ -167,6 +167,7 @@ const newClient = (d, r) => ({
   group: 'Onboarding', status: 'Onboarding', priority: 'P2', next: '', sector: '', contact: d.me, team: [d.me],
   lastContact: '', demo: '', demoUrl: '', platformUrl: '', avatar: '#3b82f6', abn: '', billingAddress: '',
   ...r,
+  source: leadOf(r), // the Lead (0013): '' | 'lyco' | 'assetstack'
   id: uid(), notes: fresh(r.notes), tasks: fresh(r.tasks), access: fresh(r.access), plans: fresh(r.plans), usage: fresh(r.usage),
   contacts: (r.contacts || []).map((x) => cleanPerson(x)), contracts: fresh(r.contracts),
   invoices: (r.invoices || []).map((inv) => ({ planId: '', sentAt: '', paidOn: '', sentTo: '', ...inv, id: uid(), lines: fresh(inv.lines) })),
@@ -178,7 +179,7 @@ const newContact = (d, r) => ({
 
 const newDeal = (r) => {
   const { clientId: _clientId, ...rest } = r;
-  return { sector: '', value: 0, priority: 'P2', stage: 'Opportunities', contact: '', next: '', contactId: '', ...rest, id: uid() };
+  return { sector: '', value: 0, priority: 'P2', stage: 'Opportunities', contact: '', next: '', contactId: '', ...rest, source: leadOf(rest), id: uid() };
 };
 
 
@@ -802,7 +803,7 @@ function createActions(mutate, mode) {
       x.stage = stage;
       return true;
     }),
-    // Organisation, sector, value, priority, owner, next step and stage (cleanDealPatch). Refused when nothing valid
+    // Organisation, sector, value, priority, owner, next step, stage and Lead (cleanDealPatch). Refused when nothing valid
     // changes.
     updateDeal: (dealId, patch = {}) => editing('pipeline', (d) => {
       const x = d.deals.find((v) => v.id === dealId);
@@ -825,6 +826,7 @@ function createActions(mutate, mode) {
       const existing = d.clients.find((c) => normName(c.name) === normName(deal.name));
       if (existing) {
         deal.clientId = existing.id;
+        if (!leadOf(existing)) existing.source = leadOf(deal); // the deal's Lead, unless the client has one
         if (!mode.live) carryDealEntriesLocal(d, deal.id, existing.id); // live: 0012's crm_carry_to_client trigger
         return existing.id;
       }
@@ -833,7 +835,7 @@ function createActions(mutate, mode) {
       // The outreach contact the deal came from becomes the client's first, billing contact.
       const from = d.contacts.find((c) => c.id === deal.contactId);
       const client = newClient(d, {
-        name: deal.name, priority: deal.priority === 'P3' ? 'P2' : deal.priority, next: 'Schedule onboarding kick-off',
+        name: deal.name, priority: deal.priority === 'P3' ? 'P2' : deal.priority, next: 'Schedule onboarding kick-off', source: leadOf(deal),
         sector: deal.sector, contact: owner, team: Array.from(new Set([owner, d.me])), lastContact: localYmd(),
         contacts: from && (from.name || from.email) ? [{ name: from.name, email: from.email, billing: true }] : [],
       });
@@ -907,7 +909,9 @@ function createActions(mutate, mode) {
     updateClient: (clientId, patch) => editing('clients', (d) => {
       const c = findClient(d, clientId);
       if (!c) return false;
-      Object.assign(c, patch, { id: c.id });
+      const { source, ...rest } = patch;
+      Object.assign(c, rest, { id: c.id });
+      if (source === '' || isLead(source)) c.source = source; // the Lead: a known one or none
       return true;
     }),
     addClientNote: (clientId, text) => editing('clients', (d) => {

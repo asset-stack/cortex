@@ -215,8 +215,8 @@ function crmDemo(deals, clients) {
   ];
 }
 
-const deal = (name, sector, value, priority, stage, contact, next, contactId = '') => ({
-  id: id('d'), name, sector, value, priority, stage, contact, next, contactId,
+const deal = (name, sector, value, priority, stage, contact, next, contactId = '', source = '') => ({
+  id: id('d'), name, sector, value, priority, stage, contact, next, contactId, source,
 });
 
 const invoice = (number, issued, due, status, desc, rate, extra = {}) => ({
@@ -243,7 +243,7 @@ function clients(today) {
   const harbourPlan = plan('Pilot licence (quarterly)', 7250, 'quarterly', addMonths(thisMonth, 2));
   return [
     {
-      id: id('c'), name: 'Westbay Council', group: 'Onboarding', status: 'Onboarding', priority: 'P1',
+      id: id('c'), name: 'Westbay Council', group: 'Onboarding', status: 'Onboarding', priority: 'P1', source: 'lyco',
       next: 'David to finalise onboarding meeting', sector: 'Government', contact: 'josh', team: ['josh', 'david'],
       lastContact: '2026-05-19', demo: 'Live site with client', demoUrl: 'https://demo.example.com',
       platformUrl: 'https://westbay.example.com', avatar: '#3b82f6', abn: '', billingAddress: '',
@@ -277,7 +277,7 @@ function clients(today) {
       ],
     },
     {
-      id: id('c'), name: 'Northside Diocese', group: 'Active', status: 'Proposal sent', priority: 'P1',
+      id: id('c'), name: 'Northside Diocese', group: 'Active', status: 'Proposal sent', priority: 'P1', source: 'assetstack',
       next: 'Josh to send scope', sector: 'Healthcare', contact: 'josh', team: ['hello', 'david', 'josh'],
       lastContact: '2026-05-17', demo: 'Demo with client', demoUrl: '', platformUrl: '', avatar: '#6366f1', abn: '', billingAddress: '',
       contacts: [clientPerson('Jordan Price', 'Facilities lead', 'jordan.price@example.com', true)], contracts: [],
@@ -287,7 +287,7 @@ function clients(today) {
       usage: [],
     },
     {
-      id: id('c'), name: 'Coastal Rail', group: 'Active', status: 'Passive', priority: 'P2',
+      id: id('c'), name: 'Coastal Rail', group: 'Active', status: 'Passive', priority: 'P2', source: 'lyco',
       next: 'Re-send demo link (blocked on their network)', sector: 'Transport', contact: 'hello', team: ['hello'],
       lastContact: '2026-08-11', demo: 'Re-send demo link', demoUrl: '', platformUrl: '', avatar: '#f59e0b', abn: '', billingAddress: '',
       contacts: [clientPerson('Casey Ng', 'Senior engineer', 'casey.ng@example.com', true)], contracts: [],
@@ -295,7 +295,7 @@ function clients(today) {
       tasks: [], invoices: [], access: [], plans: [], usage: [],
     },
     {
-      id: id('c'), name: 'Harbour Construction', group: 'Active', status: 'Active', priority: 'P2',
+      id: id('c'), name: 'Harbour Construction', group: 'Active', status: 'Active', priority: 'P2', source: '',
       next: 'Pilot running on two sites', sector: 'Construction', contact: 'david', team: ['david', 'hello'],
       lastContact: '2026-10-02', demo: 'Pilot', demoUrl: '', platformUrl: 'https://harbour.example.com', avatar: '#ef4444', abn: '', billingAddress: '',
       contacts: [clientPerson('Jamie Park', 'Project director', 'jamie.park@example.com', true)],
@@ -595,13 +595,13 @@ export function createSeed() {
   // Deals that came from an outreach contact keep the link, so a later reply or booking moves them on.
   const deals = [
     deal('City of Lakeside', 'Government', 70000, 'P2', 'Opportunities', 'josh', 'Intro call'),
-    deal('Riverbend Water', 'Utilities', 220000, 'P1', 'Opportunities', 'david', 'Send digital twin brief', contactId('Riley Shaw')),
-    deal('Coastal Rail', 'Transport', 160000, 'P2', 'Contacted', 'hello', 'PDF walkthrough', contactId('Casey Ng')),
-    deal('Shire of Southcliff', 'Government', 55000, 'P2', 'First meetings', 'josh', 'Thursday 10am walkthrough', contactId('Morgan Hale')),
+    deal('Riverbend Water', 'Utilities', 220000, 'P1', 'Opportunities', 'david', 'Send digital twin brief', contactId('Riley Shaw'), 'assetstack'),
+    deal('Coastal Rail', 'Transport', 160000, 'P2', 'Contacted', 'hello', 'PDF walkthrough', contactId('Casey Ng'), 'lyco'),
+    deal('Shire of Southcliff', 'Government', 55000, 'P2', 'First meetings', 'josh', 'Thursday 10am walkthrough', contactId('Morgan Hale'), 'assetstack'),
     deal('Eastgate University Facilities', 'Education', 90000, 'P3', 'First meetings', 'david', 'Confirm campus list'),
-    deal('Northside Diocese', 'Healthcare', 110000, 'P1', 'Demos', 'josh', 'Scope document', contactId('Jordan Price')),
-    deal('Harbour Construction', 'Construction', 190000, 'P1', 'Demos', 'david', 'Pilot review'),
-    deal('Westbay Council', 'Government', 130000, 'P1', 'Demos', 'david', 'Onboarding', contactId('Alex Taylor')),
+    deal('Northside Diocese', 'Healthcare', 110000, 'P1', 'Demos', 'josh', 'Scope document', contactId('Jordan Price'), 'assetstack'),
+    deal('Harbour Construction', 'Construction', 190000, 'P1', 'Proposal sent', 'david', 'Pilot review', '', 'lyco'),
+    deal('Westbay Council', 'Government', 130000, 'P1', 'Demos', 'david', 'Onboarding', contactId('Alex Taylor'), 'lyco'),
   ];
   // Westbay was made a client: its deal is linked, so it has left the board and counts in Made clients.
   deals.forEach((dl) => {
@@ -771,10 +771,11 @@ export function migrate(data) {
   });
 
   (data.contacts || []).forEach((c) => { c.owner ??= ''; });
-  (data.deals || []).forEach((dl) => { dl.contactId ??= ''; });
+  (data.deals || []).forEach((dl) => { dl.contactId ??= ''; dl.source ??= ''; }); // source: the Lead (0013)
   // Won is no longer a stage (0008): a deal there moves to Demos (one made a client has left the board anyway).
   (data.deals || []).forEach((dl) => { if (dl.stage === 'Won') dl.stage = 'Demos'; });
   (data.clients || []).forEach((c) => {
+    c.source ??= ''; // the Lead (0013)
     c.abn ??= '';
     c.billingAddress ??= '';
     c.plans ??= [];
