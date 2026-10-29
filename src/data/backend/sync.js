@@ -15,6 +15,7 @@ const pkOf = (table) => (table.onConflict ? table.onConflict.split(',') : ['id']
 const rowError = (err) => !err.offline && /^(22|23)|^42501$/.test(err.code || '');
 // The tables each one nests under (parent chain): deleting a row there cascades into this table.
 const LATER = Object.fromEntries(TABLES.filter((t) => t.later).map((t) => [t.name, t.later]));
+const READ_ONLY = new Set(TABLES.filter((t) => t.readOnly).map((t) => t.name)); // written only by the database
 const ANCESTORS = Object.fromEntries(TABLES.map((t) => {
   const out = [];
   for (let p = t.parent?.[0]; p; p = TABLES.find((x) => x.name === p)?.parent?.[0]) out.push(p);
@@ -73,7 +74,8 @@ export function createSync({ supabase, onStatus = () => {}, onRealtime = () => {
   };
 
   function queue(ops) {
-    ops = ops?.filter((op) => !missing.has(op.table)).map(withoutLater); // a table that isn't there takes no writes
+    // A table that isn't there, or that only the database writes, takes no writes.
+    ops = ops?.filter((op) => !missing.has(op.table) && !READ_ONLY.has(op.table)).map(withoutLater);
     if (!ops?.length || disposed) return;
     ops.forEach((op) => {
       const id = opId(op.table, op.key);

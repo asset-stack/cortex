@@ -119,6 +119,8 @@ crmContacts:    [{ id, accountId, name, title, email, phone, linkedin, timezone,
                    status /* 'active'|'left'|'do_not_contact' */, owner, createdAt }],
 //   deal: { ..., accountId, contactIds: [crm contact id], currency, closeOn, probability /* null = the stage's */,
 //           waitingOn /* ''|'us'|'them' */, lostReason, stageAt /* iso: when it reached its stage */ }
+// 0015 (§22): each deal's stage history, oldest first. Written only by the database (read only in the app).
+dealHistory:    [{ id, dealId, from /* '' when added */, to /* a stage, or 'Won' */, at, by }],
 ```
 Empty strings, never `null`, for absent text/ids/dates in state (as phase 1). Money and counts are numbers.
 Lists that live views read newest-first are stored with the same position convention as phase 1.
@@ -1240,7 +1242,29 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   `stage_at`; entries on accounts and contacts; the outreach automation); `scripts/test-sync.mjs` (the mapping and the
   held-back columns, stages, probability and days, `cleanDealPatch()`, accounts and contacts, lifecycle, the account
   timeline, the backfill, imports, money per currency, the seed).
-- **Later, not built**: the **Leads** page (lead lists from Apollo and CSV, de-duplication by domain and email, the
-  suppress list, handing a list to the outreach agent, a segment scoreboard), email history on the timeline (a summary of
-  each sales email), the daily *waiting on you* brief, stage exit checklists, merging the Outreach contact list into
-  Contacts, and client people (`client_contacts`) as account contacts.
+- **Stage history (0015, `0015_deal_history.sql`)**: `deal_stage_history` (a row when a deal is added, from ''; each
+  stage move; Make client, to 'Won'; with when and who), written only by the `log_deal_stage` trigger (security definer)
+  and read with Pipeline view; synced read only (`readOnly` in `TABLES`: the sync engine never sends it a write;
+  `logStageLocal()` in demo mode). Existing deals get one starting row. A deal's and an account's timeline show its stage
+  moves (read only); Reports read it.
+- **Reports** (Pipeline → Reports, `src/lib/reports.js`): the **forecast** by expected close month (overdue, this month
+  and five more, later, no date; value and weighted per currency); **Stages** (open deals, value, average days in each
+  stage from the history, the share that went on past it); **Won and lost** in 30 days, 90 days or 12 months (by when
+  they closed), the win rate and the lost reasons; **Deals by** sector or country. Bars show counts (one colour, the
+  number next to it); values are never converted.
+- **Needs you** (`needsYou()`): a person's open deals past their expected close, waiting on us, stalled or with no next
+  step, most pressing first, and their set-aside accounts due a revisit: the Dashboard's **My deals** card (for whoever's
+  day is shown; each opens on Pipeline through `#/pipeline?deal=<id>` / `?account=<id>`) and Opportunities' **Needs me**
+  filter.
+- **Duplicates** (`nameKey()`, `similarAccounts()`, `similarPeople()`): the same name (case, punctuation, a leading "the"
+  and company suffixes aside) or domain for an account; the same email, or name at the same account, for a contact. The
+  forms warn (they don't block); imports skip them.
+- **Import** (Settings → Import): **Accounts** (name, type, lifecycle, sector, country, state, time zone, website,
+  size, owner, guardrails, notes as a timeline note) and **CRM contacts** (name, or first and last, account, title,
+  email, phone, LinkedIn, role, time zone, owner; each at its account, added when new) from HubSpot, Apollo or LinkedIn
+  exports; deals also read a currency, a close date and an Account column (a secondary field: a lone Company column is
+  still the deal's name). Money in any of the currencies parses.
+- An account linked to a client shows the client's own people (read only, from Clients).
+- **Later, not built**: the **Leads** page (lead lists from Apollo, the suppress list, handing a list to the outreach
+  agent, a segment scoreboard), email history on the timeline (a summary of each sales email), stage exit checklists,
+  merging the Outreach contact list into Contacts, saved views, and bulk edits.

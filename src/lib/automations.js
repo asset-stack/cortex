@@ -268,7 +268,9 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day, m
       ...dealDefaults(), accountId: account.id, contactIds: person ? [person.id] : [], waitingOn: 'us',
     };
     state.deals.push(deal);
+    logStageLocal(state, deal, '', deal.stage, { by: me, uid: newId });
   } else if (booked && EARLY_STAGES.includes(deal.stage)) {
+    logStageLocal(state, deal, deal.stage, 'Meeting booked', { by: me, uid: newId });
     deal.stage = 'Meeting booked';
     deal.stageAt = new Date().toISOString();
   }
@@ -283,6 +285,28 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day, m
     state.todos.push(todo);
   }
   return { deal, todo };
+}
+
+// ── Deal stage history (0015) ───────────────────────────────────────────────────────────────────────────────────
+
+/** Demo mode's log_deal_stage trigger: a row when a deal is added (from ''), moves stage, or is made a client (to 'Won').
+ *  → the row, or null when nothing moved. */
+export function logStageLocal(state, deal, from, to, { by = state.me || '', at = new Date().toISOString(), uid: newId = uid } = {}) {
+  if (!deal || from === to) return null;
+  const h = { id: newId(), dealId: deal.id, from: String(from ?? '').slice(0, 60), to: String(to ?? '').slice(0, 60), at, by };
+  (state.dealHistory ||= []).push(h);
+  return h;
+}
+
+/** 0015's one-off step: a starting row for each deal with none (its stage, or Won once made a client, when it reached it). */
+export function historyBackfillLocal(state, { uid: newId = uid } = {}) {
+  state.dealHistory ||= [];
+  const has = new Set(state.dealHistory.map((h) => h.dealId));
+  (state.deals || []).forEach((d) => {
+    if (has.has(d.id)) return;
+    state.dealHistory.push({ id: newId(), dealId: d.id, from: '', to: d.clientId ? 'Won' : String(d.stage || '').slice(0, 60), at: d.stageAt || new Date().toISOString(), by: '' });
+  });
+  return state;
 }
 
 const OLD_STAGES = { Opportunities: 'Interested', Contacted: 'Interested', 'First meetings': 'Meeting booked', Demos: 'Demo held', Won: 'Demo held' };

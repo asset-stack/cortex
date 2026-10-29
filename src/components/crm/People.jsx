@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { ExternalLink, Mail, Pencil, Phone } from 'lucide-react';
 import { useStore } from '@/data/store';
-import { CONTACT_ROLES, PERSON_STATUSES, accountById, dealsOfPerson, personText } from '@/lib/accounts';
+import { CONTACT_ROLES, PERSON_STATUSES, accountById, dealsOfPerson, personText, similarPeople } from '@/lib/accounts';
 import { dealStage } from '@/data/boards';
 import { useAccess } from '@/lib/access';
 import { ConfirmModal, Drawer, Modal, PersonPicker, SearchField } from '@/components/ui';
@@ -158,6 +158,7 @@ export function PersonForm({ person, accountId = '', onClose, onSaved }) {
   const [confirm, setConfirm] = useState(false);
   const set = (k) => (e) => { setErr(''); setF((x) => ({ ...x, [k]: e.target.value })); };
   const accounts = [...(state.accounts || [])].sort((x, y) => x.name.localeCompare(y.name));
+  const dupes = similarPeople(state, f, person?.id); // a warning only: the same email, or name at the same account
   const submit = (e) => {
     e.preventDefault();
     if (!f.accountId) { setErr('Pick the account'); return; }
@@ -198,6 +199,11 @@ export function PersonForm({ person, accountId = '', onClose, onSaved }) {
               <PersonPicker value={f.owner} onChange={(v) => setF((x) => ({ ...x, owner: v }))} size={26} />
             </div>
           </div>
+          {dupes.length > 0 && (
+            <div role="status" className="-mt-1 text-[12.5px] text-amber-200">
+              Already in Cortex: {dupes.map((x) => `${x.name || x.email}${accountById(state, x.accountId) ? ` (${accountById(state, x.accountId).name})` : ''}`).join(', ')}
+            </div>
+          )}
           <input className="field" placeholder="LinkedIn" aria-label="LinkedIn" inputMode="url" value={f.linkedin} onChange={set('linkedin')} />
           {err && <div role="alert" className="text-[12.5px] text-rose-200">{err}</div>}
           <button type="submit" className="btn-primary rounded-full h-11 font-semibold">{editing ? 'Save' : 'Add contact'}</button>

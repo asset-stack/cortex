@@ -1,9 +1,10 @@
 // CSV import mapping (docs/BACKEND.md §4): which columns feed which fields, and one CSV row → one record in
 // state shape for actions.importRecords(), which adds ids and skips names that already exist. Pure functions.
 import {
-  ALL_DEAL_STAGES, BOARD_SCHEMAS, CLIENT_STATUSES, CONTACT_STATUSES, DEAL_STAGES, LOST, OLD_DEAL_STAGES, PRIORITY, STATUS,
+  ALL_DEAL_STAGES, BOARD_SCHEMAS, CLIENT_STATUSES, CONTACT_STATUSES, CURRENCIES, DEAL_STAGES, LOST, OLD_DEAL_STAGES, PRIORITY, STATUS,
   dealStage as boardStage,
 } from '@/data/boards';
+import { LIFECYCLES } from '@/lib/accounts';
 import { localYmd } from '@/lib/format';
 
 // Field types drive parsing and the preview: text | user (one staff member) | users | date (YYYY-MM-DD) |
@@ -56,6 +57,36 @@ export const FIELDS = {
     field('stage', 'Stage', 'text', ['stage', 'status', 'deal stage', 'pipeline stage']),
     field('contact', 'Owner', 'user', ['owner', 'contact', 'deal owner', 'assigned to', 'assignee', 'account manager']),
     field('next', 'Next step', 'text', ['next step', 'next steps', 'next action', 'next']),
+    // 0014: the deal's currency, expected close and account (else the account named like the deal).
+    field('currency', 'Currency', 'text', ['currency', 'deal currency', 'currency code']),
+    field('closeOn', 'Close date', 'date', ['close date', 'expected close', 'expected close date', 'closing date', 'close']),
+    field('account', 'Account', 'text', ['account', 'account name', 'company', 'company name', 'organisation', 'organization'], { secondary: true }),
+  ],
+  // The CRM (0014): organisations, then the people at them (by their account's name).
+  accounts: [
+    field('name', 'Name', 'text', ['name', 'account', 'account name', 'company', 'company name', 'organisation', 'organization', 'organisation name'], NAME),
+    field('kind', 'Type', 'text', ['type', 'account type', 'company type', 'kind', 'relationship']),
+    field('lifecycle', 'Lifecycle', 'text', ['lifecycle', 'lifecycle stage', 'lead status', 'stage', 'status']),
+    field('sector', 'Sector', 'text', ['sector', 'industry', 'segment', 'vertical']),
+    field('country', 'Country', 'text', ['country', 'company country']),
+    field('region', 'State / region', 'text', ['state', 'region', 'state region', 'province', 'county', 'company state']),
+    field('timezone', 'Time zone', 'text', ['time zone', 'timezone']),
+    field('website', 'Website', 'text', ['website', 'website url', 'company website', 'domain', 'company domain', 'web']),
+    field('size', 'Size', 'text', ['size', 'employees', 'number of employees', 'company size', 'headcount']),
+    field('contact', 'Owner', 'user', ['owner', 'account owner', 'company owner', 'assigned to', 'account manager']),
+    field('guardrails', 'Guardrails', 'text', ['guardrails', 'do not say', 'dont say']),
+    field('notes', 'Notes', 'note', NOTES),
+  ],
+  people: [
+    field('name', 'Name', 'text', ['name', 'full name', 'contact name', 'contact', 'person'], NAME),
+    field('account', 'Account', 'text', ['account', 'company', 'company name', 'organisation', 'organization', 'account name', 'employer']),
+    field('title', 'Title', 'text', ['title', 'job title', 'position']),
+    field('email', 'Email', 'text', ['email', 'email address', 'work email']),
+    field('phone', 'Phone', 'text', ['phone', 'phone number', 'mobile', 'mobile phone', 'direct phone', 'work phone', 'telephone']),
+    field('linkedin', 'LinkedIn', 'text', ['linkedin', 'linkedin url', 'person linkedin url', 'linkedin profile']),
+    field('role', 'Role in the deal', 'text', ['role', 'buying role', 'persona']),
+    field('timezone', 'Time zone', 'text', ['time zone', 'timezone']),
+    field('contact', 'Owner', 'user', ['owner', 'contact owner', 'assigned to']),
   ],
   tasks: [
     field('name', 'Name', 'text', ['name', 'task', 'title', 'task name', 'item'], NAME),
@@ -132,14 +163,17 @@ export function autoMap(headers, kind, board) {
     if (s > 0) pairs.push({ key: f.key, fi, hi, s });
   }));
   pairs.sort((a, b) => b.s - a.s || a.fi - b.fi || a.hi - b.hi);
+  // A `secondary` field (a deal's Account) takes a column only once the others have picked theirs, so a lone Company
+  // column is still the deal's name.
+  const secondary = new Set(fields.filter((f) => f.secondary).map((f) => f.key));
   const pick = (preset) => {
     const mapping = { ...Object.fromEntries(fields.map((f) => [f.key, -1])), ...preset };
     const used = new Set(Object.values(preset));
-    pairs.forEach(({ key, hi }) => {
-      if (mapping[key] !== -1 || used.has(hi)) return;
+    [false, true].forEach((late) => pairs.forEach(({ key, hi }) => {
+      if (secondary.has(key) !== late || mapping[key] !== -1 || used.has(hi)) return;
       mapping[key] = hi;
       used.add(hi);
-    });
+    }));
     return mapping;
   };
   const mapping = pick({});
@@ -237,8 +271,9 @@ export function toIso(v) {
 }
 
 // '$250,000' | 'A$250,000' | 'AU$ 5,000' | '250k' | '1.2m' | 'AUD 85 000' → number; anything else → 0.
+// '$250,000', 'AUD 250k', '£40,000', 'NZ$1.2m', 'USD 5000' → a number (any currency's symbol or code dropped); else 0.
 export function parseMoney(v) {
-  const t = String(v ?? '').toLowerCase().replace(/a?u?d?\$|aud|,|\s/g, '');
+  const t = String(v ?? '').toLowerCase().replace(/\b(aud|nzd|gbp|usd|eur|cad|aed|sar)\b|[a-z]{0,2}\$|[£€]|,|\s/g, '');
   const m = t.match(/^(\d+(?:\.\d+)?)([km])?$/);
   return m ? Math.round(Number(m[1]) * (m[2] === 'm' ? 1e6 : m[2] === 'k' ? 1e3 : 1)) : 0;
 }
@@ -285,6 +320,41 @@ function dealStage(v) {
     || (/meeting|call|discovery/.test(s) && BOOKED)
     || (/client|onboard/.test(s) && CONTRACT)
     || INTERESTED;
+}
+
+// An account's type from an export's wording ("Partner", "Reseller", "Customer", "Vendor"…); anything else a prospect.
+function accountKind(v) {
+  const s = norm(v);
+  if (/partner|referr|resell|channel/.test(s)) return 'partner';
+  if (/customer|client/.test(s)) return 'customer';
+  if (/supplier|vendor/.test(s)) return 'supplier';
+  return 'prospect';
+}
+// A lifecycle from its key, its label, or the usual CRM wording (HubSpot's lifecycle stages and lead statuses).
+function lifecycleOf(v) {
+  const s = norm(v);
+  const named = Object.entries(LIFECYCLES).find(([k, l]) => s === k || s === norm(l) || s === k.replace('_', ' '));
+  if (named) return named[0];
+  return (/suppress|unsubscrib|do not contact|bounced/.test(s) && 'suppressed')
+    || (/nurtur/.test(s) && 'nurture') || (/rfp|tender/.test(s) && 'rfp')
+    || (/not now|not interested|declin|later|bad timing/.test(s) && 'not_now')
+    || (/customer|client|\bwon\b/.test(s) && 'customer') || (/opportun|\bsql\b/.test(s) && 'opportunity')
+    || (/meeting|booked/.test(s) && 'meeting') || (/engag|replied|interested|\bmql\b|connected/.test(s) && 'engaged')
+    || (/contacted|emailed|attempt|in progress|open/.test(s) && 'contacted') || 'new';
+}
+// A buying role from an export's wording; '' when blank, Other when it's something else.
+function roleOf(v) {
+  const s = norm(v);
+  if (!s) return '';
+  return (/decision|economic|budget|sign/.test(s) && 'decision_maker') || (/champion|sponsor/.test(s) && 'champion')
+    || (/influenc|technical|evaluat/.test(s) && 'influencer') || (/gatekeep|blocker/.test(s) && 'gatekeeper')
+    || (/assistant|\bpa\b|\bea\b|secretary/.test(s) && 'assistant') || (/\buser/.test(s) && 'user') || 'other';
+}
+// An IANA time zone as written ("Australia/Brisbane"), else ''.
+function zoneOf(v) {
+  const s = String(v ?? '').trim();
+  if (!/^[A-Za-z]+\/[A-Za-z_+\-/]+$/.test(s)) return '';
+  try { new Intl.DateTimeFormat('en-AU', { timeZone: s }); return s; } catch { return ''; }
 }
 
 // Outreach stages are free text; the usual ones are tidied, others kept as written.
@@ -391,10 +461,24 @@ export function normalise(kind, row, mapping, { users = [], me = '', board, now 
         name, org: get('org'), email: emailOf(get('email')), stage: contactStage(get('stage')), status: contactStatus(get('status')),
         last: toIso(get('last')) || created || now.toISOString(),
       };
-    case 'deals':
+    case 'deals': {
+      const currency = get('currency').toUpperCase();
       return {
         name, sector: get('sector'), value: parseMoney(get('value')), priority: priority(get('priority'), true),
         stage: dealStage(get('stage')), contact: owner('contact') || me, next: get('next'),
+        currency: CURRENCIES.includes(currency) ? currency : 'AUD', closeOn: toYmd(get('closeOn')), account: get('account').replace(/\s+/g, ' '),
+      };
+    }
+    case 'accounts':
+      return {
+        name, kind: accountKind(get('kind')), lifecycle: lifecycleOf(get('lifecycle')), sector: get('sector'), country: get('country'),
+        region: get('region'), timezone: zoneOf(get('timezone')), website: get('website'), size: get('size'), contact: owner('contact') || me,
+        guardrails: get('guardrails'), notes: get('notes'),
+      };
+    case 'people':
+      return {
+        name, account: get('account').replace(/\s+/g, ' '), title: get('title'), email: emailOf(get('email')), phone: get('phone'),
+        linkedin: get('linkedin'), role: roleOf(get('role')), timezone: zoneOf(get('timezone')), contact: owner('contact') || me,
       };
     case 'tasks': {
       const status = taskStatus(get('status'));

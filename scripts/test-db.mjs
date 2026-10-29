@@ -38,6 +38,7 @@ const migration11 = await readFile(new URL('supabase/migrations/0011_team_access
 const migration12 = await readFile(new URL('supabase/migrations/0012_crm_profile.sql', root), 'utf8');
 const migration13 = await readFile(new URL('supabase/migrations/0013_task_emails.sql', root), 'utf8');
 const migration14 = await readFile(new URL('supabase/migrations/0014_crm_accounts.sql', root), 'utf8');
+const migration15 = await readFile(new URL('supabase/migrations/0015_deal_history.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -5323,8 +5324,9 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
   };
   const writeErrors = {};
   const mismatched = {};
-  // Profiles / org_settings / outreach_settings are plain updates (checked in 5., 20. and below).
-  for (const t of TABLES.filter((x) => !x.update)) {
+  // Profiles / org_settings / outreach_settings are plain updates (checked in 5., 20. and below); deal_stage_history is
+  // written only by the database (checked in 120.).
+  for (const t of TABLES.filter((x) => !x.update && !x.readOnly)) {
     const sent = [...flat[t.name].values()];
     if (!sent.length) { writeErrors[t.name] = 'fixture has no rows'; continue; }
     const err = await postgrestUpsert(t.name, sent, t);
@@ -6040,6 +6042,67 @@ async function phase14(ctx) {
   return ctx;
 }
 
+// ── 0015: deal stage history ──────────────────────────────────────────────────────────────────────────────────────
+
+async function phase15(ctx) {
+  const { alice, boss, david, hello, carol } = ctx;
+
+  // 119. Runs on top of 0014, whole, again, and statement by statement; ends with its done row; RLS and realtime; every
+  // existing deal gets one starting row (Won for one made a client), and a re-run adds none.
+  await as(null);
+  const run = async () => db.exec(migration15).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const first = await run();
+  const rowsNow = async () => (await one('select count(*)::int as n from deal_stage_history')).n;
+  const afterFirst = await rowsNow();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration15, { continueOnError: true });
+  const afterAgain = await rowsNow();
+  const deals = (await one('select count(*)::int as n from deals')).n;
+  const won = await one(`select h.to_stage, h.from_stage from deal_stage_history h join deals d on d.id = h.deal_id
+    where d.client_id is not null limit 1`);
+  const body = migration15.replace(/--.*$/gm, '').trim();
+  const published = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'deal_stage_history'")).n;
+  check('119. 0015 runs on top of 0014, re-runs whole and statement by statement, never mentions module_level, ends with its done row; one starting row per existing deal (Won once made a client), none added on a re-run',
+    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0015 applied' && Array.isArray(second) && !splitErrors.length
+      && /commit;\s*select 'Cortex 0015 applied' as done;$/i.test(body) && !migration15.includes('module_level') && published === 1
+      && afterFirst === deals && afterAgain === afterFirst && won?.to_stage === 'Won' && won.from_stage === '',
+    { first: Array.isArray(first) ? 'ok' : first, second: Array.isArray(second) ? 'ok' : second, splitErrors, afterFirst, afterAgain, deals, won });
+  if (!Array.isArray(first)) return null;
+
+  // 120. The trigger: a new deal (from ''), each stage move, Make client (Won) — with who; other edits add nothing.
+  await as(boss);
+  const id = (await one("insert into deals (name, stage) values ('Example History', 'Interested') returning id")).id;
+  await db.query("update deals set next_step = 'Call', value = 10 where id = $1", [id]);
+  await db.query("update deals set stage = 'Demo held' where id = $1", [id]);
+  const cl = (await one("insert into clients (name) values ('Example History') returning id")).id;
+  await db.query('update deals set client_id = $2 where id = $1', [id, cl]);
+  const history = (await rows('select from_stage, to_stage, changed_by from deal_stage_history where deal_id = $1 order by changed_at, from_stage', [id]));
+  check('120. the history: added (from nothing), moved, made a client (Won), each by who did it; other edits add nothing',
+    JSON.stringify(history.map((h) => [h.from_stage, h.to_stage])) === JSON.stringify([['', 'Interested'], ['Interested', 'Demo held'], ['Demo held', 'Won']])
+      && history.every((h) => h.changed_by === boss), history);
+
+  // 121. Read only: Pipeline View reads it; nobody signed in writes it; inactive or Pipeline None sees none; it goes with
+  // its deal.
+  await as(alice);
+  const viewReads = (await rows('select id from deal_stage_history where deal_id = $1', [id])).length;
+  const insert = await error("insert into deal_stage_history (deal_id, to_stage) values ($1, 'Lost')", [id]);
+  const update = await error("update deal_stage_history set to_stage = 'Lost' where deal_id = $1", [id]);
+  await as(boss);
+  const adminDelete = await error('delete from deal_stage_history where deal_id = $1', [id]);
+  await as(carol);
+  const inactive = (await rows('select id from deal_stage_history')).length;
+  await as(boss);
+  await db.query('delete from deals where id = $1', [id]);
+  await as(null);
+  const left = (await one('select count(*)::int as n from deal_stage_history where deal_id = $1', [id])).n;
+  check('121. the history is read only (no insert, update or delete, even for admins), read with Pipeline view, none for an inactive profile; it goes with its deal',
+    viewReads === 3 && insert !== null && update !== null && adminDelete !== null && inactive === 0 && left === 0,
+    { viewReads, insert, update, adminDelete, inactive, left });
+  await db.query('delete from clients where id = $1', [cl]);
+  return ctx;
+}
+
 async function runSplit(dbx, sql, { continueOnError = false, skip = () => false } = {}) {
   const errors = [];
   for (const st of splitSql(sql)) {
@@ -6159,7 +6222,8 @@ try {
   const ctx12 = ctx11 && await phase12(ctx11);
   const ctx13 = ctx12 && await phase13(ctx12);
   const ctx14 = ctx13 && await phase14(ctx13);
-  if (ctx14) await syncWriteCheck(ctx14);
+  const ctx15 = ctx14 && await phase15(ctx14);
+  if (ctx15) await syncWriteCheck(ctx15);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);

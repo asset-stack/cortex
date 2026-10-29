@@ -10,6 +10,7 @@ import TodoList from '@/components/work/TodoList';
 import AddTodo from '@/components/work/AddTodo';
 import MyTasks from '@/components/work/MyTasks';
 import NeedsAttention from '@/components/work/NeedsAttention';
+import MyDeals from '@/components/work/MyDeals';
 import Mentions, { mentionsOf } from '@/components/work/Mentions';
 import Tools from '@/components/work/Tools';
 import TimesheetModal from '@/components/timesheet/TimesheetModal';
@@ -122,6 +123,7 @@ export default function Dashboard() {
           {showNotes && <section aria-label={self ? 'My notes' : `${person?.name}’s notes`} className="mt-4"><Board key={notes.id} board={notes} embedded title={self ? 'My notes' : `${person?.name}’s notes`} /></section>}
         </div>
         <div className="flex min-w-0 flex-col gap-6">
+          <MyDeals personId={personId} />
           {access.isAdmin && <NeedsAttention />}
           <Mentions mentions={mentions} person={person} />
           <Tools key={personId} person={person} />

@@ -14,9 +14,9 @@ import { LEVELS, MODULES, ROLES, STAFF_DEFAULTS, canEdit, canEditBoard, canView,
 import { BOARD_MODULES, FIRST_GROUP, FIRST_GROUP_COLOR, GROUP_COLORS, findBoard, sameAudience, sortedItems, withItemPlaced } from '@/lib/boards';
 import {
   PLAN_MONTHS, accountDefaults, addDays, addMonths, clientCreatedLocal, contactPipelineLocal, dealDefaults, ensureTodosLocal,
-  generateDueInvoicesLocal, isPlanDate, isYmd, makeTodo, mondayOf, nextInvoiceNumber, personDefaults, termsOf, toHhmm, uid,
+  generateDueInvoicesLocal, isPlanDate, isYmd, logStageLocal, makeTodo, mondayOf, nextInvoiceNumber, personDefaults, termsOf, toHhmm, uid,
 } from '@/lib/automations';
-import { accountNamed, cleanAccount, cleanPerson as cleanCrmPerson } from '@/lib/accounts';
+import { accountNamed, cleanAccount, cleanPerson as cleanCrmPerson, similarAccounts, similarPeople } from '@/lib/accounts';
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
 import { acceptedValues, boardValues, itemRef, mailsOwner, newTaskValues, nextValues, ownerOf, todoForItem, todoItemId } from '@/lib/work';
 import { canAddEntry, canChangeEntry, carryDealEntriesLocal, cleanEntry, dropDealEntriesLocal } from '@/lib/crm';
@@ -268,6 +268,8 @@ function createActions(mutate, mode) {
     if (queued && result !== false) mode.taskMail?.();
     return result;
   };
+  // Demo mode's 0015 log_deal_stage trigger (live: the database writes the history; the app never does).
+  const logStage = (d, deal, from, to) => { if (!mode.live) logStageLocal(d, deal, from, to); };
   // Your own to-dos, or anyone's for admins.
   const mayTodo = (d, t) => Boolean(t) && (t.assignee === d.me || isAdmin(d));
   // Calendar events (0009): any active teammate adds one; the one who added it, or an admin, edits and deletes it.
@@ -324,7 +326,8 @@ function createActions(mutate, mode) {
     importRecords: (kind, records, options = {}) => mutate((d) => {
       const result = { added: 0, skipped: 0 };
       const target = kind === 'tasks' ? findBoard(d, options.board) : null;
-      const module = { clients: 'clients', contacts: 'outreach', deals: 'pipeline', tasks: target?.module }[kind];
+      const module = { clients: 'clients', contacts: 'outreach', deals: 'pipeline', accounts: 'pipeline', people: 'pipeline', tasks: target?.module }[kind];
+      if ((kind === 'accounts' || kind === 'people') && absent('accounts')) return false; // 0014 hasn't run
       if (!module) {
         result.skipped = records?.length || 0;
         return result;
@@ -343,6 +346,9 @@ function createActions(mutate, mode) {
         // fills it in instead of being skipped as a duplicate. It stays linked to its contact.
         const made = new Map(d.deals.filter((x) => x.contactId && !toNum(x.value)).map((x) => [normName(x.name), x]));
         let filled = 0;
+        // 0014: an Account column names the deal's account (else its own name does).
+        const accountNames = new Map((records || []).map((r) => [normName(r?.name), String(r?.account || '').trim()]));
+        records = (records || []).map((r) => { if (!r) return r; const { account: _a, ...x } = r; return x; });
         const rest = (records || []).filter((r) => {
           const x = made.get(normName(r?.name));
           if (!x) return true;
@@ -354,19 +360,60 @@ function createActions(mutate, mode) {
         });
         const added = takeNew(d.deals, rest, newDeal, result);
         d.deals.push(...added);
+        added.forEach((x) => logStage(d, x, '', x.stage));
         result.added += filled;
         // 0014: each on its account (the one with its name, else a new one).
         if (!absent('accounts')) {
           added.forEach((x) => {
-            let a = accountNamed(d, x.name);
+            const named = accountNames.get(normName(x.name)) || x.name;
+            let a = accountNamed(d, named) || similarAccounts(d, { name: named })[0];
             if (!a) {
-              a = { id: uid(), ...accountDefaults(nowIso()), name: String(x.name).trim().slice(0, 200), lifecycle: 'opportunity',
+              a = { id: uid(), ...accountDefaults(nowIso()), name: String(named).trim().slice(0, 200), lifecycle: 'opportunity',
                 sector: String(x.sector || '').slice(0, 100), owner: x.contact || '' };
               (d.accounts ||= []).push(a);
             }
             x.accountId = a.id;
           });
         }
+      } else if (kind === 'accounts') {
+        // Not when one like it is there already (or earlier in the file): the same name or domain (similarAccounts()).
+        const userIds = d.users.map((u) => u.id);
+        d.accounts ||= [];
+        (records || []).forEach((r) => {
+          if (!r?.name || similarAccounts(d, { name: r.name, website: r.website }).length) { result.skipped++; return; }
+          const { contact, notes, website, ...rest } = r;
+          const clean = cleanAccount({ ...rest, website, domain: website, owner: contact }, { userIds });
+          if (!clean.name) { result.skipped++; return; }
+          const a = { id: uid(), ...accountDefaults(nowIso()), ...clean };
+          d.accounts.push(a);
+          if (String(notes || '').trim() && !absent('crm_entries')) {
+            (d.crmEntries ||= []).unshift({
+              id: uid(), dealId: '', clientId: '', accountId: a.id, contactId: '', kind: 'note', title: '', body: String(notes).trim().slice(0, 20000),
+              url: '', label: '', happenedOn: '', attendees: '', user: d.me, createdAt: nowIso(),
+            });
+          }
+          result.added++;
+        });
+      } else if (kind === 'people') {
+        // Each at its Account (found by name, else added); not when they're there already (similarPeople()).
+        const userIds = d.users.map((u) => u.id);
+        d.accounts ||= [];
+        d.crmContacts ||= [];
+        (records || []).forEach((r) => {
+          const accountName = String(r?.account || '').trim();
+          if (!r?.name || !accountName) { result.skipped++; return; }
+          let a = accountNamed(d, accountName) || similarAccounts(d, { name: accountName })[0];
+          if (a && similarPeople(d, { email: r.email, name: r.name, accountId: a.id }).length) { result.skipped++; return; }
+          if (!a && r.email && similarPeople(d, { email: r.email }).length) { result.skipped++; return; }
+          if (!a) {
+            a = { id: uid(), ...accountDefaults(nowIso()), ...cleanAccount({ name: accountName, owner: r.contact }, { userIds }) };
+            d.accounts.push(a);
+          }
+          const { contact, account: _account, ...rest } = r;
+          const clean = cleanCrmPerson({ ...rest, owner: contact, accountId: a.id }, { userIds, accountIds: d.accounts.map((x) => x.id) });
+          d.crmContacts.push({ id: uid(), ...personDefaults(nowIso()), ...clean });
+          result.added++;
+        });
       } else {
         const board = target;
         const items = takeNew(board.groups.flatMap((g) => g.items), records, (r) => newItem(r), result);
@@ -843,6 +890,7 @@ function createActions(mutate, mode) {
       const x = newDeal({ ...clean, name, accountId: account?.id || '' });
       if (account && ['new', 'contacted', 'engaged', 'meeting'].includes(account.lifecycle)) account.lifecycle = 'opportunity';
       d.deals.push(x);
+      logStage(d, x, '', x.stage);
       return x.id;
     }),
     // To one of the open stages (the board's columns), now.
@@ -850,6 +898,7 @@ function createActions(mutate, mode) {
       const x = d.deals.find((v) => v.id === dealId);
       if (!x || !DEAL_STAGES.includes(stage)) return false;
       if (dealStage(x) !== stage) x.stageAt = nowIso();
+      if (x.stage !== stage) logStage(d, x, x.stage, stage);
       x.stage = stage;
       return true;
     }),
@@ -869,12 +918,14 @@ function createActions(mutate, mode) {
       if ('accountId' in clean && clean.accountId !== x.accountId && !('contactIds' in clean)) clean.contactIds = []; // another account's people
       if ('stage' in clean && clean.stage !== dealStage(x)) clean.stageAt = nowIso();
       if ('stage' in clean && clean.stage !== 'Lost' && !('lostReason' in clean)) clean.lostReason = '';
+      if ('stage' in clean && clean.stage !== x.stage) logStage(d, x, x.stage, clean.stage);
       Object.assign(x, clean);
       return true;
     }),
     removeDeal: (dealId) => editing('pipeline', (d) => {
       if (!d.deals.some((v) => v.id === dealId)) return false;
       d.deals = d.deals.filter((v) => v.id !== dealId);
+      d.dealHistory = (d.dealHistory || []).filter((h) => h.dealId !== dealId); // live: on delete cascade
       if (!mode.live) dropDealEntriesLocal(d, dealId); // live: 0012's crm_drop_deal_entries trigger and on delete set null
       return true;
     }),
@@ -958,6 +1009,7 @@ function createActions(mutate, mode) {
         || d.clients.find((c) => normName(c.name) === normName(deal.name) || (account && normName(c.name) === normName(account.name)));
       if (existing) {
         deal.clientId = existing.id;
+        logStage(d, deal, deal.stage, 'Won');
         becomeCustomer(existing.id);
         if (!mode.live) carryDealEntriesLocal(d, deal.id, existing.id); // live: 0012's crm_carry_to_client trigger
         return existing.id;
@@ -977,6 +1029,7 @@ function createActions(mutate, mode) {
       });
       d.clients.unshift(client);
       deal.clientId = client.id;
+      logStage(d, deal, deal.stage, 'Won');
       becomeCustomer(client.id);
       if (!mode.live) {
         clientCreatedLocal(d, client.id); // live: the client_contract_todo trigger

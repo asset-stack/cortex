@@ -4,7 +4,9 @@
 import { useState } from 'react';
 import { ExternalLink, Pencil, Plus } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
-import { ACCOUNT_KINDS, CONTACT_ROLES, LIFECYCLES, accountById, accountText, dealsOfAccount, isOpenDeal, peopleOf } from '@/lib/accounts';
+import {
+  ACCOUNT_KINDS, CONTACT_ROLES, LIFECYCLES, accountById, accountText, dealsOfAccount, isOpenDeal, peopleOf, similarAccounts,
+} from '@/lib/accounts';
 import { dealStage } from '@/data/boards';
 import { useAccess } from '@/lib/access';
 import { Avatar, ConfirmModal, Drawer, Modal, PersonPicker, SearchField } from '@/components/ui';
@@ -172,6 +174,20 @@ export function AccountProfile({ accountId, onClose, onOpen, onEdit, onNewDeal, 
                 ))}
               </ul>
             )}
+            {client?.contacts?.length > 0 && (
+              <>
+                <h4 className="mt-3 text-[12.5px] font-semibold dimmer">On {client.name}’s client record</h4>
+                <ul className="mt-1 flex flex-col gap-1">
+                  {client.contacts.map((p) => (
+                    <li key={p.id} className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 rounded-xl px-2 py-1.5 text-[13px]">
+                      <span className="font-semibold">{p.name || p.email}</span>
+                      <span className="dim">{[p.role, p.name && p.email].filter(Boolean).join(' · ')}</span>
+                      {p.billing && <span className="rounded-full chip px-2 text-[11px] font-semibold">Billing</span>}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
           </section>
           <section>
             <div className="flex items-center justify-between gap-2">
@@ -213,6 +229,7 @@ export function AccountForm({ account, onClose, onSaved }) {
   const [confirm, setConfirm] = useState(false);
   const set = (k) => (e) => { setErr(''); setF((x) => ({ ...x, [k]: e.target.value })); };
   const others = (state.accounts || []).filter((x) => x.id !== account?.id && (x.kind === 'partner' || x.id === f.referredBy));
+  const dupes = similarAccounts(state, f, account?.id); // a warning only: the same name or domain
   const submit = (e) => {
     e.preventDefault();
     if (!f.name.trim()) { setErr('Add the account’s name'); return; }
@@ -233,6 +250,9 @@ export function AccountForm({ account, onClose, onSaved }) {
       <Modal open onClose={onClose} title={editing ? 'Edit account' : 'New account'} width={560}>
         <form className="flex flex-col gap-3" onSubmit={submit}>
           <input className="field" placeholder="Name" aria-label="Name" value={f.name} onChange={set('name')} autoFocus />
+          {dupes.length > 0 && (
+            <div role="status" className="-mt-1.5 text-[12.5px] text-amber-200">Already in Cortex: {dupes.map((x) => x.name).join(', ')}</div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <select className="field" aria-label="Kind" value={f.kind} onChange={set('kind')}>
               {Object.entries(ACCOUNT_KINDS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}

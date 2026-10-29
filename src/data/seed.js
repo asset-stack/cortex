@@ -5,10 +5,10 @@
 // Relative imports with extensions, so scripts/test-sync.mjs can load this file in Node.
 import {
   accountDefaults, addDays, addMonths, contactPipelineLocal, crmBackfillLocal, dealDefaults, ensureTodosLocal, generateDueInvoicesLocal,
-  isoDow, makeTodo, personDefaults, uid,
+  historyBackfillLocal, isoDow, makeTodo, personDefaults, uid,
 } from '../lib/automations.js';
 import { TEAM_TIMEZONE, localYmd } from '../lib/format.js';
-import { OLD_DEAL_STAGES, withPeople } from './boards.js';
+import { DEAL_STAGES, OLD_DEAL_STAGES, dealStage, withPeople } from './boards.js';
 import { TOOL_PRESETS } from '../lib/tools.js';
 import { BOARD_MODULES, EXISTING_BOARD, FIRST_GROUP, FIRST_GROUP_COLOR, STARTING_BOARDS } from '../lib/boards.js';
 
@@ -247,6 +247,8 @@ function crmAccountsDemo(state, today) {
     guardrails: 'A non-profit: use the non-profit pricing.' });
   set('Harbourside District Council', { country: 'New Zealand', timezone: 'Pacific/Auckland' });
   set('Coastal Rail', { country: 'Australia', region: 'NSW', timezone: 'Australia/Sydney' });
+  ['City of Lakeside', 'Riverbend Water', 'Bayview Water', 'Harbour Construction', 'Westbay Council', 'Hillcrest Shire', 'Pinecrest Council']
+    .forEach((name) => set(name, { country: 'Australia' }));
   set('Eastgate University Facilities', { country: 'Australia', region: 'WA', timezone: 'Australia/Perth' });
   person(named('Shire of Southcliff'), { name: 'Morgan Hale', title: 'Asset Manager', role: 'champion', timezone: 'Australia/Adelaide' });
   const director = person(named('Shire of Southcliff'), { name: 'Sam Ortiz', title: 'Director of Infrastructure', email: 'sam.ortiz@example.com',
@@ -278,6 +280,28 @@ function crmAccountsDemo(state, today) {
       body: 'Wants to see the condition audit on their road assets.', user: 'josh', createdAt: hoursAgo(120),
     });
   }
+}
+
+// Where the demo deals have been (0015's history): each came in at Interested and moved a stage every week or so to
+// where it is now (reached at its stageAt); the lost ones from Intro held, the one made a client then Won.
+const LOST_FROM = { 'Lakeview Shire': 'Demo held', 'Pinecrest Council': 'Interested', 'Hillcrest Shire': 'Intro held' };
+function demoHistory(deals) {
+  const rows = [];
+  deals.forEach((d) => {
+    const stage = dealStage(d);
+    const last = stage === 'Lost' ? LOST_FROM[d.name] || DEAL_STAGES[0] : stage;
+    const steps = DEAL_STAGES.slice(0, DEAL_STAGES.indexOf(last) + 1);
+    if (stage === 'Lost') steps.push('Lost');
+    if (d.clientId) steps.push('Won');
+    let t = Date.parse(d.stageAt) || now;
+    const path = [];
+    for (let i = steps.length - 1; i >= 0; i--) {
+      path.unshift({ id: id('h'), dealId: d.id, from: i ? steps[i - 1] : '', to: steps[i], at: new Date(t).toISOString(), by: d.contact || '' });
+      t -= (5 + ((i * 3) % 6)) * 864e5;
+    }
+    rows.push(...path);
+  });
+  return rows.sort((a, b) => a.at.localeCompare(b.at));
 }
 
 const deal = (name, sector, value, priority, stage, contact, next, contactId = '', { days = 3, ...extra } = {}) => ({
@@ -660,20 +684,23 @@ export function createSeed() {
   // Deals that came from an outreach contact keep the link, so a later reply or booking moves them on.
   const deals = [
     deal('City of Lakeside', 'Government', 70000, 'P2', 'Interested', 'josh', 'Intro call', '', { days: 2, waitingOn: 'us' }),
-    deal('Riverbend Water', 'Utilities', 220000, 'P1', 'Interested', 'david', 'Send digital twin brief', contactId('Riley Shaw'), { days: 1, waitingOn: 'us' }),
-    deal('Coastal Rail', 'Transport', 160000, 'P2', 'Interested', 'hello', 'PDF walkthrough', contactId('Casey Ng'), { days: 20, waitingOn: 'them' }),
+    deal('Riverbend Water', 'Utilities', 220000, 'P1', 'Interested', 'david', 'Send digital twin brief', contactId('Riley Shaw'),
+      { days: 1, waitingOn: 'us', closeOn: addMonths(today, 4) }),
+    deal('Coastal Rail', 'Transport', 160000, 'P2', 'Interested', 'hello', 'PDF walkthrough', contactId('Casey Ng'), { days: 20, waitingOn: 'them', closeOn: addDays(today, -6) }),
     deal('Shire of Southcliff', 'Government', 55000, 'P2', 'Meeting booked', 'josh', 'Thursday 10am walkthrough', contactId('Morgan Hale'),
       { days: 1, closeOn: addMonths(today, 3) }),
-    deal('Eastgate University Facilities', 'Education', 90000, 'P3', 'Intro held', 'david', 'Confirm campus list', '', { days: 35, waitingOn: 'them' }),
+    deal('Eastgate University Facilities', 'Education', 90000, 'P3', 'Intro held', 'david', 'Confirm campus list', '', { days: 35, waitingOn: 'them', closeOn: addMonths(today, 2) }),
     deal('Harbourside District Council', 'Government', 85000, 'P2', 'Intro held', 'josh', 'Send the asset plan example', '',
-      { days: 6, currency: 'NZD', waitingOn: 'us' }),
+      { days: 6, currency: 'NZD', waitingOn: 'us', closeOn: addMonths(today, 3) }),
     deal('Northside Diocese', 'Healthcare', 110000, 'P1', 'Demo held', 'josh', 'Scope document', contactId('Jordan Price'),
       { days: 4, closeOn: addMonths(today, 1), waitingOn: 'us' }),
     deal('Kingsford Housing Trust', 'Community housing', 60000, 'P1', 'Proposal sent', 'josh', 'Non-profit pricing in the proposal', '',
       { days: 9, currency: 'GBP', closeOn: addMonths(today, 2), probability: 70, waitingOn: 'them' }),
-    deal('Harbour Construction', 'Construction', 190000, 'P1', 'Contract sent', 'david', 'Pilot review', '', { days: 5, waitingOn: 'them' }),
+    deal('Harbour Construction', 'Construction', 190000, 'P1', 'Contract sent', 'david', 'Pilot review', '', { days: 5, waitingOn: 'them', closeOn: addDays(today, 10) }),
     deal('Westbay Council', 'Government', 130000, 'P1', 'Demo held', 'david', 'Onboarding', contactId('Alex Taylor'), { days: 30 }),
     deal('Lakeview Shire', 'Government', 40000, 'P3', 'Lost', 'josh', '', '', { days: 12, lostReason: 'Existing system' }),
+    deal('Pinecrest Council', 'Government', 65000, 'P2', 'Lost', 'hello', '', '', { days: 40, lostReason: 'Existing system' }),
+    deal('Hillcrest Shire', 'Government', 50000, 'P3', 'Lost', 'josh', '', '', { days: 25, lostReason: 'Timing' }),
   ];
   // Westbay was made a client: its deal is linked, so it has left the board and counts in Made clients.
   deals.forEach((dl) => {
@@ -718,6 +745,7 @@ export function createSeed() {
     seededBoards: [...BOARD_MODULES], // demo only: modules whose starting boards this demo has (migrate() adds new ones once)
     calendarSeeded: true, // demo only: Posting schedule's calendar was switched on (migrate() does it once for older data)
     crmSeeded: true, // demo only: 0014's one-off steps are done (migrate() does them once for older data)
+    historySeeded: true, // demo only: 0015's starting rows are done (migrate() does them once for older data)
     calendarEvents: demoCalendarEvents(today, id),
     payments: [
       { id: id('pay'), invoiceId: invoiceNo(westbay, 'INV-1012'), clientId: westbay.id, amount: 5000, receivedOn: '2026-10-07', reference: 'Part payment INV-1012', statementId: statement.id },
@@ -749,6 +777,7 @@ export function createSeed() {
   // The CRM (0014): every client and deal its account, then the demo accounts' details and people.
   crmBackfillLocal(state, { uid: () => id('ac') });
   crmAccountsDemo(state, today);
+  state.dealHistory = demoHistory(state.deals);
 
   // The automations, run the way the app runs them, so the demo data follows the same rules.
   const opts = { uid: () => id('td') };
@@ -774,7 +803,7 @@ export function createSeed() {
 }
 
 const COLLECTIONS = ['moduleAccess', 'todos', 'routines', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'timeEntries', 'tools',
-  'crmEntries', 'accounts', 'crmContacts'];
+  'crmEntries', 'accounts', 'crmContacts', 'dealHistory'];
 
 // Brings demo data saved by older builds (localStorage) up to the current shape. Safe to run more than once.
 export function migrate(data) {
@@ -898,6 +927,11 @@ export function migrate(data) {
     data.crmSeeded = true;
   }
   (data.crmEntries || []).forEach((e) => { e.accountId ??= ''; e.contactId ??= ''; });
+  // Stage history (0015), once: where each deal stands.
+  if (!data.historySeeded) {
+    historyBackfillLocal(data);
+    data.historySeeded = true;
+  }
   // Demo only: which routine runs ensureTodosLocal has made (the database's routine_runs), from the to-dos older
   // builds made, so a deleted one doesn't come back.
   data.routineRuns ??= data.todos.filter((t) => t.routineId).map((t) => `${t.day}|${t.routineId}|${t.assignee}`);

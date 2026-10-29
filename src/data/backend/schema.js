@@ -77,6 +77,8 @@ const COLUMNS = {
     domain: t, website: t, size: t, guardrails: t, prep_url: t, referred_by: 'fk', owner_id: 'fk', client_id: 'fk', position: 'int',
     created_at: 'ts',
   },
+  // 0015: written only by the database (log_deal_stage); the app reads it.
+  deal_stage_history: { id: 'id', deal_id: 'id', from_stage: t, to_stage: t, changed_at: 'ts', changed_by: 'fk' },
   crm_contacts: {
     id: 'id', account_id: 'id', name: t, title: t, email: t, phone: t, linkedin: t, timezone: t, role: t, status: t, owner_id: 'fk',
     position: 'int', created_at: 'ts',
@@ -158,6 +160,7 @@ const DEAL_0014 = ['account_id', 'contact_ids', 'currency', 'close_on', 'probabi
 // setNull: links (column → table) the database clears when the row they point at is deleted (on delete set null).
 // since: the migration that adds the table. Until it has run, the app goes on without it (the sync engine's probe():
 //   no rows, no realtime, no writes; admins see which file to run) instead of failing to load. Core tables have none.
+// readOnly: written only by the database (a trigger); the app never sends it a write.
 // later: columns a migration adds to an existing table, with the new table of that same migration ({ table, columns }):
 //   until that table is there, writes leave the columns out (the database doesn't have them yet).
 export const TABLES = [
@@ -183,6 +186,10 @@ export const TABLES = [
   {
     name: 'deals', key: byId, setNull: { client_id: 'clients', contact_id: 'contacts', account_id: 'accounts' },
     later: [{ table: 'accounts', columns: DEAL_0014 }],
+  },
+  {
+    name: 'deal_stage_history', key: byId, parent: ['deals', 'deal_id'], setNull: { changed_by: 'profiles' },
+    since: '0015_deal_history.sql', readOnly: true,
   },
   { name: 'client_notes', key: byId, parent: ['clients', 'client_id'] },
   // After deals and clients. A client deleted takes its entries (on delete cascade; the store drops them too); a deal
@@ -344,6 +351,9 @@ export function flatten(state) {
     sector: a.sector, country: a.country, region: a.region, timezone: a.timezone, domain: a.domain, website: a.website, size: a.size,
     guardrails: a.guardrails, prep_url: a.prepUrl, referred_by: a.referredBy, owner_id: a.owner, client_id: a.clientId, position: i,
     created_at: a.createdAt,
+  }));
+  (state.dealHistory || []).forEach((h) => put('deal_stage_history', {
+    id: h.id, deal_id: h.dealId, from_stage: h.from, to_stage: h.to, changed_at: h.at, changed_by: h.by || null,
   }));
   (state.crmContacts || []).forEach((c, i) => put('crm_contacts', {
     id: c.id, account_id: c.accountId, name: c.name, title: c.title, email: c.email, phone: c.phone, linkedin: c.linkedin,
@@ -553,6 +563,10 @@ export function assemble(rowsByTable, { me } = {}) {
       revisitOn: a.revisit_on ?? '', sector: a.sector, country: a.country, region: a.region, timezone: a.timezone, domain: a.domain,
       website: a.website, size: a.size, guardrails: a.guardrails, prepUrl: a.prep_url, referredBy: a.referred_by ?? '',
       owner: a.owner_id ?? '', clientId: a.client_id ?? '', createdAt: a.created_at ?? '',
+    })),
+    // Oldest first (0015).
+    dealHistory: all('deal_stage_history').sort((a, b) => cmp(a.changed_at || '', b.changed_at || '') || cmp(a.id, b.id)).map((h) => ({
+      id: h.id, dealId: h.deal_id, from: h.from_stage, to: h.to_stage, at: h.changed_at ?? '', by: h.changed_by ?? '',
     })),
     crmContacts: all('crm_contacts').sort(byPos).map((c) => ({
       id: c.id, accountId: c.account_id, name: c.name, title: c.title, email: c.email, phone: c.phone, linkedin: c.linkedin,

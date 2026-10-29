@@ -101,6 +101,11 @@ const fixture = () => ({
       accountId: '', contactIds: [], currency: 'AUD', closeOn: '', probability: null, waitingOn: '', lostReason: '', stageAt: '',
     },
   ],
+  // 0015: the deals' stage history, oldest first (written by the database).
+  dealHistory: [
+    { id: 'h-1', dealId: 'd-1', from: '', to: 'Interested', at: '2026-10-10T00:00:00.000Z', by: U1 },
+    { id: 'h-2', dealId: 'd-2', from: 'Demo held', to: 'Won', at: '2026-10-12T00:00:00.000Z', by: '' },
+  ],
   // The CRM (0014): accounts in order, then the people at them.
   accounts: [
     {
@@ -343,7 +348,7 @@ await check('assemble: order and state fields', () => {
   assert.deepEqual(Object.keys(back).sort(), ['approvals', 'boards', 'channels', 'clients', 'contacts', 'deals', 'emails', 'lastRead',
     'messages', 'org', 'sequences', 'users', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements',
     'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'calendarEvents', 'crmEntries', 'accounts',
-    'crmContacts'].sort());
+    'crmContacts', 'dealHistory'].sort());
   assert.deepEqual(back.crmEntries, s.crmEntries, 'CRM entries newest first, every field back');
   assert.deepEqual(back.boards.map((b) => b.id), ['b-ana', 'b-ben', 'b-web', 'b-gen', 'b-post', 'b-events']);
   const web = back.boards.find((b) => b.id === 'b-web');
@@ -368,8 +373,8 @@ await check('assemble: order and state fields', () => {
   assert.deepEqual(back.users, s.users);
   // Parts of the fixture already in canonical form come back exactly (no extra or missing fields).
   ['boards', 'contacts', 'emails', 'sequences', 'approvals', 'messages', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments',
-    'bankStatements', 'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'accounts', 'crmContacts']
-    .forEach((k) => assert.deepEqual(back[k], s[k], k));
+    'bankStatements', 'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'accounts', 'crmContacts',
+    'dealHistory'].forEach((k) => assert.deepEqual(back[k], s[k], k));
   assert.deepEqual(back.clients[1], s.clients[1]);
   assert.deepEqual(back.clients[0].plans, s.clients[0].plans);
   assert.deepEqual(back.clients[0].usage, s.clients[0].usage); // newest month first
@@ -1461,12 +1466,14 @@ await check('sync: loadAll pages every table and normalises rows', async () => {
 const NOT_FOUND = { code: 'PGRST205', message: "Could not find the table 'public.crm_entries' in the schema cache" };
 await check('sync: a table whose migration hasn’t run (TABLES since) is left out — no rows, no realtime, no writes — and the rest loads', async () => {
   assert.deepEqual(TABLES.filter((t) => t.since).map((t) => [t.name, t.since]),
-    [['accounts', '0014_crm_accounts.sql'], ['crm_contacts', '0014_crm_accounts.sql'], ['crm_entries', '0012_crm_profile.sql']]);
+    [['accounts', '0014_crm_accounts.sql'], ['crm_contacts', '0014_crm_accounts.sql'], ['deal_stage_history', '0015_deal_history.sql'],
+      ['crm_entries', '0012_crm_profile.sql']]);
   const { sb, sync } = setup({ deals: [{ id: 'd1', name: 'D', value: 0, position: 0 }] });
   sb.failures.push({ table: 'crm_entries', method: 'select', ...NOT_FOUND, sticky: true });
   assert.deepEqual(await sync.probe(), ['crm_entries']);
   assert.deepEqual(sb.calls.map((c) => [c.table, c.columns, c.range]),
-    [['accounts', 'id', [0, 0]], ['crm_contacts', 'id', [0, 0]], ['crm_entries', 'id', [0, 0]]], 'one small select per since table');
+    [['accounts', 'id', [0, 0]], ['crm_contacts', 'id', [0, 0]], ['deal_stage_history', 'id', [0, 0]], ['crm_entries', 'id', [0, 0]]],
+    'one small select per since table');
   sb.calls.length = 0;
   sync.subscribe(() => {});
   const tables = sb.channels.at(-1).handlers.map((h) => h.filter.table);
@@ -1505,6 +1512,16 @@ await check('sync: columns a migration adds to an existing table (TABLES later) 
   sync.queue([up('deals', 'd1', deal)]);
   await sync.flush();
   assert.deepEqual(sb.calls.find((c) => c.method === 'upsert').rows[0], deal, 'then they go');
+  sync.dispose();
+});
+
+await check('sync: a table only the database writes (TABLES readOnly: deal_stage_history) never takes a write from the app', async () => {
+  assert.deepEqual(TABLES.filter((t) => t.readOnly).map((t) => t.name), ['deal_stage_history']);
+  const { sb, sync } = setup();
+  sync.queue([up('deal_stage_history', 'h1', { id: 'h1', deal_id: 'd1', to_stage: 'Won' }), del('deal_stage_history', 'h2'), up('deals', 'd1', { id: 'd1', name: 'D' })]);
+  await sync.flush();
+  assert.deepEqual(sb.calls.filter((c) => c.method !== 'select').map((c) => `${c.method} ${c.table}`), ['upsert deals']);
+  assert.equal(sync.hasPending(), false);
   sync.dispose();
 });
 
@@ -2508,7 +2525,10 @@ await check('crm: the demo seed — Northside’s deal has a meeting with its no
   const northside = s.deals.find((d) => d.name === 'Northside Diocese');
   const westbay = s.clients.find((c) => c.name === 'Westbay Council');
   const tl = crm.timelineOf(s, { dealId: northside.id });
-  assert.deepEqual(tl.map((e) => e.kind), ['meeting', 'note']);
+  assert.deepEqual(tl.filter((e) => e.kind !== 'stage').map((e) => e.kind), ['meeting', 'note']);
+  // 0015: its stage moves too (not its being added), read only, oldest last.
+  assert.deepEqual(tl.filter((e) => e.kind === 'stage').map((e) => `${e.from}→${e.to}`), ['Intro held→Demo held', 'Meeting booked→Intro held', 'Interested→Meeting booked']);
+  assert.ok(tl.filter((e) => e.kind === 'stage').every((e) => e.legacy && !e.deal), 'not editable; no deal name on the deal’s own');
   assert.ok(/docs\.google\.com/.test(tl[0].url) && tl[0].body && tl[0].attendees);
   assert.deepEqual(crm.linksOf(s, { dealId: northside.id }).map((l) => l.label), ['Proposal']);
   assert.deepEqual(work.dealTasks(s, northside.id).map((r) => r.item.name), ['Send Northside the scope document']);
@@ -2974,6 +2994,128 @@ await check('automations: crmBackfillLocal (0014’s one-off steps) — stages r
   assert.equal(JSON.stringify(st), before, 'nothing left to do');
 });
 
+await check('automations: logStageLocal and historyBackfillLocal (0015’s trigger and one-off step, demo mode)', () => {
+  let n = 0;
+  const uid = () => `h-${++n}`;
+  const st = { me: 'u1', deals: [{ id: 'd1', stage: 'Interested', stageAt: '2026-10-01T00:00:00.000Z' }, { id: 'd2', stage: 'Demo held', clientId: 'c1', stageAt: '' }] };
+  auto.historyBackfillLocal(st, { uid });
+  assert.deepEqual(st.dealHistory.map((h) => [h.dealId, h.from, h.to, h.by]), [['d1', '', 'Interested', ''], ['d2', '', 'Won', '']]);
+  assert.equal(st.dealHistory[0].at, '2026-10-01T00:00:00.000Z', 'when it reached its stage');
+  auto.historyBackfillLocal(st, { uid });
+  assert.equal(st.dealHistory.length, 2, 'once per deal');
+  const h = auto.logStageLocal(st, st.deals[0], 'Interested', 'Intro held', { uid, at: '2026-10-05T00:00:00.000Z' });
+  assert.deepEqual([h.from, h.to, h.by, h.at], ['Interested', 'Intro held', 'u1', '2026-10-05T00:00:00.000Z']);
+  assert.equal(auto.logStageLocal(st, st.deals[0], 'Intro held', 'Intro held'), null, 'no move, no row');
+  assert.equal(st.dealHistory.length, 3);
+});
+
+await check('accounts: needsYou — someone’s open deals overdue, waiting on them, stalled or with no next step (most pressing first), and their set-aside accounts due a revisit', () => {
+  const now = Date.parse('2026-10-29T00:00:00Z');
+  const st = {
+    deals: [
+      { id: 'd1', name: 'Fine', contact: 'u1', stage: 'Interested', next: 'Call', waitingOn: 'them', stageAt: '2026-10-25T00:00:00Z' },
+      { id: 'd2', name: 'Waiting', contact: 'u1', stage: 'Interested', next: 'Reply', waitingOn: 'us', stageAt: '2026-10-25T00:00:00Z' },
+      { id: 'd3', name: 'Late', contact: 'u1', stage: 'Demo held', next: '', closeOn: '2026-10-20', stageAt: '2026-10-01T00:00:00Z' },
+      { id: 'd4', name: 'Someone else', contact: 'u2', stage: 'Interested', next: '', waitingOn: 'us' },
+      { id: 'd5', name: 'Lost', contact: 'u1', stage: 'Lost', next: '' },
+      { id: 'd6', name: 'Won', contact: 'u1', stage: 'Demo held', next: '', clientId: 'c1' },
+      { id: 'd7', name: 'Quiet', contact: 'u1', stage: 'Intro held', next: '  ', stageAt: '2026-10-28T00:00:00Z' },
+    ],
+    accounts: [
+      { id: 'a1', name: 'Due', owner: 'u1', lifecycle: 'nurture', revisitOn: '2026-10-29' },
+      { id: 'a2', name: 'Later', owner: 'u1', lifecycle: 'rfp', revisitOn: '2026-12-01' },
+      { id: 'a3', name: 'Suppressed', owner: 'u1', lifecycle: 'suppressed', revisitOn: '2026-01-01' },
+      { id: 'a4', name: 'Theirs', owner: 'u2', lifecycle: 'not_now', revisitOn: '2026-01-01' },
+    ],
+  };
+  const out = accounts.needsYou(st, 'u1', { today: '2026-10-29', now });
+  assert.deepEqual(out.deals.map((r) => [r.deal.id, r.reasons]), [
+    ['d3', ['Overdue', 'Stalled', 'No next step']], ['d2', ['Waiting on you']], ['d7', ['No next step']],
+  ]);
+  assert.deepEqual(out.revisits.map((a) => a.id), ['a1'], 'due today, set aside, theirs; never a suppressed one');
+});
+
+await check('accounts: duplicates — the same name (case, punctuation, “the” and company suffixes aside) or domain; the same email, or name at the same account', () => {
+  assert.deepEqual(['The Example Shire Pty Ltd', 'example shire', 'Example-Shire.', 'Café Group', ''].map(accounts.nameKey),
+    ['example shire', 'example shire', 'example shire', 'cafe', '']);
+  const st = {
+    accounts: [{ id: 'a1', name: 'Example Shire Council', domain: 'shire.example.com', website: '' }, { id: 'a2', name: 'Example Water', domain: '', website: 'https://www.water.example.com/' }],
+    crmContacts: [{ id: 'p1', accountId: 'a1', name: 'Jo Example', email: 'jo@shire.example.com' }, { id: 'p2', accountId: 'a2', name: 'Sam', email: '' }],
+  };
+  const ids = (list) => list.map((x) => x.id);
+  assert.deepEqual(ids(accounts.similarAccounts(st, { name: 'the example shire council ltd' })), ['a1']);
+  assert.deepEqual(ids(accounts.similarAccounts(st, { name: 'Another', website: 'http://water.example.com/about' })), ['a2'], 'by domain, from a website');
+  assert.deepEqual(ids(accounts.similarAccounts(st, { name: 'Example Shire Council' }, 'a1')), [], 'never itself');
+  assert.deepEqual(ids(accounts.similarAccounts(st, { name: '' })), []);
+  assert.deepEqual(ids(accounts.similarPeople(st, { email: ' JO@shire.example.com ', accountId: 'a2' })), ['p1'], 'the same email at any account');
+  assert.deepEqual(ids(accounts.similarPeople(st, { name: 'sam', accountId: 'a2' })), ['p2']);
+  assert.deepEqual(ids(accounts.similarPeople(st, { name: 'Sam', accountId: 'a1' })), [], 'a name only counts at the same account');
+});
+
+const reports = await import('../src/lib/reports.js');
+const reportState = () => ({
+  accounts: [{ id: 'a1', name: 'A', country: 'Australia', sector: 'Councils' }, { id: 'a2', name: 'B', country: 'New Zealand', sector: '' }],
+  deals: [
+    { id: 'd1', accountId: 'a1', stage: 'Interested', value: 1000, currency: 'AUD', closeOn: '2026-10-20', probability: null, sector: '' },
+    { id: 'd2', accountId: 'a1', stage: 'Demo held', value: 2000, currency: 'GBP', closeOn: '2026-11-03', probability: 40, sector: 'Housing' },
+    { id: 'd3', accountId: 'a2', stage: 'Contract sent', value: 5000, currency: 'AUD', closeOn: '2027-09-01', probability: null, sector: '' },
+    { id: 'd4', accountId: 'a2', stage: 'Proposal sent', value: 3000, currency: 'AUD', closeOn: '', probability: null, sector: '' },
+    { id: 'd5', accountId: 'a1', stage: 'Lost', value: 900, currency: 'AUD', lostReason: 'Timing', stageAt: '2026-10-25T00:00:00Z', sector: '' },
+    { id: 'd6', accountId: 'a1', stage: 'Demo held', clientId: 'c1', value: 4000, currency: 'AUD', sector: '' },
+    { id: 'd7', accountId: 'a2', stage: 'Lost', value: 100, currency: 'AUD', lostReason: '', stageAt: '2025-01-01T00:00:00Z', sector: '' },
+  ],
+  dealHistory: [
+    { id: 'h1', dealId: 'd2', from: '', to: 'Interested', at: '2026-10-01T00:00:00Z' },
+    { id: 'h2', dealId: 'd2', from: 'Interested', to: 'Intro held', at: '2026-10-05T00:00:00Z' },
+    { id: 'h3', dealId: 'd2', from: 'Intro held', to: 'Demo held', at: '2026-10-11T00:00:00Z' },
+    { id: 'h4', dealId: 'd6', from: '', to: 'Interested', at: '2026-09-01T00:00:00Z' },
+    { id: 'h5', dealId: 'd6', from: 'Interested', to: 'Demo held', at: '2026-09-03T00:00:00Z' },
+    { id: 'h6', dealId: 'd6', from: 'Demo held', to: 'Won', at: '2026-10-20T00:00:00Z' },
+    { id: 'h7', dealId: 'd5', from: '', to: 'Interested', at: '2026-10-10T00:00:00Z' },
+    { id: 'h8', dealId: 'd5', from: 'Interested', to: 'Lost', at: '2026-10-25T00:00:00Z' },
+  ],
+});
+const NOW = Date.parse('2026-10-29T00:00:00Z');
+
+await check('reports: forecast by close month (overdue, this month on, later, no date) and open deals by stage, per currency', () => {
+  const st = reportState();
+  const f = reports.forecast(st, { today: '2026-10-29', months: 3 });
+  assert.deepEqual(f.map((r) => [r.key, r.count]), [['overdue', 0], ['2026-10', 1], ['2026-11', 1], ['2026-12', 0], ['later', 1], ['none', 1]]);
+  assert.deepEqual(f[2], { key: '2026-11', label: 'Nov 2026', count: 1, value: ['£2k'], weighted: ['£800'] }, 'its own 40%');
+  assert.deepEqual(reports.forecast(st, { today: '2026-11-15', months: 1 }).slice(0, 2).map((r) => [r.key, r.count]), [['overdue', 1], ['2026-11', 1]]);
+  assert.deepEqual(reports.byStage(st).map((r) => [r.stage, r.count, r.value.join()]), [['Interested', 1, '$1k'], ['Meeting booked', 0, '$0'],
+    ['Intro held', 0, '$0'], ['Demo held', 1, '£2k'], ['Proposal sent', 1, '$3k'], ['Contract sent', 1, '$5k']], 'lost and won deals aren’t open');
+});
+
+await check('reports: won and lost by when they closed (history, else stage time), the win rate and lost reasons', () => {
+  const st = reportState();
+  const wl = reports.winLoss(st, { now: NOW, days: 90 });
+  assert.deepEqual([wl.won.count, wl.won.value, wl.lost.count, wl.rate], [1, ['$4k'], 1, 50], 'd7 lost too long ago');
+  assert.deepEqual(wl.reasons, [{ reason: 'Timing', count: 1 }]);
+  const year = reports.winLoss(st, { now: NOW, days: 365 * 3 });
+  assert.deepEqual([year.lost.count, year.reasons], [2, [{ reason: 'No reason given', count: 1 }, { reason: 'Timing', count: 1 }]]);
+  assert.equal(reports.winLoss({ deals: [] }, { now: NOW }).rate, null);
+});
+
+await check('reports: average days in each stage from the history (an open deal’s current stay runs to now) and stage-to-stage conversion', () => {
+  const st = reportState();
+  const t = Object.fromEntries(reports.timeInStage(st, { now: NOW }).map((x) => [x.stage, [x.avgDays, x.stays]]));
+  // Interested: d2 4 days, d6 2 days, d5 15 days → 7; Intro held: d2 6 days; Demo held: d2 18 days to now, d6 47 days → 32.5
+  assert.deepEqual([t.Interested, t['Intro held'], t['Demo held'], t['Meeting booked']], [[7, 3], [6, 1], [32.5, 2], [null, 0]]);
+  const c = Object.fromEntries(reports.conversion(st).map((x) => [x.stage, [x.reached, x.onward, x.rate]]));
+  // Reached (furthest): d1 Interested, d2 Demo held, d3 Contract sent, d4 Proposal sent, d5 Interested, d6 Won; d7 (Lost,
+  // no history) has no known stage and isn't counted.
+  assert.deepEqual(c.Interested, [6, 4, 67]);
+  assert.deepEqual(c['Demo held'], [4, 3, 75]);
+  assert.deepEqual(c['Contract sent'], [2, 1, 50], 'Won is past the last stage');
+});
+
+await check('reports: deals by sector (the deal’s, else its account’s) or by country (its account’s), biggest first, Not set last among ties', () => {
+  const st = reportState();
+  assert.deepEqual(reports.breakdown(st, 'country').map((g) => [g.label, g.open, g.won, g.lost]), [['Australia', 2, 1, 1], ['New Zealand', 2, 0, 1]]);
+  assert.deepEqual(reports.breakdown(st, 'sector').map((g) => [g.label, g.open, g.won, g.lost]), [['Councils', 1, 1, 1], ['Not set', 2, 0, 1], ['Housing', 1, 0, 0]]);
+});
+
 await check('format: money in a deal’s currency, and totals per currency (AUD first, never converted)', () => {
   assert.deepEqual([format.compactIn(250000), format.compactIn(40000, 'GBP'), format.compactIn(1200000, 'NZD'), format.compactIn(5000, 'AED'), format.compactIn(0, 'USD')],
     ['$250k', '£40k', 'NZ$1.2M', 'AED 5k', 'US$0']);
@@ -3065,6 +3207,46 @@ await check('import: deal stages map to 0014’s (won, signed, contract or clien
     'Demo held', 'Proposal sent', 'Proposal sent', 'Proposal sent', 'Contract sent', 'Contract sent', 'Contract sent', 'Contract sent',
     'Contract sent', 'Lost', 'Lost', 'Lost', 'Interested', 'Interested', 'Interested', 'Interested', 'Interested', 'Interested', 'Interested',
     'Demo held']);
+});
+
+await check('import: accounts and CRM contacts (0014) — HubSpot and Apollo headers map; type, lifecycle, role and time zone read from their wording', async () => {
+  const { autoMap, normalise, withFullName } = await import('../src/lib/importers.js');
+  const users = [{ id: 'u1', name: 'Dale Example', email: 'dale@example.com' }];
+  const headers = ['Company name', 'Type', 'Lifecycle Stage', 'Industry', 'Country/Region', 'State/Region', 'Website URL', 'Number of Employees', 'Company owner'];
+  const map = autoMap(headers, 'accounts');
+  assert.deepEqual([map.name, map.kind, map.lifecycle, map.sector, map.country, map.region, map.website, map.size, map.contact], [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  const acc = normalise('accounts', ['Example Shire', 'Reseller', 'Marketing Qualified Lead (MQL)', 'Government', 'Australia', 'QLD', 'shire.example.com', '300', 'Dale Example'], map, { users, me: 'u-me' });
+  assert.deepEqual(acc, {
+    name: 'Example Shire', kind: 'partner', lifecycle: 'engaged', sector: 'Government', country: 'Australia', region: 'QLD', timezone: '',
+    website: 'shire.example.com', size: '300', contact: 'u1', guardrails: '', notes: '',
+  });
+  const life = (v) => normalise('accounts', ['X', '', v], { name: 0, kind: 1, lifecycle: 2 }, { users, me: 'u-me' }).lifecycle;
+  assert.deepEqual(['Customer', 'Opportunity', 'Lead', 'Unsubscribed', 'Nurture', 'Not now', 'Watching for RFP', 'Meeting booked', 'Attempted to contact', 'engaged', ''].map(life),
+    ['customer', 'opportunity', 'new', 'suppressed', 'nurture', 'not_now', 'rfp', 'meeting', 'contacted', 'engaged', 'new']);
+  const kind = (v) => normalise('accounts', ['X', v], { name: 0, kind: 1 }, { users, me: 'u-me' }).kind;
+  assert.deepEqual(['Partner', 'Customer', 'Vendor', 'Prospect', ''].map(kind), ['partner', 'customer', 'supplier', 'prospect', 'prospect']);
+  // Apollo's people export: first and last name, title, company, email, phones, LinkedIn.
+  const csv = withFullName({ headers: ['First Name', 'Last Name', 'Title', 'Company', 'Email', 'Mobile Phone', 'Person Linkedin Url', 'Time zone'], rows: [
+    ['Jo', 'Example', 'Asset Manager', 'Example Shire', 'Jo@Example.com', '+61 400 000 000', 'https://www.linkedin.com/in/jo', 'Australia/Brisbane'],
+    ['Lee', 'Example', 'CFO', 'Example Shire', '', '', '', 'Mars/Olympus'],
+  ] });
+  const pmap = autoMap(csv.headers, 'people');
+  const recs = csv.rows.map((r) => normalise('people', r, pmap, { users, me: 'u-me' }));
+  assert.deepEqual(recs[0], {
+    name: 'Jo Example', account: 'Example Shire', title: 'Asset Manager', email: 'jo@example.com', phone: '+61 400 000 000',
+    linkedin: 'https://www.linkedin.com/in/jo', role: '', timezone: 'Australia/Brisbane', contact: 'u-me',
+  });
+  assert.equal(recs[1].timezone, '', 'not a real time zone');
+  const role = (v) => normalise('people', ['X', 'A', v], { name: 0, account: 1, role: 2 }, { users, me: 'u-me' }).role;
+  assert.deepEqual(['Decision maker', 'Economic buyer', 'Champion', 'Technical evaluator', 'Gatekeeper', 'EA', 'End user', 'Friend', ''].map(role),
+    ['decision_maker', 'decision_maker', 'champion', 'influencer', 'gatekeeper', 'assistant', 'user', 'other', '']);
+  // Deals: a separate Company column is the account; currency and close date.
+  const dmap = autoMap(['Deal name', 'Company', 'Amount', 'Currency', 'Close date'], 'deals');
+  assert.deepEqual([dmap.name, dmap.account, dmap.value, dmap.currency, dmap.closeOn], [0, 1, 2, 3, 4]);
+  const deal = normalise('deals', ['Asset plan', 'Example Shire', '£40,000', 'gbp', '2026-12-01'], dmap, { users, me: 'u-me' });
+  assert.deepEqual([deal.account, deal.currency, deal.closeOn, deal.value], ['Example Shire', 'GBP', '2026-12-01', 40000]);
+  assert.equal(normalise('deals', ['X', '', '', 'Doubloons'], dmap, { users, me: 'u-me' }).currency, 'AUD', 'an unknown currency is AUD');
+  assert.equal(autoMap(['Company', 'Amount'], 'deals').account, -1, 'one Company column is the name, not also the account');
 });
 
 await check('import: contact statuses as written, Meeting booked included (negated wording is not a booking)', async () => {
@@ -3846,12 +4028,12 @@ if (createSeed && migrate) {
     s.mailboxes.filter((m) => m.owner).forEach((m) => assert.ok(s.users.some((u) => u.id === m.owner), m.owner));
   });
 
-  await check('pipeline demo: every deal on a stage, something in every column, one Lost; Westbay made a client; older stage names renamed once', async () => {
+  await check('pipeline demo: every deal on a stage, something in every column, three Lost; Westbay made a client; older stage names renamed once', async () => {
     const { ALL_DEAL_STAGES, DEAL_STAGES } = await import('../src/data/boards.js');
     const s = createSeed();
     assert.ok(s.deals.every((d) => ALL_DEAL_STAGES.includes(d.stage)), JSON.stringify(s.deals.map((d) => d.stage)));
     assert.ok(DEAL_STAGES.every((st) => s.deals.some((d) => d.stage === st && !d.clientId)), 'something in every column');
-    assert.equal(s.deals.filter((d) => d.stage === 'Lost').length, 1);
+    assert.equal(s.deals.filter((d) => d.stage === 'Lost').length, 3);
     const westbay = s.deals.find((d) => d.name === 'Westbay Council');
     assert.ok(westbay.clientId && s.clients.some((c) => c.id === westbay.clientId), 'made a client: off the board');
     assert.equal(s.deals.filter((d) => d.clientId).length, 1);

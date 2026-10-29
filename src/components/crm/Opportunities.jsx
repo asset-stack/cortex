@@ -1,13 +1,13 @@
 // Pipeline → Opportunities (docs/PHASE2.md §22): open deals on a board by stage (drag, or the stage select, to move one)
-// or as a table, with search, owner and quick filters (waiting on us, stalled, lost), and the numbers: open deals, the
+// or as a table, with search, owner and quick filters (needs me, waiting on us, stalled, lost), and the numbers: open deals, the
 // pipeline and its weighted value per currency, and deals made clients.
 import { useState } from 'react';
 import { ArrowRight, Columns3, Pencil, Rows3 } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { DEAL_STAGES, LOST, STALE_DAYS, dealProbability, dealStage, daysInStage } from '@/data/boards';
-import { accountOf, dealPeople, isOpenDeal } from '@/lib/accounts';
+import { accountOf, dealPeople, isOpenDeal, needsYou } from '@/lib/accounts';
 import { Avatar, KpiRow, SearchField, Segmented } from '@/components/ui';
-import { compactIn, shortDate, totalsIn, totalsList } from '@/lib/format';
+import { compactIn, localYmd, shortDate, totalsIn, totalsList } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { DaysInStage, OpenLink, PRIORITY_BG, Pill, WaitingPill } from './bits';
 
@@ -15,6 +15,7 @@ const LAST_STAGE = DEAL_STAGES[DEAL_STAGES.length - 1]; // Contract sent: Make c
 const VIEWS = [{ id: 'board', label: 'Board', icon: Columns3 }, { id: 'table', label: 'Table', icon: Rows3 }];
 const QUICK = [
   { id: '', label: 'All open' },
+  { id: 'me', label: 'Needs me' },
   { id: 'us', label: 'Waiting on us' },
   { id: 'stalled', label: `Stalled ${STALE_DAYS}d+` },
   { id: 'lost', label: 'Lost' },
@@ -34,7 +35,9 @@ export default function Opportunities({ editable, canConvert, onOpen, onEdit, on
   const matches = (d) => (!q.trim() || dealText(state, d).includes(q.trim().toLowerCase())) && (!owner || d.contact === owner);
   const open = state.deals.filter((d) => isOpenDeal(d) && matches(d));
   const lost = state.deals.filter((d) => !d.clientId && dealStage(d) === LOST && matches(d));
+  const mine = new Set(needsYou(state, state.me, { today: localYmd() }).deals.map((r) => r.deal.id));
   const shown = quick === 'lost' ? lost
+    : quick === 'me' ? open.filter((d) => mine.has(d.id))
     : quick === 'us' ? open.filter((d) => d.waitingOn === 'us')
       : quick === 'stalled' ? open.filter((d) => (daysInStage(d) ?? 0) >= STALE_DAYS) : open;
   const owners = [...new Set(state.deals.filter((d) => !d.clientId).map((d) => d.contact).filter(Boolean))];
@@ -117,7 +120,7 @@ export default function Opportunities({ editable, canConvert, onOpen, onEdit, on
         {QUICK.map((x) => (
           <button key={x.id} type="button" aria-pressed={quick === x.id} onClick={() => setQuick(x.id)}
             className={cn('rounded-full px-3 h-8 text-[12.5px]', quick === x.id ? 'chip-on font-semibold' : 'chip dim')}>
-            {x.label}{x.id === 'lost' ? ` ${lost.length}` : ''}
+            {x.label}{x.id === 'lost' ? ` ${lost.length}` : x.id === 'me' ? ` ${mine.size}` : ''}
           </button>
         ))}
       </div>

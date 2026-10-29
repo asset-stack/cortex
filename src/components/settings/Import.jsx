@@ -10,8 +10,12 @@ import { autoMap, fieldsFor, normalise, withFullName } from '@/lib/importers';
 import { compactMoney, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
-const KINDS = [{ id: 'clients', label: 'Clients' }, { id: 'contacts', label: 'Contacts' }, { id: 'deals', label: 'Deals' }, { id: 'tasks', label: 'Board tasks' }];
-const OPEN_ROUTE = { clients: 'clients', contacts: 'outreach', deals: 'pipeline' };
+// Accounts and CRM contacts arrive with 0014 (crm).
+const KINDS = [
+  { id: 'clients', label: 'Clients' }, { id: 'accounts', label: 'Accounts', crm: true }, { id: 'people', label: 'CRM contacts', crm: true },
+  { id: 'deals', label: 'Deals' }, { id: 'contacts', label: 'Outreach contacts' }, { id: 'tasks', label: 'Board tasks' },
+];
+const OPEN_ROUTE = { clients: 'clients', contacts: 'outreach', deals: 'pipeline', accounts: 'pipeline?tab=accounts', people: 'pipeline?tab=people' };
 const NEW_GROUP = '__new';
 
 // A preview cell: tasks keep board fields under `values`; a client's key contact, email and phone are its first
@@ -29,7 +33,8 @@ function cellText(kind, rec, f, users) {
 
 /** CSV import of clients, contacts, deals or board tasks: pick a file, check the column mapping, preview, import. */
 export default function Import() {
-  const { state, actions } = useStore();
+  const { state, actions, missing } = useStore();
+  const kinds = KINDS.filter((k) => !k.crm || !missing.includes('accounts'));
   const users = useUsers();
   const [kind, setKind] = useState('clients');
   const access = useAccess();
@@ -98,7 +103,7 @@ export default function Import() {
   return (
     <div className="flex flex-col gap-5">
       <div className="rounded-[26px] glass glass-rim p-5 sm:p-6">
-        <Segmented label="Import type" value={kind} onChange={chooseKind} options={KINDS} />
+        <Segmented label="Import type" value={kind} onChange={chooseKind} options={kinds} />
         {kind === 'tasks' && (
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Board</span>
@@ -186,7 +191,7 @@ export default function Import() {
         {result && (
           <div className="flex flex-wrap items-center gap-3 rounded-[22px] glass px-5 py-3.5">
             <span className="font-semibold">
-              Imported {result.added}, skipped {result.skipped} duplicate{result.skipped === 1 ? '' : 's'}
+              Imported {result.added}, skipped {result.skipped}{result.kind === 'people' ? '' : ` duplicate${result.skipped === 1 ? '' : 's'}`}
               {result.blank > 0 && `, ${result.blank} without a name`}
             </span>
             {result.added > 0 && (

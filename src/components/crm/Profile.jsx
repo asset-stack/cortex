@@ -1,7 +1,7 @@
 // The CRM profile's sections (docs/PHASE2.md §19), shared by a deal's profile (Pipeline) and a client's (Clients):
 // Next steps (board tasks linked to it), Timeline (notes and meetings) and Links. `target`: { dealId } or { clientId }.
 import { useEffect, useId, useRef, useState } from 'react';
-import { CalendarDays, ExternalLink, FileText, Link2, Pencil, Plus, StickyNote, Trash2 } from 'lucide-react';
+import { CalendarDays, ExternalLink, FileText, Link2, MoveRight, Pencil, Plus, StickyNote, Trash2 } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { PRIORITY } from '@/data/boards';
 import { Avatar, AvatarStack } from '@/components/ui';
@@ -138,6 +138,18 @@ function EntryForm({ initial, onSave, onCancel }) {
 function Entry({ e, onEdit, onRemoved }) {
   const { state, actions } = useStore();
   const users = useUsers();
+  if (e.kind === 'stage') {
+    return (
+      <li className="flex items-center gap-2 rounded-2xl px-3 py-2 text-[12.5px] dim">
+        <MoveRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 flex-1 break-words">
+          {e.deal && <span className="font-semibold text-white">{e.deal}: </span>}
+          {e.from} → <span className="font-semibold text-white">{e.to}</span>
+        </span>
+        <span className="shrink-0 dimmer">{users[e.user]?.name?.split(' ')[0] || ''}{users[e.user] ? ' · ' : ''}{ago(e.createdAt)}</span>
+      </li>
+    );
+  }
   const own = !e.legacy && canChangeEntry(state, e);
   const notes = e.kind === 'meeting' && safeUrl(e.url);
   const Icon = e.kind === 'meeting' ? CalendarDays : StickyNote;

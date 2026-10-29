@@ -100,7 +100,18 @@ export function timelineOf(state, { dealId = '', clientId = '', accountId = '', 
     id: `note:${n.id}`, kind: 'note', body: n.text, user: n.user, createdAt: n.ts, dealId: '', clientId: client.id, title: '', url: '',
     label: '', happenedOn: '', attendees: '', legacy: true,
   })) : [];
-  return [...entries, ...legacy].sort(newestFirst);
+  return [...entries, ...legacy, ...stageMoves(state, { dealId, accountId, contactId, clientId })].sort(newestFirst);
+}
+
+// A deal's stage moves (0015's history; not the row for its being added), as read-only timeline items: on a deal's
+// timeline, and on its account's.
+function stageMoves(state, { dealId = '', accountId = '', contactId = '', clientId = '' }) {
+  if (contactId || clientId || !(dealId || accountId)) return [];
+  const deals = new Map((state?.deals || []).filter((d) => (dealId ? d.id === dealId : d.accountId === accountId)).map((d) => [d.id, d]));
+  return (state?.dealHistory || []).filter((h) => h.from && deals.has(h.dealId)).map((h) => ({
+    id: `stage:${h.id}`, kind: 'stage', from: h.from, to: h.to, deal: dealId ? '' : deals.get(h.dealId).name, dealId: h.dealId,
+    user: h.by, createdAt: h.at, title: '', body: '', url: '', label: '', happenedOn: '', attendees: '', legacy: true,
+  }));
 }
 
 /** A deal's or client's links, newest first; a client's also lists its Demo and Platform fields (marked `fixed`, edited

@@ -1,7 +1,7 @@
 // The CRM (docs/PHASE2.md §22, 0014): accounts (organisations), the people at them (state.crmContacts) and the deals on
 // them. Accounts and contacts follow the Pipeline access level, as deals do. Pure, with relative imports, so
 // scripts/test-sync.mjs runs it in Node.
-import { dealStage, LOST } from '../data/boards.js';
+import { LOST, STALE_DAYS, daysInStage, dealStage } from '../data/boards.js';
 import { safeUrl } from './format.js';
 
 export const ACCOUNT_KINDS = { prospect: 'Prospect', customer: 'Customer', partner: 'Partner', supplier: 'Supplier' };
@@ -108,3 +108,50 @@ export function lifecycleAfter(current, event) {
 export const accountText = (a) => [a.name, a.sector, a.country, a.region, a.domain].join(' ').toLowerCase();
 /** Search text for a contact: name, title, email, phone and the account's name. */
 export const personText = (state, c) => [c.name, c.title, c.email, c.phone, accountById(state, c.accountId)?.name].join(' ').toLowerCase();
+
+const REASON_ORDER = ['Overdue', 'Waiting on you', 'Stalled', 'No next step'];
+/** What needs someone in the Pipeline today (Dashboard → My deals; Opportunities → Needs me): their open deals that are
+ *  past their expected close, waiting on us, stalled (STALE_DAYS or more in their stage) or have no next step, most
+ *  pressing first; and their accounts set aside (nurture, an RFP, not now) whose revisit date has come.
+ *  → { deals: [{ deal, reasons }], revisits: [account] } */
+export function needsYou(state, userId, { today, now = Date.now() } = {}) {
+  const deals = (state?.deals || []).filter((d) => isOpenDeal(d) && d.contact === userId).map((deal) => {
+    const reasons = [];
+    if (deal.closeOn && today && deal.closeOn < today) reasons.push('Overdue');
+    if (deal.waitingOn === 'us') reasons.push('Waiting on you');
+    if ((daysInStage(deal, now) ?? 0) >= STALE_DAYS) reasons.push('Stalled');
+    if (!String(deal.next || '').trim()) reasons.push('No next step');
+    return { deal, reasons };
+  }).filter((r) => r.reasons.length)
+    .sort((a, b) => REASON_ORDER.indexOf(a.reasons[0]) - REASON_ORDER.indexOf(b.reasons[0]) || b.reasons.length - a.reasons.length
+      || String(a.deal.name).localeCompare(String(b.deal.name)));
+  const revisits = (state?.accounts || [])
+    .filter((a) => a.owner === userId && ['nurture', 'rfp', 'not_now'].includes(a.lifecycle) && a.revisitOn && today && a.revisitOn <= today)
+    .sort((a, b) => a.revisitOn.localeCompare(b.revisitOn));
+  return { deals, revisits };
+}
+
+// A name as duplicates are found by: lower case, no punctuation or a leading "the", without a company suffix.
+const SUFFIX = /\s+(pty\.?\s*ltd|pty|ltd|limited|inc|llc|plc|co|corp|corporation|group|gmbh)$/;
+export const nameKey = (s) => String(s ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
+  .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/^the\s+/, '').replace(SUFFIX, '').trim();
+
+/** Accounts that look like the same organisation as `fields` (same name, as nameKey() reads it, or the same domain, from
+ *  its domain or website), other than `self`. */
+export function similarAccounts(state, fields = {}, self = '') {
+  const key = nameKey(fields.name);
+  const domain = domainOf(fields.domain) || domainOf(fields.website);
+  if (!key && !domain) return [];
+  return (state?.accounts || []).filter((a) => a.id !== self
+    && ((key && nameKey(a.name) === key) || (domain && (a.domain === domain || domainOf(a.website) === domain))));
+}
+
+/** Contacts that look like the same person as `fields` (the same email anywhere, or the same name at the same account),
+ *  other than `self`. */
+export function similarPeople(state, fields = {}, self = '') {
+  const email = String(fields.email ?? '').trim().toLowerCase();
+  const name = String(fields.name ?? '').trim().toLowerCase();
+  return (state?.crmContacts || []).filter((c) => c.id !== self
+    && ((email && String(c.email || '').toLowerCase() === email)
+      || (!email && name && fields.accountId && c.accountId === fields.accountId && String(c.name || '').trim().toLowerCase() === name)));
+}
