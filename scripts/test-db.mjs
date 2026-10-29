@@ -39,6 +39,7 @@ const migration12 = await readFile(new URL('supabase/migrations/0012_crm_profile
 const migration13 = await readFile(new URL('supabase/migrations/0013_task_emails.sql', root), 'utf8');
 const migration14 = await readFile(new URL('supabase/migrations/0014_crm_accounts.sql', root), 'utf8');
 const migration15 = await readFile(new URL('supabase/migrations/0015_deal_history.sql', root), 'utf8');
+const migration16 = await readFile(new URL('supabase/migrations/0016_leads.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -5207,7 +5208,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
   // a normal save. Boards are new team boards here (personal pages: below), and so are Outreach's (who: below).
 
   await as(david);
-  const [grp, grp2, itm, cli, inv, pln, con, chn, rtn, stm, teamP, teamM, mbx, mbx2, dl, acct, ppl] = Array.from({ length: 17 }, uid);
+  const [grp, grp2, itm, cli, inv, pln, con, chn, rtn, stm, teamP, teamM, mbx, mbx2, dl, acct, ppl, lls] = Array.from({ length: 18 }, uid);
   const flat = flatten({
     me: david,
     users: [],
@@ -5257,6 +5258,15 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
       linkedin: 'https://www.linkedin.com/in/example/', timezone: 'Australia/Brisbane', role: 'champion', status: 'active', owner: alice,
       createdAt: '2026-10-02T00:00:00.000Z',
     }],
+    // Leads (0016): a list, a lead converted into the account and person above, a suppression.
+    leadLists: [{ id: lls, name: 'Councils', source: 'apollo', notes: 'Apollo search', createdBy: david, createdAt: '2026-10-02T00:00:00.000Z' }],
+    leads: [{
+      id: uid(), listId: lls, name: 'Pat', title: 'Asset Manager', email: 'pat@example.com', phone: '+61 7 0000 0000',
+      linkedin: 'https://www.linkedin.com/in/example/', company: 'Example Client', domain: 'client.example.com', sector: 'Utilities',
+      country: 'Australia', region: 'QLD', timezone: 'Australia/Brisbane', size: '40 sites', status: 'converted', accountId: acct, personId: ppl,
+      owner: alice, note: 'Met at the expo', createdAt: '2026-10-03T00:00:00.000Z',
+    }],
+    suppressions: [{ id: uid(), kind: 'domain', value: 'example.net', reason: 'Asked us to stop', createdBy: david, createdAt: '2026-10-01T00:00:00.000Z' }],
     // A client's meeting (from its deal) and link (0012).
     crmEntries: [
       { id: uid(), dealId: dl, clientId: cli, kind: 'meeting', title: 'Kick-off', body: 'Agreed the pilot',
@@ -6103,6 +6113,83 @@ async function phase15(ctx) {
   return ctx;
 }
 
+async function phase16(ctx) {
+  const { alice, boss, hello, carol } = ctx;
+
+  // 122. Runs on top of 0015, whole, again, and statement by statement; ends with its done row; RLS on and realtime for
+  // all three tables.
+  await as(null);
+  const run = async () => db.exec(migration16).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const first = await run();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration16, { continueOnError: true });
+  const body = migration16.replace(/--.*$/gm, '').trim();
+  const tables = ['lead_lists', 'leads', 'suppressions'];
+  const published = (await one(`select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'
+    and tablename = any($1::text[])`, [tables])).n;
+  const rls = (await one(`select count(*)::int as n from pg_class where relrowsecurity and relname = any($1::text[])`, [tables])).n;
+  check('122. 0016 runs on top of 0015, re-runs whole and statement by statement, never mentions module_level, ends with its done row; RLS on and realtime for its three tables',
+    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0016 applied' && Array.isArray(second) && !splitErrors.length
+      && /commit;\s*select 'Cortex 0016 applied' as done;$/i.test(body) && !migration16.includes('module_level') && published === 3 && rls === 3,
+    { first: Array.isArray(first) ? 'ok' : first, second: Array.isArray(second) ? 'ok' : second, splitErrors, published, rls });
+  if (!Array.isArray(first)) return null;
+
+  // Outreach access for this phase: alice view, hello none (an admin, boss, edits).
+  await as(null);
+  await db.query(`insert into module_access (user_id, module, level) values ($1, 'outreach', 'view'), ($2, 'outreach', 'none')
+    on conflict (user_id, module) do update set level = excluded.level`, [alice, hello]);
+
+  // 123. Outreach Edit writes lists, leads and suppressions (who added a list is whoever did); a lead goes with its list;
+  // a suppression is stored trimmed and lower case once per kind; a converted lead keeps its account and contact, cleared
+  // when they go.
+  await as(boss);
+  const list = (await one("insert into lead_lists (name, created_by) values ('Example councils', $1) returning id, created_by", [alice]));
+  const lead = (await one(`insert into leads (list_id, name, email, company, domain, status)
+    values ($1, 'Jo Example', 'jo@example.com', 'Example Shire', 'example.com', 'new') returning id`, [list.id])).id;
+  const sup = await affected("insert into suppressions (kind, value, reason) values ('domain', 'example.net', 'Asked not to')");
+  const dupSup = await error("insert into suppressions (kind, value) values ('domain', 'example.net')");
+  const upper = await error("insert into suppressions (kind, value) values ('email', 'Pat@Example.com')");
+  const badStatus = await error("update leads set status = 'won' where id = $1", [lead]);
+  const acct = (await one("insert into accounts (name) values ('Example Shire') returning id")).id;
+  const person = (await one("insert into crm_contacts (account_id, name) values ($1, 'Jo Example') returning id", [acct])).id;
+  await db.query("update leads set status = 'converted', account_id = $2, person_id = $3 where id = $1", [lead, acct, person]);
+  await db.query('delete from accounts where id = $1', [acct]);
+  const cleared = await one('select status, account_id, person_id from leads where id = $1', [lead]);
+  check('123. Outreach Edit writes lists, leads and suppressions (a list is added by whoever added it); one suppression per value, stored lower case; a lead keeps its status but loses a deleted account and contact',
+    list.created_by === boss && sup === 1 && dupSup !== null && upper !== null && badStatus !== null
+      && cleared.status === 'converted' && cleared.account_id === null && cleared.person_id === null,
+    { list, sup, dupSup, upper, badStatus, cleared });
+
+  // 124. Outreach View reads but never writes; Outreach None and an inactive profile see nothing.
+  await as(alice);
+  const viewLists = (await rows('select id from lead_lists')).length;
+  const viewLeads = (await rows('select id from leads')).length;
+  const viewSup = (await rows('select id from suppressions')).length;
+  const viewInsert = await error("insert into leads (list_id, name) values ($1, 'Nope')", [list.id]);
+  const viewUpdate = await affected("update leads set note = 'x' where id = $1", [lead]);
+  const viewSupInsert = await error("insert into suppressions (kind, value) values ('email', 'no@example.com')");
+  await as(hello);
+  const noneSees = (await rows('select id from leads')).length + (await rows('select id from lead_lists')).length + (await rows('select id from suppressions')).length;
+  await as(carol);
+  const inactiveSees = (await rows('select id from leads')).length + (await rows('select id from suppressions')).length;
+  check('124. Outreach View reads lists, leads and the suppress list but changes none; Outreach None and an inactive profile see none',
+    viewLists >= 1 && viewLeads >= 1 && viewSup >= 1 && viewInsert !== null && viewUpdate === 0 && viewSupInsert !== null
+      && noneSees === 0 && inactiveSees === 0,
+    { viewLists, viewLeads, viewSup, viewInsert, viewUpdate, viewSupInsert, noneSees, inactiveSees });
+
+  // 125. Deleting a list deletes its leads.
+  await as(boss);
+  await db.query('delete from lead_lists where id = $1', [list.id]);
+  const gone = (await one('select count(*)::int as n from leads where id = $1', [lead])).n;
+  await db.query("delete from suppressions where value = 'example.net'");
+  check('125. deleting a list deletes its leads', gone === 0, { gone });
+
+  await as(null);
+  await db.query("delete from module_access where module = 'outreach' and user_id = any($1::uuid[])", [[alice, hello]]);
+  return ctx;
+}
+
 async function runSplit(dbx, sql, { continueOnError = false, skip = () => false } = {}) {
   const errors = [];
   for (const st of splitSql(sql)) {
@@ -6223,7 +6310,8 @@ try {
   const ctx13 = ctx12 && await phase13(ctx12);
   const ctx14 = ctx13 && await phase14(ctx13);
   const ctx15 = ctx14 && await phase15(ctx14);
-  if (ctx15) await syncWriteCheck(ctx15);
+  const ctx16 = ctx15 && await phase16(ctx15);
+  if (ctx16) await syncWriteCheck(ctx16);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);

@@ -10,12 +10,13 @@ import { autoMap, fieldsFor, normalise, withFullName } from '@/lib/importers';
 import { compactMoney, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
-// Accounts and CRM contacts arrive with 0014 (crm).
+// Accounts and CRM contacts arrive with 0014 (needs: accounts), leads with 0016 (needs: leads).
 const KINDS = [
-  { id: 'clients', label: 'Clients' }, { id: 'accounts', label: 'Accounts', crm: true }, { id: 'people', label: 'CRM contacts', crm: true },
-  { id: 'deals', label: 'Deals' }, { id: 'contacts', label: 'Outreach contacts' }, { id: 'tasks', label: 'Board tasks' },
+  { id: 'clients', label: 'Clients' }, { id: 'accounts', label: 'Accounts', needs: 'accounts' }, { id: 'people', label: 'CRM contacts', needs: 'accounts' },
+  { id: 'deals', label: 'Deals' }, { id: 'contacts', label: 'Outreach contacts' }, { id: 'leads', label: 'Leads', needs: 'leads' },
+  { id: 'tasks', label: 'Board tasks' },
 ];
-const OPEN_ROUTE = { clients: 'clients', contacts: 'outreach', deals: 'pipeline', accounts: 'pipeline?tab=accounts', people: 'pipeline?tab=people' };
+const OPEN_ROUTE = { clients: 'clients', contacts: 'outreach', deals: 'pipeline', accounts: 'pipeline?tab=accounts', people: 'pipeline?tab=people', leads: 'leads' };
 const NEW_GROUP = '__new';
 
 // A preview cell: tasks keep board fields under `values`; a client's key contact, email and phone are its first
@@ -31,12 +32,13 @@ function cellText(kind, rec, f, users) {
   return v || '';
 }
 
-/** CSV import of clients, contacts, deals or board tasks: pick a file, check the column mapping, preview, import. */
-export default function Import() {
+/** CSV import of clients, contacts, deals, leads or board tasks: pick a file, check the column mapping, preview, import.
+ *  `only` fixes the kind (Leads opens it for leads, onto `list`). */
+export default function Import({ only = '', list = '', onImported }) {
   const { state, actions, missing } = useStore();
-  const kinds = KINDS.filter((k) => !k.crm || !missing.includes('accounts'));
+  const kinds = KINDS.filter((k) => !k.needs || !missing.includes(k.needs));
   const users = useUsers();
-  const [kind, setKind] = useState('clients');
+  const [kind, setKind] = useState(only || 'clients');
   const access = useAccess();
   const targets = state.boards.filter((b) => access.canEditBoard(b)); // boards tasks can be imported into
   const [picked, setPicked] = useState('');
@@ -45,6 +47,11 @@ export default function Import() {
   const board = (targets.find((b) => b.id === picked) || fallback)?.id || '';
   const module = findBoard(state, board)?.module || 'projects'; // the board's columns are its module's
   const [group, setGroup] = useState('');
+  // Leads go onto a list: one there is, or a new one named here.
+  const lists = state.leadLists || [];
+  const [leadList, setLeadList] = useState(list);
+  const listId = leadList === NEW_GROUP || !lists.length ? NEW_GROUP : lists.some((l) => l.id === leadList) ? leadList : lists[0].id;
+  const [listName, setListName] = useState('');
   const [groupName, setGroupName] = useState('');
   const [csv, setCsv] = useState(null); // { name, headers, rows }
   const [mapping, setMapping] = useState({});
@@ -87,15 +94,19 @@ export default function Import() {
     reader.readAsText(file);
   };
 
-  const needsGroupName = kind === 'tasks' && groupId === NEW_GROUP && !groupName.trim();
+  const needsGroupName = (kind === 'tasks' && groupId === NEW_GROUP && !groupName.trim())
+    || (kind === 'leads' && listId === NEW_GROUP && !listName.trim());
   const ready = !!csv && mapping.name >= 0 && records.length > 0 && !needsGroupName;
   const run = () => {
     if (!ready) return;
     const options = kind === 'tasks'
       ? { board, groupId: groupId === NEW_GROUP ? '' : groupId, groupName: groupId === NEW_GROUP ? groupName.trim() : '' }
       : {};
-    const res = actions.importRecords(kind, records, options) || {};
-    setResult({ kind, board, added: res.added ?? 0, skipped: res.skipped ?? 0, blank });
+    let target = '';
+    if (kind === 'leads') target = listId === NEW_GROUP ? actions.addLeadList({ name: listName.trim() }) : listId;
+    const res = (kind === 'leads' ? target && actions.importLeads(target, records) : actions.importRecords(kind, records, options)) || {};
+    setResult({ kind, board, list: target, added: res.added ?? 0, skipped: res.skipped ?? 0, blank });
+    if (kind === 'leads' && target) { setLeadList(target); setListName(''); onImported?.(target); }
     setCsv(null); setMapping({}); setGroupName('');
     if (groupId === NEW_GROUP) setGroup('');
   };
@@ -103,7 +114,22 @@ export default function Import() {
   return (
     <div className="flex flex-col gap-5">
       <div className="rounded-[26px] glass glass-rim p-5 sm:p-6">
-        <Segmented label="Import type" value={kind} onChange={chooseKind} options={kinds} />
+        {!only && <Segmented label="Import type" value={kind} onChange={chooseKind} options={kinds} />}
+        {kind === 'leads' && (
+          <div className={cn('grid gap-3 sm:grid-cols-2', !only && 'mt-4')}>
+            <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">List</span>
+              <select className="field" value={listId} onChange={(e) => setLeadList(e.target.value)}>
+                {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                <option value={NEW_GROUP}>New list</option>
+              </select>
+            </label>
+            {listId === NEW_GROUP && (
+              <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">List name</span>
+                <input className="field" value={listName} onChange={(e) => setListName(e.target.value)} />
+              </label>
+            )}
+          </div>
+        )}
         {kind === 'tasks' && (
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Board</span>
@@ -128,7 +154,7 @@ export default function Import() {
             )}
           </div>
         )}
-        <div className="mt-5 flex flex-wrap items-center gap-3">
+        <div className={cn('flex flex-wrap items-center gap-3', (!only || kind === 'leads') && 'mt-5')}>
           <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" tabIndex={-1} aria-hidden="true" onChange={onFile} />
           <button type="button" onClick={() => fileRef.current?.click()} className="inline-flex items-center gap-2 rounded-full chip px-4 h-10 font-semibold">
             <FileUp className="h-4 w-4" />Choose CSV
@@ -194,8 +220,9 @@ export default function Import() {
               Imported {result.added}, skipped {result.skipped}{result.kind === 'people' ? '' : ` duplicate${result.skipped === 1 ? '' : 's'}`}
               {result.blank > 0 && `, ${result.blank} without a name`}
             </span>
-            {result.added > 0 && (
-              <a href={result.kind === 'tasks' ? boardHref(findBoard(state, result.board)) : `#/${OPEN_ROUTE[result.kind]}`} className="ml-auto inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 text-[12.5px] font-semibold">
+            {result.added > 0 && !only && (
+              <a href={result.kind === 'tasks' ? boardHref(findBoard(state, result.board))
+                : result.kind === 'leads' ? `#/leads?list=${result.list}` : `#/${OPEN_ROUTE[result.kind]}`} className="ml-auto inline-flex items-center gap-1.5 rounded-full chip px-3 py-1.5 text-[12.5px] font-semibold">
                 Open<ArrowRight className="h-3.5 w-3.5" />
               </a>
             )}

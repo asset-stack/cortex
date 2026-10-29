@@ -88,6 +88,23 @@ export const FIELDS = {
     field('timezone', 'Time zone', 'text', ['time zone', 'timezone']),
     field('contact', 'Owner', 'user', ['owner', 'contact owner', 'assigned to']),
   ],
+  // Leads (0016): a prospect list from Apollo, LinkedIn or HubSpot (first and last name columns become Full name).
+  leads: [
+    field('name', 'Name', 'text', ['full name', 'name', 'contact name', 'contact', 'person'], NAME),
+    field('title', 'Title', 'text', ['title', 'job title', 'position']),
+    field('email', 'Email', 'text', ['email', 'email address', 'work email', 'business email']),
+    field('company', 'Company', 'text', ['company', 'company name', 'organisation', 'organization', 'account', 'account name', 'employer']),
+    field('phone', 'Phone', 'text', ['phone', 'phone number', 'work direct phone', 'mobile phone', 'mobile', 'first phone', 'direct phone', 'corporate phone', 'telephone']),
+    field('linkedin', 'LinkedIn', 'text', ['person linkedin url', 'linkedin url', 'linkedin', 'linkedin profile', 'profile url']),
+    field('domain', 'Website', 'text', ['website', 'company website', 'domain', 'company domain', 'website url', 'web']),
+    field('sector', 'Sector', 'text', ['industry', 'sector', 'segment', 'vertical']),
+    field('country', 'Country', 'text', ['country', 'company country']),
+    field('region', 'State / region', 'text', ['state', 'region', 'company state', 'province', 'county']),
+    field('timezone', 'Time zone', 'text', ['time zone', 'timezone']),
+    field('size', 'Size', 'text', ['employees', 'number of employees', 'company size', 'size', 'headcount']),
+    field('contact', 'Owner', 'user', ['owner', 'contact owner', 'lead owner', 'assigned to']),
+    field('notes', 'Note', 'text', NOTES),
+  ],
   tasks: [
     field('name', 'Name', 'text', ['name', 'task', 'title', 'task name', 'item'], NAME),
     field('people', 'People', 'users', ['people', 'owner', 'owners', 'assignee', 'assignees', 'assigned to', 'person', 'responsible', 'team', 'members', 'contact']),
@@ -479,6 +496,12 @@ export function normalise(kind, row, mapping, { users = [], me = '', board, now 
       return {
         name, account: get('account').replace(/\s+/g, ' '), title: get('title'), email: emailOf(get('email')), phone: get('phone'),
         linkedin: get('linkedin'), role: roleOf(get('role')), timezone: zoneOf(get('timezone')), contact: owner('contact') || me,
+      };
+    case 'leads':
+      return {
+        name, title: get('title'), email: emailOf(get('email')), company: get('company').replace(/\s+/g, ' '), phone: get('phone'),
+        linkedin: get('linkedin'), domain: get('domain'), sector: get('sector'), country: get('country'), region: get('region'),
+        timezone: zoneOf(get('timezone')), size: get('size'), owner: owner('contact') || me, note: get('notes'),
       };
     case 'tasks': {
       const status = taskStatus(get('status'));

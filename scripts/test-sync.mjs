@@ -106,6 +106,28 @@ const fixture = () => ({
     { id: 'h-1', dealId: 'd-1', from: '', to: 'Interested', at: '2026-10-10T00:00:00.000Z', by: U1 },
     { id: 'h-2', dealId: 'd-2', from: 'Demo held', to: 'Won', at: '2026-10-12T00:00:00.000Z', by: '' },
   ],
+  // Leads (0016): lists in order, leads in the order they were added, suppressions by kind and value.
+  leadLists: [
+    { id: 'll-1', name: 'Councils', source: 'apollo', notes: 'Apollo search', createdBy: U1, createdAt: '2026-10-02T00:00:00.000Z' },
+    { id: 'll-2', name: 'UK housing', source: 'csv', notes: '', createdBy: '', createdAt: '2026-10-03T00:00:00.000Z' },
+  ],
+  leads: [
+    {
+      id: 'ld-1', listId: 'll-1', name: 'Jo Example', title: 'Asset Manager', email: 'jo@example.com', phone: '0400 000 000',
+      linkedin: 'https://www.linkedin.com/in/example', company: 'Example Shire', domain: 'shire.example.com', sector: 'Government',
+      country: 'Australia', region: 'VIC', timezone: 'Australia/Melbourne', size: '300 staff', status: 'converted', accountId: 'ac-1',
+      personId: 'cc-1', owner: U1, note: 'Met at the expo', createdAt: '2026-10-02T00:00:00.000Z',
+    },
+    {
+      id: 'ld-2', listId: 'll-2', name: 'Kit Example', title: '', email: '', phone: '', linkedin: '', company: 'Example Homes', domain: '',
+      sector: '', country: '', region: '', timezone: '', size: '', status: 'new', accountId: '', personId: '', owner: '', note: '',
+      createdAt: '2026-10-03T00:00:00.000Z',
+    },
+  ],
+  suppressions: [
+    { id: 'sp-1', kind: 'domain', value: 'example.net', reason: 'Asked us to stop', createdBy: U1, createdAt: '2026-10-01T00:00:00.000Z' },
+    { id: 'sp-2', kind: 'email', value: 'no@example.com', reason: '', createdBy: '', createdAt: '2026-10-01T00:00:00.000Z' },
+  ],
   // The CRM (0014): accounts in order, then the people at them.
   accounts: [
     {
@@ -348,7 +370,7 @@ await check('assemble: order and state fields', () => {
   assert.deepEqual(Object.keys(back).sort(), ['approvals', 'boards', 'channels', 'clients', 'contacts', 'deals', 'emails', 'lastRead',
     'messages', 'org', 'sequences', 'users', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements',
     'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'calendarEvents', 'crmEntries', 'accounts',
-    'crmContacts', 'dealHistory'].sort());
+    'crmContacts', 'dealHistory', 'leadLists', 'leads', 'suppressions'].sort());
   assert.deepEqual(back.crmEntries, s.crmEntries, 'CRM entries newest first, every field back');
   assert.deepEqual(back.boards.map((b) => b.id), ['b-ana', 'b-ben', 'b-web', 'b-gen', 'b-post', 'b-events']);
   const web = back.boards.find((b) => b.id === 'b-web');
@@ -374,7 +396,7 @@ await check('assemble: order and state fields', () => {
   // Parts of the fixture already in canonical form come back exactly (no extra or missing fields).
   ['boards', 'contacts', 'emails', 'sequences', 'approvals', 'messages', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments',
     'bankStatements', 'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'accounts', 'crmContacts',
-    'dealHistory'].forEach((k) => assert.deepEqual(back[k], s[k], k));
+    'dealHistory', 'leadLists', 'leads', 'suppressions'].forEach((k) => assert.deepEqual(back[k], s[k], k));
   assert.deepEqual(back.clients[1], s.clients[1]);
   assert.deepEqual(back.clients[0].plans, s.clients[0].plans);
   assert.deepEqual(back.clients[0].usage, s.clients[0].usage); // newest month first
@@ -1467,12 +1489,13 @@ const NOT_FOUND = { code: 'PGRST205', message: "Could not find the table 'public
 await check('sync: a table whose migration hasn’t run (TABLES since) is left out — no rows, no realtime, no writes — and the rest loads', async () => {
   assert.deepEqual(TABLES.filter((t) => t.since).map((t) => [t.name, t.since]),
     [['accounts', '0014_crm_accounts.sql'], ['crm_contacts', '0014_crm_accounts.sql'], ['deal_stage_history', '0015_deal_history.sql'],
-      ['crm_entries', '0012_crm_profile.sql']]);
+      ['lead_lists', '0016_leads.sql'], ['leads', '0016_leads.sql'], ['suppressions', '0016_leads.sql'], ['crm_entries', '0012_crm_profile.sql']]);
   const { sb, sync } = setup({ deals: [{ id: 'd1', name: 'D', value: 0, position: 0 }] });
   sb.failures.push({ table: 'crm_entries', method: 'select', ...NOT_FOUND, sticky: true });
   assert.deepEqual(await sync.probe(), ['crm_entries']);
   assert.deepEqual(sb.calls.map((c) => [c.table, c.columns, c.range]),
-    [['accounts', 'id', [0, 0]], ['crm_contacts', 'id', [0, 0]], ['deal_stage_history', 'id', [0, 0]], ['crm_entries', 'id', [0, 0]]],
+    [['accounts', 'id', [0, 0]], ['crm_contacts', 'id', [0, 0]], ['deal_stage_history', 'id', [0, 0]], ['lead_lists', 'id', [0, 0]],
+      ['leads', 'id', [0, 0]], ['suppressions', 'id', [0, 0]], ['crm_entries', 'id', [0, 0]]],
     'one small select per since table');
   sb.calls.length = 0;
   sync.subscribe(() => {});
@@ -3247,6 +3270,102 @@ await check('import: accounts and CRM contacts (0014) — HubSpot and Apollo hea
   assert.deepEqual([deal.account, deal.currency, deal.closeOn, deal.value], ['Example Shire', 'GBP', '2026-12-01', 40000]);
   assert.equal(normalise('deals', ['X', '', '', 'Doubloons'], dmap, { users, me: 'u-me' }).currency, 'AUD', 'an unknown currency is AUD');
   assert.equal(autoMap(['Company', 'Amount'], 'deals').account, -1, 'one Company column is the name, not also the account');
+});
+
+const leadsLib = await import('../src/lib/leads.js');
+
+await check('leads: cleaning a lead, a list and a suppression (0016 limits; a lead\'s domain from its email, never a personal mailbox\'s)', () => {
+  const { cleanLead, cleanLeadList, cleanSuppression, leadDomain } = leadsLib;
+  assert.deepEqual(cleanLead({ name: '  Jo Example ', email: ' Jo@Shire.Example.com ', status: 'won', owner: 'nobody', linkedin: 'javascript:alert(1)' }, { userIds: ['u1'] }),
+    { name: 'Jo Example', email: 'jo@shire.example.com', domain: 'shire.example.com', owner: '', linkedin: '' });
+  assert.deepEqual(cleanLead({ email: 'jo@gmail.com' }), { email: 'jo@gmail.com' }, 'a personal mailbox gives no domain');
+  assert.deepEqual(cleanLead({ domain: 'https://www.shire.example.com/about', email: 'not an email', status: 'meeting' }),
+    { domain: 'shire.example.com', email: '', status: 'meeting' });
+  assert.equal(cleanLead({ name: 'x'.repeat(300) }).name.length, 200);
+  assert.equal(leadDomain({ email: 'jo@gmail.com', domain: '' }), '');
+  assert.equal(leadDomain({ email: 'jo@example.com', domain: 'shire.example.com' }), 'shire.example.com', 'its own domain first');
+  assert.deepEqual(cleanLeadList({ name: ' Councils ', source: 'fax', notes: 'n' }), { name: 'Councils', notes: 'n' });
+  assert.deepEqual(cleanSuppression({ value: ' Pat@Example.COM ', reason: 'Asked' }), { kind: 'email', value: 'pat@example.com', reason: 'Asked' });
+  assert.deepEqual(cleanSuppression({ value: 'https://www.example.net/x' }), { kind: 'domain', value: 'example.net', reason: '' });
+  assert.equal(cleanSuppression({ kind: 'email', value: 'example.net' }), null, 'not an email');
+  assert.equal(cleanSuppression({ value: '' }), null);
+});
+
+await check('leads: suppressed (the list, a suppressed account, Do not contact), the CRM match, repeats, ready for the agent', () => {
+  const { suppressedBy, crmMatch, leadFlags, sendable, duplicatesOf } = leadsLib;
+  const state = {
+    suppressions: [{ kind: 'domain', value: 'example.net', reason: 'Asked us to stop' }, { kind: 'email', value: 'no@example.com', reason: '' }],
+    accounts: [
+      { id: 'a1', name: 'Pinecrest Council', lifecycle: 'opportunity', domain: '' },
+      { id: 'a2', name: 'Pinecrest Council', lifecycle: 'suppressed', domain: '' },
+      { id: 'a3', name: 'Example Shire Pty Ltd', lifecycle: 'meeting', domain: 'shire.example.com' },
+    ],
+    crmContacts: [{ id: 'c1', accountId: 'a3', name: 'Sam', email: 'sam@example.com', status: 'active' },
+      { id: 'c2', accountId: 'a3', name: 'Pat', email: 'pat@example.com', status: 'do_not_contact' }],
+    leads: [
+      { id: 'l1', listId: 'L1', name: 'Ari', email: 'ari@example.com', domain: 'example.net', company: 'Wattle', status: 'new' },
+      { id: 'l2', listId: 'L1', name: 'No', email: 'no@example.com', company: 'X', status: 'new' },
+      { id: 'l3', listId: 'L1', name: 'Dana', email: 'dana@example.com', company: 'The Pinecrest Council', status: 'new' },
+      { id: 'l4', listId: 'L1', name: 'Pat', email: 'PAT@example.com', company: 'Other', status: 'new' },
+      { id: 'l5', listId: 'L1', name: 'Sam', email: 'sam@example.com', company: 'Example Shire', status: 'new' },
+      { id: 'l6', listId: 'L1', name: 'Kit', email: 'kit@example.com', company: 'Thornfield', status: 'new' },
+      { id: 'l7', listId: 'L2', name: 'Kit Again', email: 'Kit@Example.com', company: 'Thornfield', status: 'new' },
+      { id: 'l8', listId: 'L1', name: 'Lee', email: '', company: 'Thornfield', status: 'new' },
+      { id: 'l9', listId: 'L1', name: 'Rowan', email: 'rowan@example.com', company: 'Ashdown', status: 'contacted' },
+      { id: 'l10', listId: 'L1', name: 'Jo', email: 'jo@shire.example.com', company: '', status: 'queued' },
+    ],
+  };
+  const why = Object.fromEntries(state.leads.map((l) => [l.id, suppressedBy(state, l)]));
+  assert.equal(why.l1, 'Domain on the suppress list: Asked us to stop');
+  assert.equal(why.l2, 'Email on the suppress list');
+  assert.equal(why.l3, 'Account suppressed in the CRM', 'any account with its name, not only the first');
+  assert.equal(why.l4, 'Do not contact in the CRM');
+  assert.equal(why.l6, '');
+  const m5 = crmMatch(state, state.leads[4]);
+  assert.deepEqual([m5.person?.id, m5.account?.id], ['c1', 'a3'], 'the person by email, and their account');
+  assert.equal(crmMatch(state, state.leads[9]).account?.id, 'a3', 'by domain');
+  assert.equal(crmMatch(state, { email: 'x@gmail.com', company: '' }).account, null);
+  assert.deepEqual(duplicatesOf(state, state.leads[5]).map((l) => l.id), ['l7']);
+  const flags = leadFlags(state, state.leads);
+  assert.deepEqual(flags.filter((f) => f.duplicate).map((f) => f.lead.id), ['l7'], 'the later one is the repeat');
+  assert.deepEqual(flags.filter(sendable).map((f) => f.lead.id), ['l6', 'l10'],
+    'an email, not suppressed, not a repeat, not a CRM contact, new or sent to the agent');
+});
+
+await check('leads: the scoreboard by sector or country, and the agent CSV (no formulas, quoted where needed)', () => {
+  const { scoreboard, agentCsv } = leadsLib;
+  const leads = [
+    { sector: 'Water', country: 'Australia', status: 'meeting' }, { sector: 'Water', country: 'Australia', status: 'contacted' },
+    { sector: 'Council', country: 'United Kingdom', status: 'new' }, { sector: '', country: 'Australia', status: 'converted' },
+    { sector: 'Council', country: 'Australia', status: 'bounced' }, { sector: 'Council', country: '', status: 'replied' },
+  ];
+  assert.deepEqual(scoreboard(leads, 'sector'), [
+    { key: 'Council', leads: 3, contacted: 2, replied: 1, meetings: 0 },
+    { key: 'Water', leads: 2, contacted: 2, replied: 1, meetings: 1 },
+    { key: 'Not set', leads: 1, contacted: 1, replied: 1, meetings: 0 },
+  ]);
+  assert.deepEqual(scoreboard(leads, 'country').map((r) => [r.key, r.leads]), [['Australia', 4], ['United Kingdom', 1], ['Not set', 1]]);
+  const csv = agentCsv([{ name: 'Jo van Example', title: 'Manager, Assets', email: 'jo@example.com', company: '=HYPERLINK("x")', note: 'Said "call"' }]);
+  const [head, row] = csv.split('\r\n');
+  assert.equal(head, 'First Name,Last Name,Title,Email,Phone,Company,Domain,Sector,Country,Region,Time zone,LinkedIn,Note');
+  assert.equal(row, `Jo,van Example,"Manager, Assets",jo@example.com,,"'=HYPERLINK(""x"")",,,,,,,"Said ""call"""`);
+});
+
+await check('import: leads from an Apollo export (full name from first and last, phones, LinkedIn, website, employees)', async () => {
+  const { autoMap, normalise, withFullName } = await import('../src/lib/importers.js');
+  const csv = withFullName({ headers: ['First Name', 'Last Name', 'Title', 'Company', 'Company Name for Emails', 'Email', 'Email Status',
+    'Mobile Phone', '# Employees', 'Industry', 'Person Linkedin Url', 'Website', 'Company Linkedin Url', 'State', 'Country', 'Contact Owner'], rows: [
+    ['Jo', 'Example', 'Asset Manager', 'Example Shire', 'Shire', 'Jo@Example.com', 'Verified', '+61 400 000 000', '300', 'Government Administration',
+      'http://www.linkedin.com/in/jo', 'http://www.shire.example.com', 'http://www.linkedin.com/company/shire', 'Victoria', 'Australia', ''],
+  ] });
+  const map = autoMap(csv.headers, 'leads');
+  const rec = normalise('leads', csv.rows[0], map, { users: [], me: 'u-me' });
+  assert.deepEqual(rec, {
+    name: 'Jo Example', title: 'Asset Manager', email: 'jo@example.com', company: 'Example Shire', phone: '+61 400 000 000',
+    linkedin: 'http://www.linkedin.com/in/jo', domain: 'http://www.shire.example.com', sector: 'Government Administration', country: 'Australia',
+    region: 'Victoria', timezone: '', size: '300', owner: 'u-me', note: '',
+  });
+  assert.equal(leadsLib.cleanLead(rec).domain, 'shire.example.com', 'the store keeps the website\'s domain');
 });
 
 await check('import: contact statuses as written, Meeting booked included (negated wording is not a booking)', async () => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Building2, CalendarDays, ChevronDown, FolderKanban, GitBranch, LayoutDashboard, Loader2, LogOut, Mail, Megaphone, PanelLeftClose, PanelLeftOpen, Plus,
-  RotateCcw, Settings, Users,
+  RotateCcw, Settings, UserSearch, Users,
 } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { Avatar, Modal, Popover } from '@/components/ui';
@@ -23,6 +23,8 @@ export const NAV = [
   { id: 'projects', label: MODULE_LABELS.projects, icon: FolderKanban, module: 'projects' },
   { id: 'marketing', label: MODULE_LABELS.marketing, icon: Megaphone, module: 'marketing' },
   { id: 'outreach', label: MODULE_LABELS.outreach, icon: Mail, badge: 'AI', module: 'outreach' },
+  // Leads (0016): Outreach's access level; hidden until its migration has run.
+  { id: 'leads', label: 'Leads', icon: UserSearch, module: 'outreach', needs: 'leads' },
   { id: 'pipeline', label: MODULE_LABELS.pipeline, icon: GitBranch, module: 'pipeline' },
   { id: 'clients', label: MODULE_LABELS.clients, icon: Building2, module: 'clients' },
 ];
@@ -35,7 +37,8 @@ const ADMIN_NAV = [{ id: 'settings', label: 'Settings', icon: Settings }];
 /** The signed-in user's nav: modules at 'none' are hidden, Settings is admins only. */
 export function useNav() {
   const access = useAccess();
-  const nav = NAV.filter((n) => !n.module || access.canView(n.module));
+  const { missing } = useStore();
+  const nav = NAV.filter((n) => (!n.module || access.canView(n.module)) && !(n.needs && missing.includes(n.needs)));
   return access.isAdmin ? [...nav, ...ADMIN_NAV] : nav;
 }
 

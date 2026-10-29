@@ -16,8 +16,8 @@ setup steps are in `DEPLOY.md`.
 - Keep demo mode working. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` the app runs on localStorage
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
-  migration that has been applied** (`0001`–`0012` are live in production; `0013`–`0015` are written, not yet run): fix
-  forward in the next file (`0016_….sql`). A migration must never mention `module_level` unless it redefines it
+  migration that has been applied** (`0001`–`0012` are live in production; `0013`–`0016` are written, not yet run): fix
+  forward in the next file (`0017_….sql`). A migration must never mention `module_level` unless it redefines it
   (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table
   keeps row-level security on with policies that require `is_staff()` (directly or through `is_admin()` /
   `can_view()` / `can_edit()` / the board helpers), and is added to the `supabase_realtime` publication if it is synced. Extend
@@ -69,6 +69,10 @@ setup steps are in `DEPLOY.md`.
   `crmBackfillLocal()`. Stage history (0015, `deal_stage_history`) is written only by the `log_deal_stage` trigger
   (`readOnly` in `TABLES`, so the app never writes it; `logStageLocal()` in demo mode). Reports are `src/lib/reports.js`;
   what needs someone is `needsYou()`; duplicates are `similarAccounts()` / `similarPeople()`.
+- **Leads (0016)**: `lead_lists`, `leads` and `suppressions` follow Outreach's access level (no module key of their own;
+  the nav row has `needs: 'leads'`). The rules (suppressed, CRM match, repeats, ready for the agent, the agent's CSV) are
+  `src/lib/leads.js`; Convert to CRM (`convertLead`) needs Outreach and Pipeline edit. Cortex never emails leads: Export
+  for agent hands the outreach agent a CSV. Seed leads use `@example.com` addresses like everything else.
 - **A new module gets a module key**: add it to `MODULES` and `STAFF_DEFAULTS` in `src/lib/access.js`, to the
   `module_access.module` check and the defaults in `public.module_level()` (in a new migration), give its tables
   `can_view` / `can_edit` policies on that key, and set `module` on its `NAV` entry in `Sidebar.jsx`.

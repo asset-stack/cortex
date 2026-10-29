@@ -121,6 +121,11 @@ crmContacts:    [{ id, accountId, name, title, email, phone, linkedin, timezone,
 //           waitingOn /* ''|'us'|'them' */, lostReason, stageAt /* iso: when it reached its stage */ }
 // 0015 (§22): each deal's stage history, oldest first. Written only by the database (read only in the app).
 dealHistory:    [{ id, dealId, from /* '' when added */, to /* a stage, or 'Won' */, at, by }],
+// 0016 (§23): Leads. Lists in order; leads in the order they were added; suppressions by kind, then value.
+leadLists:      [{ id, name, source /* 'csv'|'apollo'|'manual' */, notes, createdBy, createdAt }],
+leads:          [{ id, listId, name, title, email, phone, linkedin, company, domain, sector, country, region, timezone, size,
+                   status /* LEAD_STATUSES */, accountId, personId /* the CRM record it became or is */, owner, note, createdAt }],
+suppressions:   [{ id, kind /* 'email'|'domain' */, value, reason, createdBy, createdAt }],
 ```
 Empty strings, never `null`, for absent text/ids/dates in state (as phase 1). Money and counts are numbers.
 Lists that live views read newest-first are stored with the same position convention as phase 1.
@@ -1265,6 +1270,46 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   exports; deals also read a currency, a close date and an Account column (a secondary field: a lone Company column is
   still the deal's name). Money in any of the currencies parses.
 - An account linked to a client shows the client's own people (read only, from Clients).
-- **Later, not built**: the **Leads** page (lead lists from Apollo, the suppress list, handing a list to the outreach
-  agent, a segment scoreboard), email history on the timeline (a summary of each sales email), stage exit checklists,
+- **Later, not built**: email history on the timeline (a summary of each sales email), stage exit checklists,
   merging the Outreach contact list into Contacts, saved views, and bulk edits.
+
+## 23. 0016: Leads — prospect lists, the suppress list, contact history and Convert to CRM
+
+- **Owner's ask** (with §22): a Leads page to pull lead lists and see each lead's contact history.
+- **Database** (`0016_leads.sql`): `lead_lists` (name, source CSV / Apollo / by hand, notes, who added it), `leads` (a
+  prospect each: name, title, email, phone, LinkedIn, company and domain, sector, country, region, time zone, size; a
+  status New → Sent to agent → Contacted → Replied / Meeting booked / Not interested / Bounced, or In CRM; the CRM
+  account and contact it became, set null if they go; an owner; a note; deleting a list deletes its leads; ordered by
+  when added, so removing one never rewrites the rest) and `suppressions` (an email or a domain, lower case, once each,
+  with why). All synced and on **Outreach's** access level (`can_view` / `can_edit('outreach')`, as the agent's emails are);
+  `protect_created()` keeps who added a list or suppression. The app copes without it (`since` in `TABLES`: Leads is
+  hidden from the menu and its actions refuse; admins see the notice).
+- **Rules** (`src/lib/leads.js`): `cleanLead()` / `cleanLeadList()` / `cleanSuppression()` (0016's limits; a lead's
+  domain is its own, else its email's, never a personal mailbox's: `FREE_MAIL`). `suppressedBy()`: on the suppress list
+  (email or domain), or an account it could be is Suppressed, or the person is Do not contact in the CRM. `crmMatch()`:
+  the account and contact it became, else the contact with its email (and their account), else the account with its
+  company's name or its domain. A **repeat** is the same email (else name at the same company) as an earlier lead on any
+  list. **Ready for the agent** (`sendable()`): an email, not suppressed, not a repeat, not already a CRM contact, New or
+  Sent to agent. `scoreboard()`, `agentCsv()` (never a formula in a cell).
+- **App** (**Leads**, after Outreach in the menu, `src/pages/Leads.jsx`): **Lists**: one list or all, search, status and
+  *Ready for agent / Suppressed / In CRM / Repeats*; each lead flagged *Suppressed*, *In CRM* (or *Account in CRM*) and
+  *Repeat*; select some to set their status or remove them; **Export for agent** downloads the ready leads as the agent's
+  CSV and marks the new ones *Sent to agent*; rename or delete a list. **Import CSV** (also Settings → Import → Leads):
+  onto a list or a new one; Apollo, LinkedIn and HubSpot headers map themselves (first and last name, phones, LinkedIn,
+  website, industry, employees, state, country, owner); a repeat on the same list is skipped. A lead's panel: status,
+  owner, details, why it's suppressed, the lists it's also on, the CRM record (a link to it on Pipeline), **Convert to
+  CRM** (Outreach and Pipeline edit: its account, by match or a new prospect from its company, and its contact there,
+  optionally an Interested deal; the lead is marked In CRM), its **contact history** (the agent's sheet rows for its
+  email: sent, reply and summary, meeting, a link to the Gmail thread; and Gmail's cold threads with it), the CRM
+  contact's timeline once converted, a note, **Suppress email / Suppress domain** and **Remove lead**. **Suppress list**:
+  add an email or domain with a reason, remove one. **Scoreboard**: leads, contacted, replied, reply rate and meetings
+  per sector or country.
+- **Demo seed** (`leadsDemo()`): an Apollo list whose first leads the demo agent already emailed (so their history
+  shows), new ones, one at a suppressed domain, one at a suppressed account, one already a CRM contact, and a UK list
+  with a repeat; two suppressions. `migrate()` adds them once.
+- **Tests**: `scripts/test-db.mjs` phase 16 (re-runs and the done row; Outreach edit, view and none; the checks; a list
+  takes its leads; a converted lead loses a deleted account); `scripts/test-sync.mjs` (the mapping, the rules above, the
+  scoreboard and CSV, the Apollo import).
+- **Later, not built**: pulling lists from Apollo inside Cortex (needs an Apollo API key in the `google` function, or a
+  new one), the agent reading Sent to agent leads straight from Cortex instead of a CSV, and statuses updated from the
+  agent's sheet automatically.

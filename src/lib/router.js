@@ -1,7 +1,7 @@
 // Tiny hash router: #/clients, #/marketing/<board id> … keeps the build static.
 import { useEffect, useState } from 'react';
 
-export const ROUTES = ['dashboard', 'calendar', 'team', 'projects', 'marketing', 'outreach', 'pipeline', 'clients', 'settings'];
+export const ROUTES = ['dashboard', 'calendar', 'team', 'projects', 'marketing', 'outreach', 'leads', 'pipeline', 'clients', 'settings'];
 // Old links that still work: the Admin board merged into Projects (docs/PHASE2.md §6), item ids unchanged; My Work is
 // the Dashboard (§18).
 export const REDIRECTS = { admin: 'projects', work: 'dashboard' };

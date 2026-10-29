@@ -82,7 +82,8 @@ Contacted → First meetings → Demos, and Work in Progress under the deals; `d
 `docs/PHASE2.md` §19), then `0013_task_emails.sql` (a task's owner is emailed when a task is handed to them or an update
 is posted on it; section 15; `docs/PHASE2.md` §21), then `0014_crm_accounts.sql` (the CRM: accounts, contacts and the new
 opportunity stages; `docs/PHASE2.md` §22), then `0015_deal_history.sql` (every deal's stage history, for its timeline and
-the Pipeline reports; `docs/PHASE2.md` §22).
+the Pipeline reports; `docs/PHASE2.md` §22), then `0016_leads.sql` (Leads: prospect lists and the suppress list;
+`docs/PHASE2.md` §23).
 
 Later schema changes arrive as new numbered files in `supabase/migrations/` (`0014_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one. From `0013`, each file ends with a line that
@@ -203,6 +204,12 @@ until merged, take it from its branch on GitHub). The last row shows `Cortex 001
 `select to_regclass('public.deal_stage_history');` shows `deal_stage_history`. It starts every deal's stage history
 (one row each, where it stands now) and records each move from then on. The app works without it (the history and the
 reports that need it stay empty). Nobody needs to close Cortex, and it is safe to run again.
+
+**0016 on an existing database**: run it after `0015`, the same way (`supabase/migrations/0016_leads.sql`; until
+merged, take it from its branch on GitHub). The last row shows `Cortex 0016 applied`; to check,
+`select to_regclass('public.leads');` shows `leads`. It adds the Leads page's lists, leads and suppress list (nothing
+existing changes). The app works without it (Leads stays out of the menu until it has run). Nobody needs to close
+Cortex, and it is safe to run again.
 
 ### Upgrading an existing project
 

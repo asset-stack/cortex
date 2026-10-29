@@ -83,6 +83,13 @@ const COLUMNS = {
     id: 'id', account_id: 'id', name: t, title: t, email: t, phone: t, linkedin: t, timezone: t, role: t, status: t, owner_id: 'fk',
     position: 'int', created_at: 'ts',
   },
+  // Leads (0016): lists of prospects, the leads on them and the suppress list (Outreach's access level).
+  lead_lists: { id: 'id', name: t, source: t, notes: t, created_by: 'fk', created_at: 'ts', position: 'int' },
+  leads: {
+    id: 'id', list_id: 'id', name: t, title: t, email: t, phone: t, linkedin: t, company: t, domain: t, sector: t, country: t,
+    region: t, timezone: t, size: t, status: t, account_id: 'fk', person_id: 'fk', owner_id: 'fk', note: t, created_at: 'ts',
+  },
+  suppressions: { id: 'id', kind: t, value: t, reason: t, created_by: 'fk', created_at: 'ts' },
   client_notes: { id: 'id', client_id: 'id', user_id: 'fk', text: t, created_at: 'ts' },
   client_tasks: { id: 'id', client_id: 'id', position: 'int', text: t, done: 'bool' },
   // billed_periods is the database's own (generate_due_invoices), so a full-row upsert never sends it.
@@ -191,6 +198,13 @@ export const TABLES = [
     name: 'deal_stage_history', key: byId, parent: ['deals', 'deal_id'], setNull: { changed_by: 'profiles' },
     since: '0015_deal_history.sql', readOnly: true,
   },
+  // Leads (0016), after accounts and crm_contacts (a converted lead's account_id / person_id); a list's leads go with it.
+  { name: 'lead_lists', key: byId, setNull: { created_by: 'profiles' }, since: '0016_leads.sql' },
+  {
+    name: 'leads', key: byId, parent: ['lead_lists', 'list_id'],
+    setNull: { account_id: 'accounts', person_id: 'crm_contacts', owner_id: 'profiles' }, since: '0016_leads.sql',
+  },
+  { name: 'suppressions', key: byId, setNull: { created_by: 'profiles' }, since: '0016_leads.sql' },
   { name: 'client_notes', key: byId, parent: ['clients', 'client_id'] },
   // After deals and clients. A client deleted takes its entries (on delete cascade; the store drops them too); a deal
   // deleted takes the ones that never reached a client and leaves the others off it (0012's trigger, then set null).
@@ -358,6 +372,17 @@ export function flatten(state) {
   (state.crmContacts || []).forEach((c, i) => put('crm_contacts', {
     id: c.id, account_id: c.accountId, name: c.name, title: c.title, email: c.email, phone: c.phone, linkedin: c.linkedin,
     timezone: c.timezone, role: c.role, status: c.status, owner_id: c.owner, position: i, created_at: c.createdAt,
+  }));
+  (state.leadLists || []).forEach((l, i) => put('lead_lists', {
+    id: l.id, name: l.name, source: l.source, notes: l.notes, created_by: l.createdBy, created_at: l.createdAt, position: i,
+  }));
+  (state.leads || []).forEach((l) => put('leads', {
+    id: l.id, list_id: l.listId, name: l.name, title: l.title, email: l.email, phone: l.phone, linkedin: l.linkedin, company: l.company,
+    domain: l.domain, sector: l.sector, country: l.country, region: l.region, timezone: l.timezone, size: l.size, status: l.status,
+    account_id: l.accountId, person_id: l.personId, owner_id: l.owner, note: l.note, created_at: l.createdAt,
+  }));
+  (state.suppressions || []).forEach((x) => put('suppressions', {
+    id: x.id, kind: x.kind, value: x.value, reason: x.reason, created_by: x.createdBy, created_at: x.createdAt,
   }));
   (state.deals || []).forEach((d, i) => put('deals', {
     id: d.id, name: d.name, sector: d.sector, priority: d.priority, stage: d.stage, next_step: d.next, value: d.value,
@@ -571,6 +596,19 @@ export function assemble(rowsByTable, { me } = {}) {
     crmContacts: all('crm_contacts').sort(byPos).map((c) => ({
       id: c.id, accountId: c.account_id, name: c.name, title: c.title, email: c.email, phone: c.phone, linkedin: c.linkedin,
       timezone: c.timezone, role: c.role, status: c.status || 'active', owner: c.owner_id ?? '', createdAt: c.created_at ?? '',
+    })),
+    leadLists: all('lead_lists').sort(byPos).map((l) => ({
+      id: l.id, name: l.name, source: l.source || 'csv', notes: l.notes, createdBy: l.created_by ?? '', createdAt: l.created_at ?? '',
+    })),
+    // In the order they were added (0016).
+    leads: all('leads').sort((a, b) => cmp(a.created_at || '', b.created_at || '') || cmp(a.id, b.id)).map((l) => ({
+      id: l.id, listId: l.list_id, name: l.name, title: l.title, email: l.email, phone: l.phone, linkedin: l.linkedin, company: l.company,
+      domain: l.domain, sector: l.sector, country: l.country, region: l.region, timezone: l.timezone, size: l.size,
+      status: l.status || 'new', accountId: l.account_id ?? '', personId: l.person_id ?? '', owner: l.owner_id ?? '', note: l.note,
+      createdAt: l.created_at ?? '',
+    })),
+    suppressions: all('suppressions').sort((a, b) => cmp(a.kind, b.kind) || cmp(a.value, b.value)).map((x) => ({
+      id: x.id, kind: x.kind, value: x.value, reason: x.reason, createdBy: x.created_by ?? '', createdAt: x.created_at ?? '',
     })),
     clients,
     contacts: all('contacts').sort(byPosDesc).map((c) => ({

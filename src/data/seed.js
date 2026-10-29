@@ -661,6 +661,64 @@ export function demoMeetings(today) {
   ];
 }
 
+// Leads (0016) for demo mode: a list pulled from Apollo whose first leads the agent has already emailed (their outreach
+// rows give the contact history), new ones not yet sent, one at a suppressed domain, one at an account suppressed in the
+// CRM, one already a CRM contact, and a second, smaller list with a repeat. Fictional people and organisations.
+export function leadsDemo(state, today, idf = (p) => `${p}_${uid()}`) {
+  const at = (days, k) => new Date(Date.parse(`${addDays(today, -days)}T01:00:00.000Z`) + k).toISOString();
+  const councils = { id: idf('ll'), name: 'Councils: asset managers (Australia)', source: 'apollo', notes: 'Apollo search: Local government, Asset or Facilities in title.', createdBy: 'josh', createdAt: at(14, 0) };
+  const uk = { id: idf('ll'), name: 'UK housing associations', source: 'csv', notes: '', createdBy: 'david', createdAt: at(3, 0) };
+  const lead = (list, k, fields) => ({
+    id: idf('ld'), listId: list.id, name: '', title: '', email: '', phone: '', linkedin: '', company: '', domain: '', sector: '', country: '',
+    region: '', timezone: '', size: '', status: 'new', accountId: '', personId: '', owner: list.createdBy, note: '',
+    createdAt: at(list === councils ? 14 : 3, k), ...fields,
+  });
+  const seen = new Set();
+  const sent = (state.outreachEmails || []).filter((e) => e.sentOn && !seen.has(e.contactEmail) && seen.add(e.contactEmail));
+  const pick = [sent.find((e) => e.meetingOn), sent.find((e) => e.replyStatus && !e.meetingOn), sent.find((e) => e.bounced),
+    ...sent.filter((e) => !e.replyStatus && !e.bounced).slice(0, 5)].filter(Boolean);
+  const STATE = { VIC: 'Australia/Melbourne', NSW: 'Australia/Sydney', QLD: 'Australia/Brisbane', WA: 'Australia/Perth', SA: 'Australia/Adelaide', TAS: 'Australia/Hobart' };
+  const leads = [...new Set(pick)].map((e, k) => {
+    const region = String(e.location).split(' ').pop();
+    return lead(councils, k, {
+      name: e.contactName, title: e.contactRole, email: e.contactEmail, company: e.organisation, sector: e.vertical, country: 'Australia', region,
+      timezone: STATE[region] || '', domain: `${e.organisation.toLowerCase().split(' ')[0]}.example.com`,
+      status: e.meetingOn ? 'meeting' : e.replyStatus ? 'replied' : e.bounced ? 'bounced' : 'contacted',
+    });
+  });
+  const more = [
+    ['Quinn Harper', 'Manager Assets', 'Stonebridge Shire Council', 'stonebridge', 'Local government', 'VIC'],
+    ['Reese Walsh', 'Coordinator Facilities', 'Tallowood City Council', 'tallowood', 'Local government', 'NSW'],
+    ['Skyler Grant', 'Asset Engineer', 'Mallee Water', 'mallee', 'Water utility', 'VIC'],
+    ['Jesse Cole', 'Director Infrastructure', 'Ironbark Regional Council', 'ironbark', 'Local government', 'QLD'],
+    ['Logan Pryce', 'Property Manager', 'Saltbush Shire Council', 'saltbush', 'Local government', 'WA'],
+  ];
+  more.forEach(([name, title, company, d, sector, region]) => leads.push(lead(councils, leads.length, {
+    name, title, company, sector, country: 'Australia', region, timezone: STATE[region], domain: `${d}.example.com`,
+    email: `${name.toLowerCase().replace(' ', '.')}@example.com`,
+  })));
+  leads.push(lead(councils, leads.length, { name: 'Ari Booth', title: 'Asset Manager', company: 'Wattle Grove Council', domain: 'example.net',
+    email: 'ari.booth@example.com', sector: 'Local government', country: 'Australia', region: 'NSW', timezone: 'Australia/Sydney' }));
+  leads.push(lead(councils, leads.length, { name: 'Dana Fox', title: 'Facilities Lead', company: 'Pinecrest Council', email: 'dana.fox@example.com',
+    domain: 'pinecrest.example.com', sector: 'Local government', country: 'Australia', region: 'NSW', timezone: 'Australia/Sydney' }));
+  leads.push(lead(councils, leads.length, { name: 'Sam Ortiz', title: 'Director of Infrastructure', company: 'Shire of Southcliff',
+    email: 'sam.ortiz@example.com', domain: 'southcliff.example.com', sector: 'Local government', country: 'Australia', region: 'SA',
+    timezone: 'Australia/Adelaide' }));
+  [['Kit Marlow', 'Head of Asset Management', 'Thornfield Homes', 'thornfield', 'Yorkshire'],
+    ['Rowan Pike', 'Director of Property', 'Ashdown Housing Group', 'ashdown', 'Surrey'],
+    ['Quinn Harper', 'Manager Assets', 'Stonebridge Shire Council', 'stonebridge', 'VIC']].forEach(([name, title, company, d, region], k) => {
+    const uk2 = region !== 'VIC';
+    leads.push(lead(uk, k, { name, title, company, domain: `${d}.example.com`, email: `${name.toLowerCase().replace(' ', '.')}@example.com`,
+      sector: uk2 ? 'Community housing' : 'Local government', country: uk2 ? 'United Kingdom' : 'Australia', region,
+      timezone: uk2 ? 'Europe/London' : 'Australia/Melbourne', size: uk2 ? '5,000+ homes' : '' }));
+  });
+  const suppressions = [
+    { id: idf('sp'), kind: 'domain', value: 'example.net', reason: 'Asked us to stop', createdBy: 'david', createdAt: at(20, 0) },
+    { id: idf('sp'), kind: 'email', value: 'former.contact@example.com', reason: 'Unsubscribed', createdBy: 'josh', createdAt: at(9, 0) },
+  ];
+  return { leadLists: [uk, councils], leads, suppressions };
+}
+
 export function createSeed() {
   n = 0;
   now = Date.now();
@@ -778,6 +836,8 @@ export function createSeed() {
   crmBackfillLocal(state, { uid: () => id('ac') });
   crmAccountsDemo(state, today);
   state.dealHistory = demoHistory(state.deals);
+  Object.assign(state, leadsDemo(state, today, id));
+  state.leadsSeeded = true;
 
   // The automations, run the way the app runs them, so the demo data follows the same rules.
   const opts = { uid: () => id('td') };
@@ -803,7 +863,7 @@ export function createSeed() {
 }
 
 const COLLECTIONS = ['moduleAccess', 'todos', 'routines', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'timeEntries', 'tools',
-  'crmEntries', 'accounts', 'crmContacts', 'dealHistory'];
+  'crmEntries', 'accounts', 'crmContacts', 'dealHistory', 'leadLists', 'leads', 'suppressions'];
 
 // Brings demo data saved by older builds (localStorage) up to the current shape. Safe to run more than once.
 export function migrate(data) {
@@ -931,6 +991,11 @@ export function migrate(data) {
   if (!data.historySeeded) {
     historyBackfillLocal(data);
     data.historySeeded = true;
+  }
+  // Leads (0016): older demo data gets the demo lists once.
+  if (!data.leadsSeeded) {
+    if (!(data.leadLists || []).length) Object.assign(data, leadsDemo(data, localYmd()));
+    data.leadsSeeded = true;
   }
   // Demo only: which routine runs ensureTodosLocal has made (the database's routine_runs), from the to-dos older
   // builds made, so a deleted one doesn't come back.

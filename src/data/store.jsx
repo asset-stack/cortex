@@ -19,6 +19,7 @@ import {
 import { accountNamed, cleanAccount, cleanPerson as cleanCrmPerson, similarAccounts, similarPeople } from '@/lib/accounts';
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
 import { acceptedValues, boardValues, itemRef, mailsOwner, newTaskValues, nextValues, ownerOf, todoForItem, todoItemId } from '@/lib/work';
+import { LEAD_STATUSES, cleanLead, cleanLeadList, cleanSuppression, crmMatch, leadKey } from '@/lib/leads';
 import { canAddEntry, canChangeEntry, carryDealEntriesLocal, cleanEntry, dropDealEntriesLocal } from '@/lib/crm';
 import { categoryOf } from '@/lib/timesheet';
 import { cleanTool } from '@/lib/tools';
@@ -242,6 +243,12 @@ function forgetGmail(d, mailboxId) {
   if (d.outreachThreads) d.outreachThreads = d.outreachThreads.filter((t) => t.mailbox !== mailboxId);
   if (d.outreachMessages) d.outreachMessages = d.outreachMessages.filter((x) => x.mailbox !== mailboxId);
 }
+
+// A lead's fields before cleanLead() fills them in (0016's defaults).
+const LEAD_DEFAULTS = {
+  name: '', title: '', email: '', phone: '', linkedin: '', company: '', domain: '', sector: '', country: '', region: '', timezone: '',
+  size: '', status: 'new', accountId: '', personId: '', owner: '', note: '',
+};
 
 function createActions(mutate, mode) {
   // Live mode before a table's migration has run: its actions refuse (there is nowhere to save to).
@@ -1036,6 +1043,139 @@ function createActions(mutate, mode) {
         carryDealEntriesLocal(d, deal.id, client.id); // live: 0012's crm_carry_to_client trigger
       }
       return client.id;
+    }),
+
+    // ── Leads (0016; Outreach edit): lists of prospects, the suppress list, Convert to CRM (src/lib/leads.js) ──
+
+    // → id
+    addLeadList: (fields = {}) => !absent('leads') && editing('outreach', (d) => {
+      const clean = cleanLeadList({ source: 'csv', ...fields });
+      if (!clean.name) return false;
+      const l = { id: uid(), name: clean.name, source: clean.source || 'csv', notes: clean.notes || '', createdBy: d.me, createdAt: nowIso() };
+      (d.leadLists ||= []).unshift(l);
+      return l.id;
+    }),
+    updateLeadList: (id, patch = {}) => !absent('leads') && editing('outreach', (d) => {
+      const l = (d.leadLists || []).find((x) => x.id === id);
+      const clean = cleanLeadList(patch);
+      if ('name' in clean && !clean.name) delete clean.name;
+      if (!l || !Object.keys(clean).length) return false;
+      Object.assign(l, clean);
+      return true;
+    }),
+    // With its leads (on delete cascade).
+    removeLeadList: (id) => !absent('leads') && editing('outreach', (d) => {
+      if (!(d.leadLists || []).some((x) => x.id === id)) return false;
+      d.leadLists = d.leadLists.filter((x) => x.id !== id);
+      d.leads = (d.leads || []).filter((x) => x.listId !== id);
+      return true;
+    }),
+    // Leads from src/lib/importers.js onto a list. A lead with neither a name nor an email, or the same person as one
+    // already on this list (or earlier in the file), is skipped; one on another list is added (the table flags it).
+    // → { added, skipped }
+    importLeads: (listId, records = []) => !absent('leads') && editing('outreach', (d) => {
+      if (!(d.leadLists || []).some((x) => x.id === listId)) return false;
+      const userIds = d.users.map((u) => u.id);
+      d.leads ||= [];
+      const seen = new Set(d.leads.filter((l) => l.listId === listId).map(leadKey).filter(Boolean));
+      const result = { added: 0, skipped: 0 };
+      const base = Date.now();
+      (records || []).forEach((r) => {
+        const clean = cleanLead({ owner: d.me, ...r }, { userIds });
+        const key = leadKey(clean);
+        if (!key || seen.has(key)) { result.skipped++; return; }
+        seen.add(key);
+        // A millisecond apart, so they keep the file's order (leads are ordered by when they were added).
+        d.leads.push({ ...LEAD_DEFAULTS, ...clean, id: uid(), listId, status: 'new', createdAt: new Date(base + result.added).toISOString() });
+        result.added++;
+      });
+      return result;
+    }),
+    // One lead by hand. → id
+    addLead: (listId, fields = {}) => !absent('leads') && editing('outreach', (d) => {
+      if (!(d.leadLists || []).some((x) => x.id === listId)) return false;
+      const clean = cleanLead({ owner: d.me, ...fields }, { userIds: d.users.map((u) => u.id) });
+      if (!leadKey(clean)) return false;
+      const l = { ...LEAD_DEFAULTS, ...clean, id: uid(), listId, createdAt: nowIso() };
+      (d.leads ||= []).push(l);
+      return l.id;
+    }),
+    updateLead: (id, patch = {}) => !absent('leads') && editing('outreach', (d) => {
+      const l = (d.leads || []).find((x) => x.id === id);
+      if (!l) return false;
+      const clean = cleanLead(patch, { userIds: d.users.map((u) => u.id) });
+      if (!Object.keys(clean).length) return false;
+      Object.assign(l, clean);
+      return true;
+    }),
+    removeLeads: (ids = []) => !absent('leads') && editing('outreach', (d) => {
+      const gone = new Set(ids);
+      const before = (d.leads || []).length;
+      d.leads = (d.leads || []).filter((x) => !gone.has(x.id));
+      return d.leads.length < before;
+    }),
+    // Many at once (Export for agent marks them Sent to agent). → how many changed
+    setLeadsStatus: (ids = [], status) => !absent('leads') && editing('outreach', (d) => {
+      if (!(status in LEAD_STATUSES)) return false;
+      const pick = new Set(ids);
+      let n = 0;
+      (d.leads || []).forEach((l) => { if (pick.has(l.id) && l.status !== status) { l.status = status; n++; } });
+      return n || false;
+    }),
+    // An email or a domain (cleanSuppression()); one per value. → id
+    addSuppression: (fields = {}) => !absent('leads') && editing('outreach', (d) => {
+      const clean = cleanSuppression(fields);
+      if (!clean || (d.suppressions || []).some((x) => x.kind === clean.kind && x.value === clean.value)) return false;
+      const x = { id: uid(), ...clean, createdBy: d.me, createdAt: nowIso() };
+      (d.suppressions ||= []).push(x);
+      return x.id;
+    }),
+    removeSuppression: (id) => !absent('leads') && editing('outreach', (d) => {
+      if (!(d.suppressions || []).some((x) => x.id === id)) return false;
+      d.suppressions = d.suppressions.filter((x) => x.id !== id);
+      return true;
+    }),
+    // Into the CRM (needs Outreach edit and Pipeline edit, and 0014): its account (the one it matches, else a new prospect
+    // from its company) and its contact there (the one it matches, else a new one), and, with { deal: true }, an
+    // Interested deal on the account with the person on it. The lead is marked In CRM and linked to both.
+    // → { accountId, personId, dealId } | false
+    convertLead: (id, { deal = false } = {}) => !absent('leads') && !absent('accounts') && mutate((d) => {
+      const lead = (d.leads || []).find((x) => x.id === id);
+      if (!lead || !canEdit(d, 'outreach') || !canEdit(d, 'pipeline')) return false;
+      const company = String(lead.company || '').trim();
+      let { account, person } = crmMatch(d, lead);
+      if (!account && !company) return false; // nowhere to put them
+      const userIds = d.users.map((u) => u.id);
+      const owner = userIds.includes(lead.owner) ? lead.owner : d.me;
+      if (!account) {
+        account = {
+          id: uid(), ...accountDefaults(nowIso()),
+          ...cleanAccount({ name: company, domain: lead.domain, sector: lead.sector, country: lead.country, region: lead.region,
+            timezone: lead.timezone, size: lead.size, owner, lifecycle: lead.status === 'meeting' ? 'meeting'
+              : ['contacted', 'replied'].includes(lead.status) ? 'contacted' : 'new' }, { userIds }),
+        };
+        (d.accounts ||= []).push(account);
+      }
+      if (person && person.accountId !== account.id) person = null; // someone with that email at another organisation
+      if (!person && (lead.name || lead.email)) {
+        person = {
+          id: uid(), ...personDefaults(nowIso()),
+          ...cleanCrmPerson({ accountId: account.id, name: lead.name, title: lead.title, email: lead.email, phone: lead.phone,
+            linkedin: lead.linkedin, timezone: lead.timezone, owner }, { userIds, accountIds: d.accounts.map((a) => a.id) }),
+        };
+        (d.crmContacts ||= []).push(person);
+      }
+      let dealId = '';
+      if (deal) {
+        const x = newDeal({ name: account.name, sector: account.sector || lead.sector || '', contact: owner, stage: DEAL_STAGES[0],
+          accountId: account.id, contactIds: person ? [person.id] : [] });
+        d.deals.push(x);
+        logStage(d, x, '', x.stage);
+        if (['new', 'contacted', 'engaged', 'meeting'].includes(account.lifecycle)) account.lifecycle = 'opportunity';
+        dealId = x.id;
+      }
+      Object.assign(lead, { status: 'converted', accountId: account.id, personId: person?.id || '' });
+      return { accountId: account.id, personId: person?.id || '', dealId };
     }),
 
     // ── CRM profile (0012): a deal's or client's notes, meetings and links (src/lib/crm.js) ──
@@ -1883,7 +2023,7 @@ const MODULE_OF = {
   deals: 'pipeline', contacts: 'outreach', emails: 'outreach', sequences: 'outreach', approvals: 'outreach',
   clients: 'clients', client_notes: 'clients', client_tasks: 'clients', invoices: 'clients', invoice_lines: 'clients',
   client_access: 'clients', billing_plans: 'clients', client_usage: 'clients', client_contacts: 'clients', client_contracts: 'clients',
-  outreach_notes: 'outreach',
+  outreach_notes: 'outreach', lead_lists: 'outreach', leads: 'outreach', suppressions: 'outreach',
 };
 // Whether the signed-in user may write a row (the RLS rules in 0002, 0004 and 0006); null for tables outside the
 // modules and boards. Boards' groups, tasks, subtasks and updates follow their board (0006).

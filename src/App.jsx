@@ -13,6 +13,7 @@ import Calendar from '@/pages/Calendar';
 import Pipeline from '@/pages/Pipeline';
 import Clients from '@/pages/Clients';
 import Outreach from '@/pages/Outreach';
+import Leads from '@/pages/Leads';
 import Settings from '@/pages/Settings';
 
 function Page({ route, sub }) {
@@ -26,15 +27,17 @@ function Page({ route, sub }) {
     case 'clients': return sub ? <BoardPage module="clients" sub={sub} /> : <Clients />;
     // #/outreach and #/clients are their own pages; #/outreach/<board id> and #/clients/<board id> their boards.
     case 'outreach': return sub ? <BoardPage module="outreach" sub={sub} /> : <Outreach />;
+    case 'leads': return <Leads />;
     case 'settings': return <Settings />;
     default: return <Dashboard />;
   }
 }
 
-// Settings is admins only; a module the user can't see (access 'none') falls back to the Dashboard. Team has no module:
+// Settings is admins only; Leads follows Outreach; a module the user can't see (access 'none') falls back to the Dashboard. Team has no module:
 // each task on it keeps its board's access rule (src/lib/work.js).
 function allowed(route, access) {
   if (route === 'settings') return access.isAdmin;
+  if (route === 'leads') return access.canView('outreach'); // Leads (0016) follows Outreach
   return !MODULES.includes(route) || access.canView(route);
 }
 
