@@ -26,7 +26,7 @@ export const hasOwner = (board) => columns(board).some((c) => c.type === 'owner'
 export const hasPriority = (board) => columns(board).some((c) => c.key === 'priority');
 /** Whether a board's tasks can be linked to a client (a `client` column: the Clients boards). */
 export const hasClient = (board) => columns(board).some((c) => c.type === 'client');
-/** Whether a board's tasks can be linked to a deal (a `deal` column: the Outreach boards). */
+/** Whether a board's tasks can be linked to a deal (a `deal` column: Operations', Outreach's and Clients' team boards). */
 export const hasDeal = (board) => columns(board).some((c) => c.type === 'deal');
 /** Whether a board's tasks can have other people on them besides the owner (Also on: team boards with an owner). */
 export const hasAlso = (board) => columns(board).some((c) => c.type === 'also');
@@ -267,7 +267,7 @@ export function taskMentions(state, person, { viewer = state?.me } = {}) {
 }
 
 /** A client's open next steps on the boards the viewer sees, in board order: tasks linked to it (`values.client`, Clients
- *  boards) and to the deals it came from (`values.deal`, Outreach boards; deals are Pipeline's, so only for a Pipeline
+ *  boards) and to the deals it came from (`values.deal`, on any board with a Deal column; deals are Pipeline's, so only for a Pipeline
  *  viewer, as live mode, where nobody else reads them). → [{ item, board }] */
 export function clientTasks(state, clientId, { viewer = state?.me } = {}) {
   if (!clientId) return [];
@@ -278,7 +278,8 @@ export function clientTasks(state, clientId, { viewer = state?.me } = {}) {
       .map((item) => ({ item, board }))));
 }
 
-/** A deal's open next steps (`values.deal`, Outreach boards) on the boards the viewer sees, in board order:
+/** A deal's open tasks (`values.deal`: its next steps on Operations or Outreach, its row on Clients › Demos) on the boards
+ *  the viewer sees, in board order:
  *  [{ item, board }]. */
 export function dealTasks(state, dealId, { viewer = state?.me } = {}) {
   if (!dealId) return [];

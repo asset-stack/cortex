@@ -201,25 +201,29 @@ export function PersonPicker({ value, onChange, size = 28, readOnly = false }) {
 }
 
 /** Overlapping avatars for a list of user ids, with a +N chip past `max`. Not interactive (safe inside a card button).
- *  Unknown ids are skipped; nobody shows the dashed placeholder. */
-export function AvatarStack({ userIds, size = 28, max = 3, label, className, empty = 'Unassigned' }) {
+ *  Unknown ids are skipped; nobody shows the dashed placeholder. `waiting`: the task waits on them to accept it (handed
+ *  over, not yet started): an amber ring, and said for screen readers. */
+export function AvatarStack({ userIds, size = 28, max = 3, label, className, empty = 'Unassigned', waiting = false }) {
   const users = useUsers();
   const ids = [...new Set(Array.isArray(userIds) ? userIds : [])].filter((id) => users[id]);
   const shown = ids.length > max ? ids.slice(0, Math.max(1, max - 1)) : ids;
   const extra = ids.length - shown.length;
   const names = ids.map((id) => users[id].name).join(', ') || empty;
+  const said = `${label ? `${label}: ${names}` : names}${waiting && ids.length ? ' (waiting to accept)' : ''}`;
   return (
-    <span className={cn('inline-flex items-center', className)}>
+    <span className={cn('inline-flex items-center', className)} title={waiting && ids.length ? `Waiting on ${names} to accept` : undefined}>
       <span aria-hidden="true" className="inline-flex items-center">
         {ids.length === 0 && <Avatar userId="" size={size} />}
-        {shown.map((id, k) => <Avatar key={id} userId={id} size={size} className={k ? '-ml-2' : undefined} />)}
+        {shown.map((id, k) => (
+          <Avatar key={id} userId={id} size={size} ring={!waiting} className={cn(k && '-ml-2', waiting && 'ring-2 ring-amber-300')} />
+        ))}
         {extra > 0 && (
           <span title={ids.slice(shown.length).map((id) => users[id].name).join(', ')}
             className="chip-on -ml-2 inline-grid place-items-center rounded-full font-bold tnum ring-2 ring-white/40 shrink-0"
             style={{ width: size, height: size, fontSize: size * 0.36 }}>+{extra}</span>
         )}
       </span>
-      <span className="sr-only">{label ? `${label}: ${names}` : names}</span>
+      <span className="sr-only">{said}</span>
     </span>
   );
 }
@@ -272,20 +276,20 @@ export function PeoplePicker({ value, onChange, size = 28, max = 3, label = 'Peo
  *  people shows the first and +N until someone picks one. Only active people who can edit `board` are offered: an owner
  *  must be able to update their task (a task handed to someone who can't would be in nobody's Priorities); its current
  *  owner stays listed. `onChange(id)` ('' for Unassigned). */
-export function OwnerPicker({ value, onChange, board, size = 28, label = 'Owner', readOnly = false }) {
+export function OwnerPicker({ value, onChange, board, size = 28, label = 'Owner', readOnly = false, waiting = false }) {
   const { state } = useStore();
   const [anchor, setAnchor] = useState(null);
   const [open, setOpen] = useState(false);
   const ids = Array.isArray(value) ? value : [];
-  if (readOnly) return <AvatarStack userIds={ids} size={size} max={1} label={label} />;
+  if (readOnly) return <AvatarStack userIds={ids} size={size} max={1} label={label} waiting={waiting} />;
   const names = ids.map((id) => state.users.find((u) => u.id === id)?.name).filter(Boolean).join(', ');
   const owner = ids.length === 1 ? ids[0] : ''; // with several people, nobody is ticked: picking one makes them the owner
   const people = state.users.filter((u) => u.id === owner || (u.active !== false && (!board || canEditBoard(state, board, u.id))));
   return (
     <>
       <button type="button" ref={setAnchor} onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-        aria-label={`${label}: ${names || 'Unassigned'}. Change owner`} aria-haspopup="true" aria-expanded={open} className="rounded-full">
-        <AvatarStack userIds={ids} size={size} max={1} />
+        aria-label={`${label}: ${names || 'Unassigned'}${waiting && names ? ' (waiting to accept)' : ''}. Change owner`} aria-haspopup="true" aria-expanded={open} className="rounded-full">
+        <AvatarStack userIds={ids} size={size} max={1} waiting={waiting} />
       </button>
       <Popover anchor={anchor} open={open} onClose={() => setOpen(false)} width={200}>
         <div role="group" aria-label={label} className="flex flex-col">
@@ -322,7 +326,7 @@ export function ClientPicker({ value, onChange, label = 'Client', className, rea
   );
 }
 
-/** Which deal a task is a next step on (Outreach boards' Deal column): the open deals by name (and the one it's on, if
+/** Which deal a task is for (a board's Deal column: Operations, Outreach, Clients): the open deals by name (and the one it's on, if
  *  that's been made a client). `readOnly` shows the name. */
 export function DealPicker({ value, onChange, label = 'Deal', className, readOnly = false }) {
   const { state } = useStore();

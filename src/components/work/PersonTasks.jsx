@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, Flag, Plus } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { BOARD_SCHEMAS, schemaOf } from '@/data/boards';
@@ -39,13 +39,27 @@ export default function PersonTasks({ rows, personId, title = 'My tasks', empty 
   const access = useAccess();
   const [open, setOpen] = useState(null); // { boardId, itemId } of the task in the drawer
   const openBoard = open ? findBoard(state, open.boardId) : null;
+  // A task that leaves these tables (Done, another owner, off Also on) takes its row's controls with it; so does closing
+  // the drawer on one. Focus then goes to its card's heading (else the list's), never to the page.
+  const section = useRef(null);
+  const inside = useRef(false); // focus is in the tables (removing the focused row fires no blur, so this stays true)
+  const lastCard = useRef('');
+  const fallback = (boardId) => window.setTimeout(() => {
+    if (document.activeElement && document.activeElement !== document.body) return;
+    (document.getElementById(`card-${boardId}`)?.querySelector('a') || section.current?.querySelector('h2'))?.focus({ preventScroll: true });
+  }, 50);
+  const shownIds = rows.map((r) => r.item.id).join(',');
+  useEffect(() => { if (inside.current) fallback(lastCard.current); }, [shownIds]); // when the rows shown change
+  const closeDrawer = () => { const boardId = open?.boardId; setOpen(null); fallback(boardId); };
   const canPlan = act && (personId === state.me || access.isAdmin);
   const notes = load ? [
     load.urgent > MAX_URGENT && `${load.urgent} Urgent: one at a time. Move the rest to High.`,
     load.inProgress > MAX_IN_PROGRESS && `${load.inProgress} In progress: finish or pause one (${MAX_IN_PROGRESS} at a time).`,
   ].filter(Boolean) : [];
   return (
-    <section aria-label={title} data-mytasks="">
+    <section ref={section} aria-label={title} data-mytasks=""
+      onFocusCapture={(e) => { inside.current = true; lastCard.current = e.target.closest?.('[data-card]')?.dataset.card || lastCard.current; }}
+      onBlurCapture={() => { inside.current = false; }}>
       <h2 tabIndex={-1} className="flex items-center gap-2 font-extrabold text-[16px] outline-none">
         <Flag className="h-4 w-4" aria-hidden="true" />{title}<span className="text-[12px] font-semibold dimmer tnum">{rows.length}</span>
       </h2>
@@ -68,7 +82,7 @@ export default function PersonTasks({ rows, personId, title = 'My tasks', empty 
       )}
       {/* A task opens here, read only unless you can edit its board (as on the board and the Calendar). */}
       <ItemDrawer key={open ? `${open.boardId}:${open.itemId}` : 'closed'} boardId={open?.boardId} schema={schemaOf(openBoard) || BOARD_SCHEMAS.projects}
-        itemId={openBoard ? open.itemId : null} onClose={() => setOpen(null)} readOnly={!openBoard || !access.canEditBoard(openBoard)} />
+        itemId={openBoard ? open.itemId : null} onClose={closeDrawer} readOnly={!openBoard || !access.canEditBoard(openBoard)} />
     </section>
   );
 }

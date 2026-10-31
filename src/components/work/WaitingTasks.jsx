@@ -10,9 +10,12 @@ import { cn } from '@/lib/cn';
 
 const SMALL = '!h-[24px] !px-2 !text-[11.5px]';
 
-// Once a row has gone (accepted or started: it moves to My tasks), focus the list's heading next frame, so it never
-// falls to the page.
-const refocus = () => requestAnimationFrame(() => document.querySelector('[data-waiting] h2, [data-mytasks] h2')?.focus());
+// Once a row has gone (accepted, started or done: it leaves the list), focus the list's heading next frame (else My
+// tasks'), so it never falls to the page. A row still there (an admin's change) keeps its focus.
+const refocus = (itemId) => requestAnimationFrame(() => {
+  if (document.querySelector(`[data-waiting] li[data-task="${CSS.escape(itemId)}"]`)) return;
+  document.querySelector('[data-waiting] h2, [data-mytasks] h2')?.focus();
+});
 
 /** One task handed over and not yet accepted: priority, name, who handed it over and where it lives, status, due, and
  *  Accept for its owner. Starting it (a status) accepts it too. */
@@ -51,7 +54,7 @@ function WaitingRow({ row, personId, act }) {
       <span className="w-[104px] shrink-0">
         {editable ? (
           <LabelPicker label={`Status for ${name}`} value={status} options={STATUS} allowEmpty={false} className={SMALL}
-            onChange={(v) => { if (v !== status) { update({ status: v }, { done: v === 'Done' }); refocus(); } }} />
+            onChange={(v) => { if (v !== status) { update({ status: v }, { done: v === 'Done' }); refocus(item.id); } }} />
         ) : (
           <span className={cn('pill', SMALL)} style={{ backgroundColor: STATUS[status] || STATUS['Not started'] }}>{status}</span>
         )}
@@ -63,7 +66,7 @@ function WaitingRow({ row, personId, act }) {
       )}
       {canAccept && (
         <button type="button" aria-label={`Accept ${name}`} className="btn-primary inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-semibold"
-          onClick={() => { if (actions.acceptItem(board.id, item.id)) refocus(); }}>
+          onClick={() => { if (actions.acceptItem(board.id, item.id)) refocus(item.id); }}>
           <Check className="h-3.5 w-3.5" aria-hidden="true" />Accept
         </button>
       )}

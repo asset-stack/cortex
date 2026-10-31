@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, GripVertical, MessageCircle, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { DEPARTMENTS, MODULE_LABELS, departmentOf, findBoard } from '@/lib/boards';
-import { alsoOf, taggable } from '@/lib/work';
+import { alsoOf, isWaiting, taggable } from '@/lib/work';
 import { itemWord } from '@/data/boards';
 import useTaskDrag from './useTaskDrag';
 import { ClientPicker, ConfirmModal, DealPicker, InlineRename, LabelPicker, OwnerPicker, PeoplePicker, Popover } from '@/components/ui';
@@ -145,8 +145,9 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
   const structure = !readOnly && !view; // the board's own controls
   const actionsCell = view ? Boolean(rowAction) : !readOnly;
   const { drag, over } = dnd;
-  // The board's columns; a `sparse` one (Operations' Deal) only once a task on the board uses it.
-  const columns = schema.columns.filter((c) => !c.sparse || all.some((g) => g.items.some((it) => it.values?.[c.key])));
+  // The board's columns; a `sparse` one (a Deal link) only once a task on the board uses it, for a deal that's still there.
+  const used = (c, v) => Boolean(v) && (c.type !== 'deal' || (state.deals || []).some((d) => d.id === v));
+  const columns = schema.columns.filter((c) => !c.sparse || all.some((g) => g.items.some((it) => used(c, it.values?.[c.key]))));
   // Wide enough for every column at its width (as the headings set them), with the Task column at least ~200px.
   const colWidth = (c) => (c.type === 'text' ? 220 : c.type === 'client' || c.type === 'deal' ? 176 : 124);
   const minWidth = Math.max(820, 340 + columns.reduce((t, c) => t + colWidth(c), 0));
@@ -232,7 +233,7 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                               if (c.type === 'owner') {
                                 return (
                                   <td key={c.key} className="text-center">
-                                    <OwnerPicker value={it.values.people || []} board={board} label={`${c.label} for ${it.name}`} readOnly={readOnly}
+                                    <OwnerPicker value={it.values.people || []} board={board} label={`${c.label} for ${it.name}`} readOnly={readOnly} waiting={isWaiting(it)}
                                       onChange={(v) => actions.updateItem(boardId, it.id, { values: { owner: v } })} />
                                   </td>
                                 );

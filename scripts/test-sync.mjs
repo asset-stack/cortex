@@ -1841,7 +1841,7 @@ await check('owners: Projects, Marketing, Outreach and Clients boards have one O
   // §20: Also on after the Owner, and the Department last, on every team board (Operations then has the Deal, §22).
   assert.equal(cols('projects'), 'people:owner also:also status:status priority:label due:date department:department deal:deal');
   assert.equal(cols('outreach'), 'deal:deal people:owner also:also status:status priority:label due:date department:department', 'Outreach boards link a task to its deal');
-  assert.equal(cols('clients'), 'client:client people:owner also:also status:status priority:label due:date department:department', 'Clients boards say which client');
+  assert.equal(cols('clients'), 'client:client deal:deal people:owner also:also status:status priority:label due:date department:department', 'Clients boards say which client (and which deal, §23)');
   assert.equal(cols('marketing'), 'people:owner also:also status:status priority:label type:label channel:label approval:label due:date department:department');
   assert.equal(cols('pipeline'), 'details:text status:status people:people department:department');
   assert.deepEqual(Object.keys(PRIO), ['Urgent', 'High', 'Medium', 'Low']);
@@ -2404,7 +2404,32 @@ await check('crm: next steps are tasks — a deal’s (Outreach boards’ Deal c
   const blind = { ...st, moduleAccess: [...(st.moduleAccess || []), { userId: 'stu', module: 'pipeline', level: 'none' }, { userId: 'stu', module: 'outreach', level: 'view' }] };
   assert.deepEqual([work.clientTasks(blind, 'c-1', { viewer: 'stu' }).map((r) => r.item.id), work.dealTasks(blind, 'd-3', { viewer: 'stu' }).map((r) => r.item.id)],
     [['d-1'], ['o-5']], 'the deal’s next steps stay on the Outreach board, not on the client');
-  assert.deepEqual([work.dealTasks(st, ''), work.hasDeal({ module: 'outreach' }), work.hasDeal({ module: 'clients' })], [[], true, false]);
+  assert.deepEqual([work.dealTasks(st, ''), work.hasDeal({ module: 'outreach' }), work.hasDeal({ module: 'clients' })], [[], true, true]);
+});
+
+await check('§23 Demos rows: a deal entering Demos or Proposal sent gets one linked row on Clients’ first board (Demos), never two, never again once deleted', () => {
+  const st = taskState();
+  const demos = st.boards.find((b) => b.id === 'demos');
+  st.boards.splice(st.boards.indexOf(demos) + 1, 0, { id: 'previews', module: 'clients', name: 'previews', owner: '', groups: [{ id: 'g-previews', name: 'Active', items: [] }] });
+  const ids = ['r1', 'r2', 'r3', 'r4'];
+  const opts = { uid: () => ids.shift() };
+  const dl = { id: 'd-7', name: '  Example Water ', stage: 'Demos', contact: 'ann', clientId: '' };
+  const made = auto.dealDemoRowLocal(st, dl, 'Contacted', opts);
+  assert.deepEqual(made, { id: 'r1', name: 'Example Water', done: false, updates: [], subtasks: [], values: { people: ['ann'], status: 'Not started', deal: 'd-7' } });
+  assert.equal(demos.groups[0].items.at(-1), made, 'at the end of Demos’ first group');
+  assert.equal(auto.dealDemoRowLocal(st, { ...dl, stage: 'Proposal sent' }, 'First meetings', opts), null, 'already has its row: no second');
+  demos.groups[0].items.pop(); // someone deletes it
+  assert.equal(auto.dealDemoRowLocal(st, { ...dl, stage: 'Proposal sent' }, 'Demos', opts), null, 'between Demos and Proposal sent: not made again');
+  assert.equal(auto.dealDemoRowLocal(st, { ...dl, stage: 'First meetings' }, 'Demos', opts), null, 'only Demos and Proposal sent');
+  assert.equal(auto.dealDemoRowLocal(st, dl, 'First meetings', opts)?.id, 'r2', 'back into Demos later: made again');
+  // A row for the deal on another Clients board counts; a client's id comes along; no owner is nobody.
+  st.boards.find((b) => b.id === 'previews').groups[0].items.push({ id: 'p-1', name: 'x', values: { deal: 'd-8' }, done: false, updates: [], subtasks: [] });
+  assert.equal(auto.dealDemoRowLocal(st, { id: 'd-8', name: 'Y', stage: 'Demos' }, '', opts), null);
+  assert.deepEqual(auto.dealDemoRowLocal(st, { id: 'd-9', name: '', stage: 'Proposal sent', contact: '', clientId: 'c-1' }, '', opts).values,
+    { people: [], status: 'Not started', deal: 'd-9', client: 'c-1' });
+  assert.equal(st.boards.find((b) => b.id === 'previews').groups[0].items.length, 1, 'always the first Clients board');
+  assert.equal(auto.dealDemoRowLocal({ boards: [] }, dl, '', opts), null, 'no Clients board: nothing');
+  assert.deepEqual(auto.DEMO_STAGES, ['Demos', 'Proposal sent']);
 });
 
 await check('§22 deal next steps on Operations: a Team Tasks task linked to a deal shows on its profile and for its owner and whoever is Also on; personal pages have no Deal', () => {
@@ -2430,7 +2455,8 @@ await check('crm: the demo seed — Northside’s deal has a meeting with its no
   assert.deepEqual(tl.map((e) => e.kind), ['meeting', 'note']);
   assert.ok(/docs\.google\.com/.test(tl[0].url) && tl[0].body && tl[0].attendees);
   assert.deepEqual(crm.linksOf(s, { dealId: northside.id }).map((l) => l.label), ['Proposal']);
-  assert.deepEqual(work.dealTasks(s, northside.id).map((r) => r.item.name), ['Send Northside the scope document']);
+  assert.deepEqual(work.dealTasks(s, northside.id).map((r) => r.item.name), ['Send Northside the scope document', 'Northside Diocese: asset register walkthrough'],
+    'its next step, then its row on Clients › Demos (§23)');
   const wt = crm.timelineOf(s, { clientId: westbay.id });
   assert.ok(wt.some((e) => e.kind === 'meeting' && e.dealId), 'the deal’s meeting, now the client’s');
   assert.ok(crm.linksOf(s, { clientId: westbay.id }).some((l) => l.label === 'Demo' && !l.fixed));
@@ -3641,6 +3667,9 @@ if (createSeed && migrate) {
     assert.ok(s.deals.every((d) => DEAL_STAGES.includes(d.stage)), JSON.stringify(s.deals.map((d) => d.stage)));
     assert.deepEqual(DEAL_STAGES.map((st) => s.deals.filter((d) => d.stage === st && !d.clientId).length).map((n) => n > 0), [true, true, true, true, true],
       'something in every column');
+    // Every deal in Demos or Proposal sent has its row on Clients › Demos (§23).
+    const demoRows = s.boards.filter((b) => b.module === 'clients' && !b.owner)[0].groups.flatMap((g) => g.items);
+    assert.ok(s.deals.filter((d) => ['Demos', 'Proposal sent'].includes(d.stage)).every((d) => demoRows.some((i) => i.values.deal === d.id)), 'each Demos deal has its Demos row');
     // Both Leads and none on the board; the client Westbay became carries its deal's (§21).
     assert.deepEqual(['lyco', 'assetstack', ''].map((src) => s.deals.some((d) => d.source === src && !d.clientId)), [true, true, true]);
     assert.ok(s.deals.concat(s.clients).every((x) => ['', 'lyco', 'assetstack'].includes(x.source)));

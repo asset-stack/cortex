@@ -20,9 +20,11 @@ export const PRIORITY_HINTS = { Urgent: 'Today: drop other work. One at a time.'
 const OWNER = { key: 'people', label: 'Owner', type: 'owner' };
 const ALSO = { key: 'also', label: 'Also on', type: 'also', team: true };
 const PRIORITY_COLUMN = { key: 'priority', label: 'Priority', type: 'label', options: PRIORITY, hints: PRIORITY_HINTS };
-// Which department a task belongs to (§20): Operations, Marketing, Outreach, Clients or Pipeline. Last on every team board.
+// Which department a task belongs to (§20): Operations, Marketing, Outreach, Clients or Pipeline. Last on every team board
+// (a sparse Deal link may follow it).
 const DEPARTMENT = { key: 'department', label: 'Department', type: 'department', team: true };
-// The deal a task is a next step for (§19, §22): first on Outreach's boards, after Department on Operations' team boards.
+// The deal a task is for (§19, §22, §23): a next step (first on Outreach's boards, after Department on Operations' team
+// boards) or a deal's row on Clients › Demos (after the Client, §23).
 const DEAL = { key: 'deal', label: 'Deal', type: 'deal' };
 
 // The board modules' columns (BOARD_MODULES): Projects (with the former Admin board merged in), Marketing, Outreach and
@@ -84,6 +86,7 @@ export const BOARD_SCHEMAS = {
     icon: 'Building2',
     columns: [
       { key: 'client', label: 'Client', type: 'client' },
+      { ...DEAL, sparse: true }, // a prospect's row before it's a client (§23): Pipeline's Demos and Proposal sent
       OWNER,
       ALSO,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },

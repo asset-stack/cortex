@@ -3,7 +3,7 @@ import { Pencil, Trash2, X } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { useAccess } from '@/lib/access';
 import { DEPARTMENTS, MODULE_LABELS, boardHref, boardTitle, departmentOf, findBoard, sameAudience } from '@/lib/boards';
-import { alsoOf, taggable } from '@/lib/work';
+import { alsoOf, isWaiting, taggable } from '@/lib/work';
 import { itemWord } from '@/data/boards';
 import { Avatar, ClientPicker, ConfirmModal, DealPicker, Drawer, InlineRename, LabelPicker, OwnerPicker, PeoplePicker, QuickAdd } from '@/components/ui';
 import { MessageText } from '@/lib/mentions';
@@ -82,7 +82,7 @@ export default function ItemDrawer({ boardId, schema, itemId, onClose, readOnly 
                 <span className="text-[12px] dimmer">{c.label}</span>
                 {c.type === 'owner' && (
                   <div>
-                    <OwnerPicker value={item.values.people || []} board={board} label={c.label} size={32} readOnly={readOnly}
+                    <OwnerPicker value={item.values.people || []} board={board} label={c.label} size={32} readOnly={readOnly} waiting={isWaiting(item)}
                       onChange={(v) => actions.updateItem(boardId, item.id, { values: { owner: v } })} />
                   </div>
                 )}
