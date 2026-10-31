@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronDown, GripVertical, MessageCircle, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronDown, GripVertical, MessageCircle, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { DEPARTMENTS, MODULE_LABELS, departmentOf, findBoard } from '@/lib/boards';
 import { alsoOf, isWaiting, taggable } from '@/lib/work';
@@ -121,6 +121,46 @@ function GroupHead({ group, count, first, last, collapsed, renaming, readOnly, t
  * belongs to the board itself (group options, Add task, Add group, rename / delete, dragging); `rowAction(item)` fills
  * the last cell instead (Do today).
  */
+const ASK_FOR = 4000; // how long the second click is waited for
+
+/**
+ * A task's done box. Ticking takes two clicks: the first turns it into an amber "click again" check, the second marks
+ * the task Done (on the Team and Dashboard tables it then leaves the list). It settles back after a few seconds, on
+ * Escape or when focus moves away. Unticking (Done → Not started) takes one.
+ */
+function DoneBox({ name, done, readOnly, onChange }) {
+  const [asking, setAsking] = useState(false);
+  const box = useRef(null);
+  const again = useRef(null);
+  const back = useRef(false); // focus the box again once the question goes (it had the focus)
+  const settle = (refocus) => { back.current = refocus; setAsking(false); };
+  useEffect(() => {
+    if (!asking) {
+      if (back.current) { back.current = false; box.current?.focus(); }
+      return undefined;
+    }
+    again.current?.focus();
+    const timer = window.setTimeout(() => settle(document.activeElement === again.current), ASK_FOR);
+    return () => window.clearTimeout(timer);
+  }, [asking]);
+  if (asking) {
+    return (
+      <button ref={again} type="button" aria-label={`Click again to mark ${name} done`} title="Click again to mark done"
+        onClick={() => { settle(true); onChange(true); }}
+        onBlur={() => setAsking(false)}
+        onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); settle(true); } }}
+        className="inline-grid h-6 w-6 place-items-center rounded-full bg-amber-300 align-middle text-slate-900 ring-2 ring-amber-200/60">
+        <Check className="h-4 w-4" strokeWidth={3} aria-hidden="true" />
+      </button>
+    );
+  }
+  return (
+    <input ref={box} type="checkbox" checked={done} aria-label={`Mark ${name} done`} disabled={readOnly}
+      onChange={() => { if (done) onChange(false); else setAsking(true); }}
+      className="h-4 w-4 accent-[#5fd4ff] disabled:opacity-60" />
+  );
+}
+
 export default function TableView({ boardId, schema, groups, onOpen, onAdd, readOnly = false, view = false, rowAction }) {
   const { state, actions } = useStore();
   const board = findBoard(state, boardId);
@@ -207,9 +247,8 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                                   <GripVertical className="h-4 w-4" />
                                 </span>
                               )}
-                              <input type="checkbox" checked={it.done} aria-label={`Mark ${it.name} done`} disabled={readOnly}
-                                onChange={() => actions.updateItem(boardId, it.id, { done: !it.done, values: { status: it.done ? 'Not started' : 'Done' } })}
-                                className="h-4 w-4 accent-[#5fd4ff] disabled:opacity-60" />
+                              <DoneBox name={it.name} done={it.done} readOnly={readOnly}
+                                onChange={(done) => actions.updateItem(boardId, it.id, { done, values: { status: done ? 'Done' : 'Not started' } })} />
                             </td>
                             <td className={renaming === tKey ? 'px-1.5 py-1' : 'p-3'}>
                               {renaming === tKey ? (

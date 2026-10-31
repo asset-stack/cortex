@@ -19,6 +19,12 @@ A short note for the team: who owns a task, what comes first, and where work goe
   up (set yourself as Owner when you do).
 - It sits at the top of their Dashboard under **Waiting on you · from you** until they click **Accept** (starting it
   counts too). Until then you and the team see it as waiting.
+- **Back and forth**: the Owner is whoever has the next step. Done your part (designs ready for review, info needed from
+  someone)? Set the next person as **Owner** and post an update saying what's needed. Whoever had it moves to **Also on**,
+  so it stays in their list; it moves back the same way. Take yourself off Also on when you're no longer needed. (Giving
+  away a task you haven't started yet, still Not started, doesn't keep you on it.)
+- **Finished?** Tick the box by the task, then click the amber check that appears to confirm. The task leaves your lists
+  but stays on its board, crossed out; untick it there if it isn't done after all.
 - Not accepted after a day? It shows in admins' **Needs attention**.
 
 ## Priority says when

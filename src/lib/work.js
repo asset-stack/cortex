@@ -74,6 +74,9 @@ export function isWaiting(item) {
  * the task to someone else records who did it and when (`assignedBy`, `assignedAt`): it then waits on them to accept it
  * (`acceptedAt`, set by acceptedValues(), or here when they change its status: starting it accepts it). Taking it
  * yourself or leaving it with no one clears all three. Only this and acceptedValues() set them, so a patch can't.
+ * Passing it from one owner to another (handed on, or taken back) puts whoever had it on Also on (§24), so it stays in
+ * their lists; except when they give away their own task before starting it (still Not started: a new task's starting
+ * owner is its maker), which only says who it's for.
  */
 export function nextValues(prev, patch, { me = '', now = new Date().toISOString() } = {}) {
   const next = { ...patch };
@@ -89,7 +92,11 @@ export function nextValues(prev, patch, { me = '', now = new Date().toISOString(
   const after = ownerOf({ values });
   // A task that still has several people (from before one owner per task): picking its owner puts the rest on Also on,
   // so nobody drops off it. Also on never lists the owner, and goes when it's empty.
-  if (picked && earlier.people.length > 1) values.also = [...(Array.isArray(values.also) ? values.also : []), ...earlier.people];
+  const onIt = Array.isArray(values.also) ? values.also : [];
+  if (picked && earlier.people.length > 1) values.also = [...onIt, ...earlier.people];
+  else if (picked && before && after && after !== before && (me !== before || (earlier.status || 'Not started') !== 'Not started')) {
+    values.also = [...onIt, before]; // the previous owner stays on it
+  }
   if ('also' in values) {
     const also = cleanAlso(values.also, after);
     if (also.length) values.also = also; else delete values.also;

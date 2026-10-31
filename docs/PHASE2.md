@@ -1231,3 +1231,27 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Tests**: `scripts/test-sync.mjs` (§23: `dealDemoRowLocal`, the Clients columns, the seed's Demos rows);
   `scripts/test-db.mjs` checks 110–116 (0014: re-runs, entering only, no double-ups, the client, security definer, nowhere
   to put it).
+
+## 24. Passing a task on: whoever had it stays on it, as Also on; Done takes two clicks (no migration)
+
+- **Why** (owner, 2026-10-31): work goes back and forth. Shem does the designs and Transurban goes to David to review;
+  Shem posts updates on Alltel, then it's with David to upload some info. The Owner is whoever has the next step, and
+  changing it used to drop the person who had it off the task, so it left their lists.
+- **The rule** (`nextValues()`, `src/lib/work.js`): when the Owner changes from one person to another, the one who had it
+  goes on **Also on**. That's whether they hand it on themselves, the new owner takes it back, or an admin moves it.
+  Handing it back swaps them (the new owner comes off Also on, as before). It still waits on the new owner to accept it
+  when someone else made the change, as before. The exception: giving away your own task before you've started it
+  (status still Not started) only says who it's for, so you aren't kept on it. That covers a new task too: its maker is
+  its first owner, whether it's made with New task (`newTaskValues()`) or added on the board and given its owner after.
+  Nothing goes on Also on when the Owner is cleared or was empty, on a people list (Work in Progress' Contact), or on a
+  board without Also on (personal pages, Work in Progress: `boardValues()`).
+- **AS Team** too: when someone takes a task from AS Team, AS Team stays on it (Also on), so the AS Team page shows who
+  picked up what; take it off in Also on when it isn't wanted.
+- **Done takes two clicks** (owner, 2026-10-31: a single tick looked like it deleted the task, because Team › Name and
+  My tasks list open tasks only). A table's Done box (`DoneBox` in `src/components/board/TableView.jsx`) turns into an
+  amber "click again" check on the first click; the second marks the task Done (status Done). It settles back after 4
+  seconds, on Escape (focus back on the box) or when focus moves away. Unticking takes one click. A Done task stays on its
+  board, crossed out.
+- **Data**: `values.also` only (jsonb), synced as before; nothing to run in Supabase.
+- **Tests**: `scripts/test-sync.mjs` (§24, and the hand-over expectations in the owners, accept and §20 checks);
+  Playwright (handing on and back, taking it back, a new task; the Done box at 1440 and 390px).
