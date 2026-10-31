@@ -1216,7 +1216,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   Demos or Proposal sent (added there, or moved there from another stage) with no linked row on any Clients team board
   gets one on the **first** Clients team board (by position: Demos), at the end of its first group: named after the
   deal, owned by its owner, Not started, `values.deal` (and `values.client` once it has one), not a hand-over. Moving
-  between Demos and Proposal sent never makes one again, so a row someone deleted stays deleted. Security definer, like
+  between Demos and Proposal sent never makes one again, so a row someone deleted stays deleted. Only a `values.deal` link
+  counts: a row added by hand earlier needs its Deal set, or the deal gets a second row. Security definer, like
   `contact_pipeline`: whoever moves the deal may have only Clients view. Deals already there when it ran got theirs
   from the one-off match below.
 - **First match** (data; SQL in the editor, not in this repo): a read-only preview, then an apply with the same rules,

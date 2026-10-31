@@ -5,7 +5,7 @@ import { cn } from '@/lib/cn';
 import { useStore, useUsers } from '@/data/store';
 import { canEditBoard } from '@/lib/access';
 
-export function Avatar({ userId, size = 28, ring = true, className }) {
+export function Avatar({ userId, size = 28, ring = true, className, title }) {
   const users = useUsers();
   const u = users[userId];
   if (!u) {
@@ -17,7 +17,7 @@ export function Avatar({ userId, size = 28, ring = true, className }) {
   }
   return (
     <span
-      title={u.name}
+      title={title ?? u.name}
       className={cn('inline-grid place-items-center rounded-full font-bold text-white shrink-0', ring && 'ring-2 ring-white/40', className)}
       style={{ width: size, height: size, background: u.color, fontSize: size * 0.38 }}
     >
@@ -211,11 +211,12 @@ export function AvatarStack({ userIds, size = 28, max = 3, label, className, emp
   const names = ids.map((id) => users[id].name).join(', ') || empty;
   const said = `${label ? `${label}: ${names}` : names}${waiting && ids.length ? ' (waiting to accept)' : ''}`;
   return (
-    <span className={cn('inline-flex items-center', className)} title={waiting && ids.length ? `Waiting on ${names} to accept` : undefined}>
+    <span className={cn('inline-flex items-center', className)}>
       <span aria-hidden="true" className="inline-flex items-center">
         {ids.length === 0 && <Avatar userId="" size={size} />}
         {shown.map((id, k) => (
-          <Avatar key={id} userId={id} size={size} ring={!waiting} className={cn(k && '-ml-2', waiting && 'ring-2 ring-amber-300')} />
+          <Avatar key={id} userId={id} size={size} ring={!waiting} title={waiting ? `Waiting on ${users[id].name} to accept` : undefined}
+            className={cn(k && '-ml-2', waiting && 'ring-2 ring-amber-300')} />
         ))}
         {extra > 0 && (
           <span title={ids.slice(shown.length).map((id) => users[id].name).join(', ')}

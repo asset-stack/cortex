@@ -158,7 +158,7 @@ function boards(clientId = () => '', dealId = () => '') {
       group('To do', '#c9ffe6', [
         // Pipeline's Demos and Proposal sent deals each have their row here, linked to the deal (§23).
         item('Northside Diocese: asset register walkthrough', { client: clientId('Northside Diocese'), deal: dealId('Northside Diocese'), people: ['david'], status: 'In progress', priority: 'Urgent', due: '2026-10-27' }),
-        item('Coastal Rail: condition data demo', { client: clientId('Coastal Rail'), people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-10-29' }),
+        item('Coastal Rail: condition data demo', { client: clientId('Coastal Rail'), deal: dealId('Coastal Rail'), people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-10-29' }),
         item('Harbour Construction: digital twin demo', { client: clientId('Harbour Construction'), deal: dealId('Harbour Construction'), people: ['david'], status: 'Not started', priority: 'Low', due: '' }),
       ]),
       group('Done', '#bfe9ff', [
