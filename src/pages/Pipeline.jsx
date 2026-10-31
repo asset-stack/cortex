@@ -187,6 +187,8 @@ export default function Pipeline() {
   const closeForm = useCallback(() => setForm(null), []);
   const deals = state.deals.filter((d) => !d.clientId);
   const ofLead = (d) => !lead || leadOf(d) === lead;
+  // A deal made a client goes by its client's Lead (set in Clients); the deal's own stays as it was when it left the board.
+  const madeOfLead = (d) => !lead || leadOf(state.clients.find((c) => c.id === d.clientId) || d) === lead;
   const shown = deals.filter(ofLead); // the columns and KPIs follow the Lead filter
   // The confirm closes if the deal is deleted or made a client meanwhile.
   const makingDeal = making ? deals.find((d) => d.id === making) : null;
@@ -208,7 +210,7 @@ export default function Pipeline() {
         { value: shown.length, label: 'Open deals', tint: '#334155' },
         { value: compactMoney(value), label: 'Pipeline value', tint: '#7c3aed' },
         { value: shown.filter((d) => dealStage(d) === LAST_STAGE).length, label: 'Proposals sent', tint: '#0f9f8f' },
-        { value: state.deals.filter((d) => d.clientId && ofLead(d)).length, label: 'Made clients', tint: '#f59e0b' },
+        { value: state.deals.filter((d) => d.clientId && madeOfLead(d)).length, label: 'Made clients', tint: '#f59e0b' },
       ]} />
       <div className="mt-6">
         <Segmented label="Lead" options={LEAD_FILTER} value={lead} onChange={setLead} />

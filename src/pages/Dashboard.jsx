@@ -8,7 +8,8 @@ import DayNav from '@/components/work/DayNav';
 import PersonSwitch from '@/components/work/PersonSwitch';
 import TodoList from '@/components/work/TodoList';
 import AddTodo from '@/components/work/AddTodo';
-import MyTasks from '@/components/work/MyTasks';
+import WaitingTasks from '@/components/work/WaitingTasks';
+import PersonTasks from '@/components/work/PersonTasks';
 import NeedsAttention from '@/components/work/NeedsAttention';
 import Mentions, { mentionsOf } from '@/components/work/Mentions';
 import Tools from '@/components/work/Tools';
@@ -32,8 +33,8 @@ const byStart = (todos) => todos
   .map(({ t }) => t);
 
 /**
- * The Dashboard (docs/PHASE2.md §18, §20; was My Work): someone's master task list (Waiting on you, the day's to-dos, My
- * tasks: a card per board, in its order, with the tasks they're also on) and their notes (their own page), with Needs
+ * The Dashboard (docs/PHASE2.md §18, §20, §22; was My Work): someone's master task list (Waiting on you, the day's to-dos,
+ * My tasks: each board's own table with their tasks, the ones they're Also on included) and their notes (their own page), with Needs
  * attention (admins), Mentions and Tools beside it. Admins look at anyone's.
  */
 export default function Dashboard() {
@@ -108,24 +109,28 @@ export default function Dashboard() {
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex min-w-0 flex-col gap-6">
-          {load.waiting > 0 && <MyTasks rows={rows.filter((r) => r.waiting)} personId={personId} waiting act title={self ? 'Waiting on you' : `Waiting on ${person?.name}`} />}
+          {load.waiting > 0 && <WaitingTasks rows={rows.filter((r) => r.waiting)} personId={personId} act title={self ? 'Waiting on you' : `Waiting on ${person?.name}`} />}
           {offset === 0 && carried.length > 0 && (
             <TodoList title="Carried over" icon={History} todos={carried} showDay moveTo={{ day: today, label: 'today' }} />
           )}
           <TodoList title={title} icon={CalendarCheck} todos={dayTodos} empty="Nothing planned." rim>
             <AddTodo assignee={personId} day={day} />
           </TodoList>
-          {/* Their notes page is below as My notes, so it has no card of its own here. */}
-          <MyTasks rows={rows.filter((r) => !r.waiting && !(showNotes && r.board.id === notes.id))} personId={personId} act load={load}
-            title={self ? 'My tasks' : `${person?.name}’s tasks`}
-            empty={self ? 'Nothing assigned to you.' : 'Nothing assigned.'} />
-          {showNotes && <section aria-label={self ? 'My notes' : `${person?.name}’s notes`} className="mt-4"><Board key={notes.id} board={notes} embedded title={self ? 'My notes' : `${person?.name}’s notes`} /></section>}
         </div>
         <div className="flex min-w-0 flex-col gap-6">
           {access.isAdmin && <NeedsAttention />}
           <Mentions mentions={mentions} person={person} />
           <Tools key={personId} person={person} />
         </div>
+      </div>
+
+      {/* Full width under both columns: each board's own table (§22), then their notes page. Their notes page is
+          below as My notes, so it has no card of its own here. */}
+      <div className="mt-10 flex flex-col gap-6">
+        <PersonTasks rows={rows.filter((r) => !r.waiting && !(showNotes && r.board.id === notes.id))} personId={personId} act load={load}
+          title={self ? 'My tasks' : `${person?.name}’s tasks`}
+          empty={self ? 'Nothing assigned to you.' : 'Nothing assigned.'} />
+        {showNotes && <section aria-label={self ? 'My notes' : `${person?.name}’s notes`} className="mt-4"><Board key={notes.id} board={notes} embedded title={self ? 'My notes' : `${person?.name}’s notes`} /></section>}
       </div>
 
       <TimesheetModal open={logging} onClose={() => setLogging(false)} day={day} />

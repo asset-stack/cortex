@@ -117,8 +117,11 @@ function GroupHead({ group, count, first, last, collapsed, renaming, readOnly, t
  * of this board: onto a row (its upper half: before it; lower half: after it), the column headings (the group's top),
  * or the rest of the group, or a collapsed group's heading (the group's end). `groups` may be filtered by search or the filters: a drop
  * is placed against the board's full order (actions.placeItem: before a given task).
+ * `view`: someone's tasks shown elsewhere (src/components/work/PersonTasks.jsx): the same rows and cells, but nothing that
+ * belongs to the board itself (group options, Add task, Add group, rename / delete, dragging); `rowAction(item)` fills
+ * the last cell instead (Do today).
  */
-export default function TableView({ boardId, schema, groups, onOpen, onAdd, readOnly = false }) {
+export default function TableView({ boardId, schema, groups, onOpen, onAdd, readOnly = false, view = false, rowAction }) {
   const { state, actions } = useStore();
   const board = findBoard(state, boardId);
   const all = board?.groups || []; // `groups` may be filtered; counts and ends come from the board
@@ -138,11 +141,15 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
 
   // Dragging (src/components/board/useTaskDrag.js): onto a row, the column headings (the group's top) or the rest of the
   // group (its end), placed against the board's full order.
-  const dnd = useTaskDrag({ boardId, groups: all, readOnly });
+  const dnd = useTaskDrag({ boardId, groups: all, readOnly: readOnly || view });
+  const structure = !readOnly && !view; // the board's own controls
+  const actionsCell = view ? Boolean(rowAction) : !readOnly;
   const { drag, over } = dnd;
+  // The board's columns; a `sparse` one (Operations' Deal) only once a task on the board uses it.
+  const columns = schema.columns.filter((c) => !c.sparse || all.some((g) => g.items.some((it) => it.values?.[c.key])));
   // Wide enough for every column at its width (as the headings set them), with the Task column at least ~200px.
   const colWidth = (c) => (c.type === 'text' ? 220 : c.type === 'client' || c.type === 'deal' ? 176 : 124);
-  const minWidth = Math.max(820, 340 + schema.columns.reduce((t, c) => t + colWidth(c), 0));
+  const minWidth = Math.max(820, 340 + columns.reduce((t, c) => t + colWidth(c), 0));
 
   const addGroup = () => {
     const id = actions.addGroup(boardId, 'New group');
@@ -158,11 +165,11 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
         const gKey = `g:${g.id}`;
         // Over a part of the group that takes no drop (its open heading, the gaps, the status bar): no drop line.
         return (
-          <section key={g.id} className="mt-8" onDragLeave={dnd.leave} onDragOver={dnd.quiet}>
+          <section key={g.id} className={view ? (gi ? 'mt-5' : 'mt-3') : 'mt-8'} onDragLeave={dnd.leave} onDragOver={dnd.quiet}>
             {/* A collapsed group takes a drop on its heading (to its end); an open one on its table. */}
             <div {...(collapsed[g.id] ? dnd.end(g.id) : {})} className={cn('rounded-[14px]', collapsed[g.id] && dnd.endHere(g.id) && 'drag-over')}>
             <GroupHead group={g} count={g.items.length} first={at <= 0} last={at < 0 || at === all.length - 1}
-              collapsed={collapsed[g.id]} renaming={renaming === gKey} readOnly={readOnly} toggleRef={keep(gKey)}
+              collapsed={collapsed[g.id]} renaming={renaming === gKey} readOnly={!structure} toggleRef={keep(gKey)}
               onToggle={() => setCollapsed((c) => ({ ...c, [g.id]: !c[g.id] }))}
               onStartRename={() => setRenaming(gKey)} onRename={(name) => actions.renameGroup(boardId, g.id, name)}
               onRenamed={renamed(gKey)}
@@ -175,13 +182,13 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                   <table className="w-full border-collapse text-[13.5px]" style={{ minWidth }}>
                     <thead>
                       <tr {...dnd.top(g.id, shown)} className={cn('text-[12px] dimmer', over?.group === g.id && over.top && LINE_BELOW)}>
-                        <th className={cn('w-12 p-3', !readOnly && 'md:w-16')}><span className="sr-only">Done</span></th>
+                        <th className={cn('w-12 p-3', structure && 'md:w-16')}><span className="sr-only">Done</span></th>
                         <th className="min-w-[200px] p-3 text-left font-medium">{itemWord(schema)}</th>
                         <th className="w-10"><span className="sr-only">Updates</span></th>
-                        {schema.columns.map((c) => (
+                        {columns.map((c) => (
                           <th key={c.key} className={cn('p-3 font-medium', c.type === 'text' ? 'min-w-[220px] text-left' : c.type === 'client' || c.type === 'deal' ? 'w-[176px]' : 'w-[124px]')}>{c.label}</th>
                         ))}
-                        {!readOnly && <th className="w-[80px]"><span className="sr-only">Actions</span></th>}
+                        {actionsCell && <th className="w-[80px]"><span className="sr-only">Actions</span></th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -193,7 +200,7 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                             className={cn('group/row border-t rowline hover:bg-white/5', drag === it.id && 'opacity-50',
                               over?.row === it.id && (over.place === 'before' ? LINE_ABOVE : LINE_BELOW))}>
                             <td className="relative p-3 text-center">
-                              {!readOnly && renaming !== tKey && (
+                              {structure && renaming !== tKey && (
                                 <span {...dnd.handle(it.id)} aria-hidden="true" title="Drag to move"
                                   className={cn('absolute left-1 top-1/2 hidden -translate-y-1/2 cursor-grab rounded-md p-0.5 dimmer hover:text-white active:cursor-grabbing md:block', ROW_ACTION)}>
                                   <GripVertical className="h-4 w-4" />
@@ -220,7 +227,7 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                                 {it.updates.length > 0 && <span className="absolute -right-2 -top-1.5 rounded-full bg-[#2337EE] px-1 text-[10px] font-bold text-white">{it.updates.length}</span>}
                               </button>
                             </td>
-                            {schema.columns.map((c) => {
+                            {columns.map((c) => {
                               const val = it.values[c.key] ?? '';
                               if (c.type === 'owner') {
                                 return (
@@ -294,7 +301,8 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                                 </td>
                               );
                             })}
-                            {!readOnly && (
+                            {view && rowAction && <td className="pr-2">{rowAction(it)}</td>}
+                            {structure && (
                               <td className="pr-2">
                                 {renaming !== tKey && (
                                   <div className="flex justify-end">
@@ -312,19 +320,19 @@ export default function TableView({ boardId, schema, groups, onOpen, onAdd, read
                           </tr>
                         );
                       })}
-                      {!readOnly && <AddRow colSpan={schema.columns.length + 3} word={itemWord(schema).toLowerCase()} onAdd={(name) => onAdd(g.id, name)} />}
+                      {structure && onAdd && <AddRow colSpan={columns.length + 3} word={itemWord(schema).toLowerCase()} onAdd={(name) => onAdd(g.id, name)} />}
                     </tbody>
                   </table>
                 </div>
                 <StatusBar items={g.items} />
               </>
             )}
-            {!readOnly && gi === groups.length - 1 && <AddGroup onAdd={addGroup} />}
+            {structure && gi === groups.length - 1 && <AddGroup onAdd={addGroup} />}
           </section>
         );
       })}
       {/* A board with no groups at all; when filters hide every group there's nothing to add after. */}
-      {!readOnly && !all.length && !groups.length && <div className="mt-8"><AddGroup onAdd={addGroup} flush /></div>}
+      {structure && !all.length && !groups.length && <div className="mt-8"><AddGroup onAdd={addGroup} flush /></div>}
 
       <ConfirmModal open={!!confirm} onClose={() => setConfirm(null)} title={confirm?.title} onConfirm={() => confirm?.run()}>
         {confirm?.body}

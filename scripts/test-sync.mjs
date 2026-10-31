@@ -1838,8 +1838,8 @@ const { BOARD_SCHEMAS: SCHEMAS, PRIORITY: PRIO, PRIORITY_HINTS } = await import(
 
 await check('owners: Projects, Marketing, Outreach and Clients boards have one Owner and Priority (Urgent → Low, each with a meaning); Work in Progress keeps its people', () => {
   const cols = (m) => SCHEMAS[m].columns.map((c) => `${c.key}:${c.type}`).join(' ');
-  // §20: Also on after the Owner, and the Department last, on every team board.
-  assert.equal(cols('projects'), 'people:owner also:also status:status priority:label due:date department:department');
+  // §20: Also on after the Owner, and the Department last, on every team board (Operations then has the Deal, §22).
+  assert.equal(cols('projects'), 'people:owner also:also status:status priority:label due:date department:department deal:deal');
   assert.equal(cols('outreach'), 'deal:deal people:owner also:also status:status priority:label due:date department:department', 'Outreach boards link a task to its deal');
   assert.equal(cols('clients'), 'client:client people:owner also:also status:status priority:label due:date department:department', 'Clients boards say which client');
   assert.equal(cols('marketing'), 'people:owner also:also status:status priority:label type:label channel:label approval:label due:date department:department');
@@ -2050,7 +2050,8 @@ await check('§20 columns: Also on and Department on team boards only (a persona
   assert.equal(schemaOf(team), SCHEMAS.projects, 'a team board: its module’s schema itself');
   assert.equal(schemaOf(mine), schemaOf({ module: 'projects', owner: 'stu' }), 'personal pages: one shared copy');
   assert.deepEqual(schemaOf(mine).columns.map((c) => c.key), ['people', 'status', 'priority', 'due'], 'no Also on or Department on notes');
-  assert.ok(['projects', 'marketing', 'outreach', 'clients', 'pipeline'].every((m) => SCHEMAS[m].columns.at(-1).key === 'department'), 'Department last everywhere');
+  assert.ok(['marketing', 'outreach', 'clients', 'pipeline'].every((m) => SCHEMAS[m].columns.at(-1).key === 'department'), 'Department last everywhere');
+  assert.deepEqual(SCHEMAS.projects.columns.slice(-2).map((c) => c.key), ['department', 'deal'], 'Operations: then the Deal (§22)');
   assert.deepEqual(['projects', 'marketing', 'outreach', 'clients', 'pipeline'].map((m) => work.hasAlso({ module: m })), [true, true, true, true, false],
     'Also on wherever there is an owner (not Work in Progress)');
   assert.deepEqual([work.hasDepartment(team), work.hasDepartment(mine), work.hasAlso(mine), work.hasOwner(mine)], [true, false, false, true]);
@@ -2155,22 +2156,6 @@ await check('§20 dropPlace: a drop against the board’s full order, past hidde
   assert.deepEqual(dp('a3', { group: 'a', shown, top: true }), { groupId: 'a', beforeId: 'a1' });
   assert.deepEqual(dp('b2', { group: 'a', end: true }), { groupId: 'a', beforeId: null });
   assert.deepEqual([dp('a1', { group: 'zz', shown, row: 'a3' }), dp('', { group: 'a', end: true })], [null, null]);
-});
-
-await check('§20 stepPlace: Move up / down past the next task shown; across a group’s edge to the end of the one above or the start of the one below', () => {
-  const t = (id) => ({ id });
-  const groups = [{ id: 'a', items: ['a1', 'a2', 'a3'].map(t) }, { id: 'b', items: ['b1', 'b2', 'b3'].map(t) }];
-  const shown = [{ id: 'a1', group: 'a' }, { id: 'a3', group: 'a' }, { id: 'b2', group: 'b' }, { id: 'b3', group: 'b' }]; // a2, b1 hidden
-  const sp = (id, dir) => boardsLib.stepPlace(groups, id, shown, dir);
-  assert.deepEqual(sp('a3', -1), { groupId: 'a', beforeId: 'a1' }, 'up past a1');
-  assert.deepEqual(sp('a1', 1), { groupId: 'a', beforeId: null }, 'down past a3 (the hidden a2 too): the end');
-  assert.deepEqual(sp('a3', 1), { groupId: 'b', beforeId: 'b2' }, 'down across the edge: the start of b as shown');
-  assert.deepEqual(sp('b2', -1), { groupId: 'a', beforeId: null }, 'up across the edge: after a3, the end of a');
-  assert.deepEqual(sp('b2', 1), { groupId: 'b', beforeId: null });
-  assert.deepEqual([sp('a1', -1), sp('b3', 1), sp('zz', 1), boardsLib.stepPlace(groups, 'a1', null, 1)], [null, null, null, null], 'the ends');
-  // What placeItem then does with it.
-  const after = boardsLib.withItemPlaced(groups, 'b2', 'a', null);
-  assert.deepEqual(after.map((g) => g.items.map((i) => i.id).join(' ')), ['a1 a2 a3 b2', 'b1 b3']);
 });
 
 await check('§20 board filters: the person filter finds Also on; the Department filter goes by the task’s own or its board’s', () => {
@@ -2420,6 +2405,20 @@ await check('crm: next steps are tasks — a deal’s (Outreach boards’ Deal c
   assert.deepEqual([work.clientTasks(blind, 'c-1', { viewer: 'stu' }).map((r) => r.item.id), work.dealTasks(blind, 'd-3', { viewer: 'stu' }).map((r) => r.item.id)],
     [['d-1'], ['o-5']], 'the deal’s next steps stay on the Outreach board, not on the client');
   assert.deepEqual([work.dealTasks(st, ''), work.hasDeal({ module: 'outreach' }), work.hasDeal({ module: 'clients' })], [[], true, false]);
+});
+
+await check('§22 deal next steps on Operations: a Team Tasks task linked to a deal shows on its profile and for its owner and whoever is Also on; personal pages have no Deal', () => {
+  const st = taskState();
+  st.deals = [{ id: 'd-9', name: 'Example deal', clientId: '' }];
+  const web = st.boards.find((b) => b.id === 'web');
+  web.groups[0].items.push({ id: 'ops-deal', name: 'Send the proposal', values: { people: ['ann'], also: ['stu'], deal: 'd-9', status: 'Not started' },
+    done: false, updates: [], subtasks: [] });
+  st.boards.find((b) => b.id === 'sales').groups[0].items.push({ id: 'sales-deal', name: 'Call back', values: { people: ['ann'], deal: 'd-9' }, done: false, updates: [], subtasks: [] });
+  assert.deepEqual([work.hasDeal({ module: 'projects', owner: '' }), work.hasDeal({ module: 'projects', owner: 'ann' })], [true, false]);
+  assert.deepEqual(work.dealTasks(st, 'd-9').map((r) => r.item.id), ['ops-deal', 'sales-deal'], 'both homes, Operations first');
+  const forStu = work.prioritiesFor(st, 'stu', { today: '2026-10-25', teamOnly: true }).find((r) => r.item.id === 'ops-deal');
+  assert.ok(forStu?.also && forStu.owner === 'ann', 'on the Also-on person’s Team view, marked as Ann’s');
+  assert.ok(work.prioritiesFor(st, 'ann', { today: '2026-10-25', teamOnly: true }).some((r) => r.item.id === 'ops-deal' && !r.also), 'and the owner’s');
 });
 
 await check('crm: the demo seed — Northside’s deal has a meeting with its notes linked, a note, a proposal and a next step; Westbay’s history came with its deal', () => {
@@ -2842,8 +2841,8 @@ await check('import: deal stages map to the columns (proposal, quote, tender or 
 await check('import: a Lead column fills deals and clients (LYCO, co-pitched, partner → lyco; AssetStack, direct → assetstack)', async () => {
   const { autoMap, normalise } = await import('../src/lib/importers.js');
   const values = ['LYCO', 'lyco', 'Co-pitched', 'co pitched', 'Partner', 'AssetStack', 'Asset Stack', 'assetstack', 'Direct', '', 'Other',
-    'Not LYCO', 'Non-partner'];
-  const want = ['lyco', 'lyco', 'lyco', 'lyco', 'lyco', 'assetstack', 'assetstack', 'assetstack', 'assetstack', '', '', '', ''];
+    'Not LYCO', 'Non-partner', 'Indirect', 'Direct sale'];
+  const want = ['lyco', 'lyco', 'lyco', 'lyco', 'lyco', 'assetstack', 'assetstack', 'assetstack', 'assetstack', '', '', '', '', '', 'assetstack'];
   ['deals', 'clients'].forEach((kind) => {
     const map = autoMap(['Name', 'Lead'], kind);
     assert.equal(map.source, 1, `${kind}: a Lead header maps`);
@@ -2851,6 +2850,10 @@ await check('import: a Lead column fills deals and clients (LYCO, co-pitched, pa
     assert.deepEqual(values.map((v) => normalise(kind, ['Example Org', v], map, { users: [], me: 'u-me' }).source), want, kind);
     assert.equal(normalise(kind, ['Example Org'], { name: 0 }, { users: [], me: 'u-me' }).source, '', `${kind}: no Lead column is none`);
   });
+  // A CRM export's "Lead Status" is the deal's stage, not its Lead.
+  const crm = autoMap(['Deal Name', 'Lead Status', 'Amount'], 'deals');
+  assert.deepEqual([crm.stage, crm.source], [1, -1]);
+  assert.deepEqual(((m) => [m.stage, m.source])(autoMap(['Deal Name', 'Lead Status', 'Lead Source'], 'deals')), [1, 2]);
 });
 
 await check('import: contact statuses as written, Meeting booked included (negated wording is not a booking)', async () => {

@@ -48,16 +48,17 @@ const linkProblem = (v) => {
 const escapeCancels = (cancel) => (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); cancel(); } };
 
 /** A deal's or client's next steps: its open linked tasks (each opens it) and Add next step (a task for someone, linked
- *  to it, on an Outreach board for a deal and a Clients board for a client). */
+ *  to it: on an Operations board, Team Tasks first, or an Outreach one for a deal (§22); a Clients board for a client).
+ *  It shows in the Team view and Dashboard of its owner and of whoever is Also on it. */
 export function NextSteps({ target }) {
   const { state } = useStore();
   const access = useAccess();
   const [adding, setAdding] = useState(false);
   const rows = target.dealId ? dealTasks(state, target.dealId) : clientTasks(state, target.clientId);
-  const modules = target.dealId ? ['outreach'] : ['clients'];
+  const modules = target.dealId ? ['projects', 'outreach'] : ['clients'];
   const boards = state.boards.filter((b) => modules.includes(b.module) && !b.owner);
   const canAdd = boards.some(access.canEditBoard);
-  // Next steps live on those boards (and a client's also on its deal's Outreach ones): without any to see, say nothing.
+  // Next steps live on those boards (and a client's also on its deal's): without any to see, say nothing.
   if (!rows.length && !boards.some(access.canViewBoard)) return null;
   return (
     <section>

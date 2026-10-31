@@ -22,6 +22,8 @@ const ALSO = { key: 'also', label: 'Also on', type: 'also', team: true };
 const PRIORITY_COLUMN = { key: 'priority', label: 'Priority', type: 'label', options: PRIORITY, hints: PRIORITY_HINTS };
 // Which department a task belongs to (§20): Operations, Marketing, Outreach, Clients or Pipeline. Last on every team board.
 const DEPARTMENT = { key: 'department', label: 'Department', type: 'department', team: true };
+// The deal a task is a next step for (§19, §22): first on Outreach's boards, after Department on Operations' team boards.
+const DEAL = { key: 'deal', label: 'Deal', type: 'deal' };
 
 // The board modules' columns (BOARD_MODULES): Projects (with the former Admin board merged in), Marketing, Outreach and
 // Clients. All are modules in src/lib/access.js.
@@ -36,6 +38,9 @@ export const BOARD_SCHEMAS = {
       PRIORITY_COLUMN,
       { key: 'due', label: 'Due', type: 'date' },
       DEPARTMENT,
+      // A deal's next steps live here (§22); personal pages don't have it. `sparse`: a table shows it only once a task on
+      // the board has one (the drawer always does), so boards that don't use it stay as they were.
+      { ...DEAL, team: true, sparse: true },
     ],
   },
   marketing: {
@@ -60,12 +65,12 @@ export const BOARD_SCHEMAS = {
     ],
   },
   // Outreach's boards (Sales Tasks …) have the standard task columns, as Projects, and say which deal a task is for (a
-  // next step on its profile); Clients' (Demos, Previews …) say which client.
+  // next step on its profile, as Operations' can); Clients' (Demos, Previews …) say which client.
   outreach: {
     title: 'Outreach',
     icon: 'Mail',
     columns: [
-      { key: 'deal', label: 'Deal', type: 'deal' },
+      DEAL,
       OWNER,
       ALSO,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },

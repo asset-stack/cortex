@@ -16,8 +16,8 @@ setup steps are in `DEPLOY.md`.
 - Keep demo mode working. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` the app runs on localStorage
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
-  migration that has been applied** (`0001`–`0012` are live in production): fix forward in the next file
-  (`0013_….sql`). A migration must never mention `module_level` unless it redefines it
+  migration that has been applied** (`0001`–`0013` are live in production): fix forward in the next file
+  (`0014_….sql`). A migration must never mention `module_level` unless it redefines it
   (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table
   keeps row-level security on with policies that require `is_staff()` (directly or through `is_admin()` /
   `can_view()` / `can_edit()` / the board helpers), and is added to the `supabase_realtime` publication if it is synced. Extend
@@ -44,7 +44,8 @@ setup steps are in `DEPLOY.md`.
   Pipeline's boards (Work in Progress) sit on its page under the deals, not in the menu (`PAGE_BOARD_MODULES`). Admins add
   new team boards in the app; personal pages come and go with their person.
 - **Board tasks have one home and one Owner** (`docs/PHASE2.md` §17, §18, §20): a task lives on one board (the Dashboard,
-  Team pages and a client's page are views of it, never copies; its breadcrumb is `whereOf()`). The owner column keeps
+  Team pages and a client's page are views of it, never copies, and the Dashboard and Team › Name show it in its board's
+  own `TableView` (`view` mode, `src/components/work/PersonTasks.jsx`, §22); its breadcrumb is `whereOf()`). The owner column keeps
   `values.people` as `[id]`, priority is `PRIORITY` (Urgent → Low, with `PRIORITY_HINTS`), and the rules for handing
   over and accepting, the Dashboard and Team lists, Needs attention, task mentions, a client's tasks and Do today live
   in `src/lib/work.js` (only `nextValues()` / `acceptedValues()` set `assignedBy` / `assignedAt` / `acceptedAt`). An
@@ -56,8 +57,8 @@ setup steps are in `DEPLOY.md`.
 - **Pipeline (0008, §21)**: stages are `DEAL_STAGES` (Opportunities → Contacted → First meetings → Demos → Proposal sent);
   Make client is on the last. A deal's and a client's **Lead** is `source` (0013: `'' | 'lyco' | 'assetstack'`, LYCO
   co-pitched or AssetStack direct; `LEADS` / `leadOf()` in `src/data/boards.js`, the marks in `src/components/LeadIcon.jsx`),
-  and Make client carries it. Real deals and clients never go in this repo: the live pipeline is loaded with SQL run in
-  the SQL editor.
+  and Make client carries it. A deal's next steps are tasks with `values.deal` on Operations (Team Tasks) or Outreach
+  boards (§22). Real deals and clients never go in this repo: the live pipeline is loaded with SQL run in the SQL editor.
 - **CRM profile (0012)**: a deal's or client's notes, meetings and links are `crm_entries` (`state.crmEntries`; rules in
   `src/lib/crm.js` ⇄ 0012's policies and triggers). An entry on a client follows Clients access, one on a deal that isn't
   a client yet Pipeline's; its author or an admin changes it. Make client gives a deal's entries its client in the

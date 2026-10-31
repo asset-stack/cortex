@@ -4,7 +4,7 @@ import { useStore } from '@/data/store';
 import { PRIORITY } from '@/data/boards';
 import { Avatar, PageHeader } from '@/components/ui';
 import NewTaskModal from '@/components/board/NewTaskModal';
-import MyTasks from '@/components/work/MyTasks';
+import PersonTasks from '@/components/work/PersonTasks';
 import { boardHref } from '@/lib/boards';
 import { localClock, localYmd } from '@/lib/format';
 import { prioritiesFor, topTasks, workload } from '@/lib/work';
@@ -65,7 +65,7 @@ function PersonCard({ user }) {
   );
 }
 
-/** One person's page: what waits on them and their tasks, and New task for them. */
+/** One person's page: every task allocated to them (Owner or Also on), as their boards show them, and New task for them. */
 function Person({ user }) {
   const { state } = useStore();
   const rows = useRows(user.id);
@@ -88,9 +88,9 @@ function Person({ user }) {
           <Plus className="h-4 w-4" /><span className="hidden sm:inline">{self ? 'New task' : `New task for ${user.name.split(' ')[0]}`}</span>
         </button>
       </div>
-      <div className="mt-6 flex flex-col gap-6">
-        {load.waiting > 0 && <MyTasks rows={rows.filter((r) => r.waiting)} personId={user.id} waiting act={self} title={self ? 'Waiting on you' : `Waiting on ${user.name}`} />}
-        <MyTasks rows={rows.filter((r) => !r.waiting)} personId={user.id} act={self} load={load} title={self ? 'My tasks' : 'Tasks'} />
+      <div className="mt-6">
+        {/* Waiting ones too: their Owner shows the amber ring until they're accepted (starting one accepts it). */}
+        <PersonTasks rows={rows} personId={user.id} act={self} load={load} title={self ? 'My tasks' : 'Tasks'} />
       </div>
       {adding && <NewTaskModal onClose={() => setAdding(false)} owner={user.id} />}
     </div>

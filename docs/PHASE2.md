@@ -1123,7 +1123,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   The board's filter has a Department section. A Kanban card and a My tasks row show it when it isn't the board's. Do
   today's to-do and a timesheet's suggestions go under the task's department (`categoryOf()` in `src/lib/timesheet.js`:
   a marketing task on an Operations board counts as Marketing). New task shows the chosen board's and can change it.
-- **My tasks** (`src/components/work/MyTasks.jsx`; Dashboard and Team › person): a card per board (`byBoard()`:
+- **My tasks** (superseded by §22's tables; was `src/components/work/MyTasks.jsx`; Dashboard and Team › person): a card per board (`byBoard()`:
   Operations, Marketing, Outreach, Clients, Pipeline, team boards first), titled by where it lives and linked to the
   board, its rows in the board's own order and under their group's name when a card spans several groups. Each row:
   priority, name (renamed in place), whose it is when you're Also on, its department when it isn't the board's, its
@@ -1173,3 +1173,33 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Tests**: `scripts/test-sync.mjs` (the stages and `dealStage()`, `LEADS` / `isLead` / `leadOf`, `cleanDealPatch`'s Lead,
   the import stage and Lead mapping, the deal and client round trip with `source`, a seed deal in every column and both
   Leads); `scripts/test-db.mjs` (0013: re-runs, the check, who may set it, and the sync writing it).
+
+## 22. One task, one look: Team › Name and My tasks in the boards' own tables; AS Team; deal next steps on Operations
+
+- **Why** (owner, 2026-10-31): the same job showed on the board (a table you edit), Team › Name (a compact list, editable
+  only on your own page), the Dashboard (the same list) and My notes; it read as duplicates and confused the team.
+- **Team › Name** (`src/pages/Team.jsx`) is "just a view of all the allocated work": every open task the person owns or
+  is Also on, on the team boards both of you can see (`prioritiesFor(…, { teamOnly: true })`), as
+  `src/components/work/PersonTasks.jsx`: a card per board (`byBoard()`), titled where it lives and linked to the board,
+  holding that board's own `TableView` with just their tasks, in the board's groups and order. Same columns and cells as
+  the board (Operations: Task, Updates, Owner, Also on, Status, Priority, Due, Department), edited by whoever can edit the
+  board (`canEditBoard`), and a task opens in the same `ItemDrawer`. Waiting tasks are in the tables (the Owner's amber
+  ring; starting one accepts it).
+- **`TableView`'s `view` mode**: no group options, Add task, Add group, rename/delete or dragging (the board's own
+  controls: order, groups and adding stay on the board); `rowAction(item)` fills the last cell (**Today**, i.e. Do
+  today, for the person themself or an admin).
+- **Dashboard**: Waiting on you (`src/components/work/WaitingTasks.jsx`, with Accept), Carried over and Today stay
+  beside Needs attention, Mentions and Tools; **My tasks** (the same `PersonTasks`) and My notes go full width below.
+  My tasks' Move up/down and drag went with the compact list (`stepPlace()` removed); order is set on the board.
+- **Deal next steps on Operations**: Operations' team boards have a **Deal** column (`values.deal`, after Department,
+  `sparse`: a table shows it only once a task on the board has one; the drawer always does). A deal's **Add next step**
+  offers Operations boards first (Team Tasks), then Outreach's, only boards with a Deal column (`NewTaskModal`).
+  `dealTasks()` / `clientTasks()` find them on either; they show in Team › Name and the Dashboard for the Owner and Also
+  on. Older next steps on Sales Tasks stay there (tasks don't move across modules).
+- **Data (SQL in the editor, not in this repo)**: the shared profile *Asset Stack* became **AS Team** (Edit on Operations,
+  Marketing, Outreach and Clients, so it can own a task on any team board); Operations' *Clients* and *Projects* boards
+  were folded into Team Tasks (their groups kept, prefixed with the old board's name) and deleted.
+- **Also**: Pipeline's *Made clients* under the Lead filter goes by the client's Lead; imports map a *Lead Status* column
+  to the stage and no longer read *Indirect* as AssetStack direct.
+- **Tests**: `scripts/test-sync.mjs` (§22 deal next steps on Operations, the Operations columns, the import fixes);
+  Playwright (Team › Name and Dashboard tables, view mode, the drawer, Do today, 390px).

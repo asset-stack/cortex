@@ -51,7 +51,7 @@ export const FIELDS = {
     field('sector', 'Sector', 'text', ['sector', 'industry', 'segment', 'vertical']),
     field('value', 'Value', 'money', ['value', 'amount', 'deal value', 'annual value', 'contract value', 'acv', 'arr']),
     field('priority', 'Priority', 'text', ['priority']),
-    field('stage', 'Stage', 'text', ['stage', 'status', 'deal stage', 'pipeline stage']),
+    field('stage', 'Stage', 'text', ['stage', 'status', 'deal stage', 'pipeline stage', 'lead status']), // 'Lead Status' (CRM exports) is the stage, not the Lead
     field('contact', 'Owner', 'user', ['owner', 'contact', 'deal owner', 'assigned to', 'assignee', 'account manager']),
     field('next', 'Next step', 'text', ['next step', 'next steps', 'next action', 'next']),
     field('source', 'Lead', 'text', ['lead', 'lead source', 'source', 'partner', 'channel']),
@@ -293,7 +293,7 @@ function leadSource(v) {
   if (exact) return exact;
   if (NOT_PRIORITY.test(s)) return ''; // "Not LYCO", "Non-partner": not a Lead we can name
   if (/lyco|co ?-?pitch|partner/.test(s)) return 'lyco';
-  if (/asset ?stack|direct/.test(s)) return 'assetstack';
+  if (/asset ?stack|\bdirect\b/.test(s)) return 'assetstack'; // not "Indirect"
   return '';
 }
 
