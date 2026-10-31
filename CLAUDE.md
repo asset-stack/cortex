@@ -58,7 +58,8 @@ setup steps are in `DEPLOY.md`.
   Make client is on the last. A deal's and a client's **Lead** is `source` (0013: `'' | 'lyco' | 'assetstack'`, LYCO
   co-pitched or AssetStack direct; `LEADS` / `leadOf()` in `src/data/boards.js`, the marks in `src/components/LeadIcon.jsx`),
   and Make client carries it. A deal's next steps are tasks with `values.deal` on Operations (Team Tasks) or Outreach
-  boards (§22). Real deals and clients never go in this repo: the live pipeline is loaded with SQL run in the SQL editor.
+  boards (§22), and a deal in Demos or Proposal sent has one row on Clients › Demos (`values.deal`; 0014's
+  `deal_demo_row` trigger ⇄ `dealDemoRowLocal()`, §23). Real deals and clients never go in this repo: the live pipeline is loaded with SQL run in the SQL editor.
 - **CRM profile (0012)**: a deal's or client's notes, meetings and links are `crm_entries` (`state.crmEntries`; rules in
   `src/lib/crm.js` ⇄ 0012's policies and triggers). An entry on a client follows Clients access, one on a deal that isn't
   a client yet Pipeline's; its author or an admin changes it. Make client gives a deal's entries its client in the

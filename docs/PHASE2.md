@@ -1203,3 +1203,30 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   to the stage and no longer read *Indirect* as AssetStack direct.
 - **Tests**: `scripts/test-sync.mjs` (§22 deal next steps on Operations, the Operations columns, the import fixes);
   Playwright (Team › Name and Dashboard tables, view mode, the drawer, Do today, 390px).
+
+## 23. 0014: one Clients › Demos row per Pipeline deal in Demos or Proposal sent
+
+- **Why** (owner, 2026-10-31): Pipeline's Demos and Proposal sent deals and the rows on Clients › Demos were kept apart and
+  doubled up. Every deal there (the CRM) should have exactly one row on Clients › Demos, linked to it.
+- **The link**: Clients boards have a **Deal** column (`values.deal`, sparse like Operations': a table shows it once a
+  task uses it), right after Client, so a row can point at a prospect before it's a client. `dealTasks()` /
+  `clientTasks()` follow `hasDeal`, so the row shows on the deal's profile, and on the client's page once it's made one.
+- **Automatic** (`0014_deal_demo_rows.sql`, trigger `deal_demo_row`; demo mode `dealDemoRowLocal()` in
+  `src/lib/automations.js`, called by the store's `addDeal` / `moveDeal` / `updateDeal` / imports): a deal **entering**
+  Demos or Proposal sent (added there, or moved there from another stage) with no linked row on any Clients team board
+  gets one on the **first** Clients team board (by position: Demos), at the end of its first group: named after the
+  deal, owned by its owner, Not started, `values.deal` (and `values.client` once it has one), not a hand-over. Moving
+  between Demos and Proposal sent never makes one again, so a row someone deleted stays deleted. Security definer, like
+  `contact_pipeline`: whoever moves the deal may have only Clients view. Deals already there when it ran got theirs
+  from the one-off match below.
+- **First match** (data; SQL in the editor, not in this repo): a read-only preview, then an apply with the same rules,
+  linked each Demos / Proposal sent deal to its row when it was clear (already linked; the same name; or one name
+  starting with the other, the shorter two words or more, or one word of five letters or more), added a row for each deal
+  with none, and left the ambiguous ones (more than one possible row, or a row fitting more than one deal) and the "check
+  by hand" ones (only the same first word) for the owner to link in the Deal column, so nothing doubled up.
+- **Also in this release**: a task handed over and not yet accepted shows an **amber ring** on its Owner (boards, Team ›
+  Name, My tasks, the drawer; "waiting to accept" for screen readers); the person tables keep focus on the card's heading
+  when a task leaves them; the sparse Deal column ignores deleted deals.
+- **Tests**: `scripts/test-sync.mjs` (§23: `dealDemoRowLocal`, the Clients columns, the seed's Demos rows);
+  `scripts/test-db.mjs` checks 110–116 (0014: re-runs, entering only, no double-ups, the client, security definer, nowhere
+  to put it).

@@ -57,7 +57,9 @@ Open the deal (**Pipeline**, click its name) or the client (**Clients**) and, on
 ## Moving a deal along
 Pipeline's columns are **Opportunities → Contacted → First meetings → Demos → Proposal sent**. Move a deal when it
 happens (drag it, or use its stage list): Proposal sent means the proposal is with them. **Make client** is on Proposal
-sent, once they sign. Set each deal's **Lead** when you add it: **LYCO** (co-pitched) or **AssetStack** (direct). Its icon
+sent, once they sign. When a deal reaches Demos (or Proposal sent) it gets its row on **Clients › Demos** by itself,
+owned by the deal's owner and linked to the deal: use that row for the demo work, and don't add a second one. Set each
+deal's **Lead** when you add it: **LYCO** (co-pitched) or **AssetStack** (direct). Its icon
 and coloured edge show on the card, and the All · LYCO · AssetStack filter on Pipeline and Clients shows one side's work.
 
 When a deal is made a client, its profile comes with it. Adding a meeting, note or link needs **Edit** on Pipeline (a

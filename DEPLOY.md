@@ -80,7 +80,9 @@ Contacted → First meetings → Demos, and Work in Progress under the deals; `d
 `docs/PHASE2.md` §16), then `0011_team_access_read.sql` (everyone reads everyone's access levels, for the Team pages;
 `docs/PHASE2.md` §18), then `0012_crm_profile.sql` (a deal's and a client's profile: meetings, notes and links;
 `docs/PHASE2.md` §19), then `0013_lead.sql` (a deal's and a client's Lead: LYCO, co-pitched, or AssetStack direct;
-`docs/PHASE2.md` §21).
+`docs/PHASE2.md` §21), then `0014_deal_demo_rows.sql` (a deal reaching Demos or Proposal sent gets its row on Clients ›
+Demos by itself; no table or column, so it can run before or after its release; check it with
+`select tgname from pg_trigger where tgname = 'deal_demo_row';`; `docs/PHASE2.md` §23).
 
 **0013 must run before the release that needs it is published.** It adds a column (`source`) to `deals` and
 `clients`, and that release saves it with every deal and client: until the file has run, those saves fail. Run it, check
@@ -88,7 +90,7 @@ it, then publish:
 `select table_name from information_schema.columns where table_schema = 'public' and column_name = 'source' and table_name in ('deals', 'clients');`
 must return two rows (`clients`, `deals`).
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0013_…`). Run each new file
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0015_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one. From `0013`, each file ends with a line that
 prints `Cortex 00NN applied`: if the SQL editor doesn't show that row, the file didn't finish (look for the error above
 it). To check that a file with a new table ran, `select to_regclass('public.<table>');` shows the table's name, or
