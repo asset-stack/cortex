@@ -83,6 +83,7 @@ boards: [{ id, module, name, owner, groups }],          // 0006 (§11); was { pr
 //   item.values.people: [userId]   replaces values.owner (string)
 //   item.values.also: [userId]      the other people on a task (Also on, §20); never the owner
 //   item.values.department: ''|module  a task's department where it isn't its board's (§20; '' = the board's)
+//   item.values.startedAt: iso      when its status first left Not started (§24; only nextValues() sets it)
 todos: [{ id, assignee, createdBy, title, notes, day /* 'YYYY-MM-DD' */, start /* 'HH:MM'|'' */,
           minutes, category, source /* 'manual'|'routine'|'automation' */, routineId /* ''|id */,
           ref /* e.g. 'contact:<id>' | 'deal:<id>' | 'item:<id>' | 'bank:<YYYY-MM-DD>' | '' */,
@@ -1178,8 +1179,9 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 
 - **Why** (owner, 2026-10-31): the same job showed on the board (a table you edit), Team › Name (a compact list, editable
   only on your own page), the Dashboard (the same list) and My notes; it read as duplicates and confused the team.
-- **Team › Name** (`src/pages/Team.jsx`) is "just a view of all the allocated work": every open task the person owns or
-  is Also on, on the team boards both of you can see (`prioritiesFor(…, { teamOnly: true })`), as
+- **Team › Name** (`src/pages/Team.jsx`) is "just a view of all the allocated work": every open task the person owns
+  (since §24 not the ones they're only Also on; their own Dashboard still lists those), on the team boards both of you
+  can see (`prioritiesFor(…, { teamOnly: true })` without the `also` rows), as
   `src/components/work/PersonTasks.jsx`: a card per board (`byBoard()`), titled where it lives and linked to the board,
   holding that board's own `TableView` with just their tasks, in the board's groups and order. Same columns and cells as
   the board (Operations: Task, Updates, Owner, Also on, Status, Priority, Due, Department), edited by whoever can edit the
@@ -1194,8 +1196,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Deal next steps on Operations**: Operations' team boards have a **Deal** column (`values.deal`, after Department,
   `sparse`: a table shows it only once a task on the board has one; the drawer always does). A deal's **Add next step**
   offers Operations boards first (Team Tasks), then Outreach's, only boards with a Deal column (`NewTaskModal`).
-  `dealTasks()` / `clientTasks()` find them on either; they show in Team › Name and the Dashboard for the Owner and Also
-  on. Older next steps on Sales Tasks stay there (tasks don't move across modules).
+  `dealTasks()` / `clientTasks()` find them on either; they show in Team › Name for the Owner (since §24) and on the
+  Dashboard for the Owner and Also on. Older next steps on Sales Tasks stay there (tasks don't move across modules).
 - **Data (SQL in the editor, not in this repo)**: the shared profile *Asset Stack* became **AS Team** (Edit on Operations,
   Marketing, Outreach and Clients, so it can own a task on any team board); Operations' *Clients* and *Projects* boards
   were folded into Team Tasks (their groups kept, prefixed with the old board's name) and deleted.
@@ -1237,16 +1239,23 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Why** (owner, 2026-10-31): work goes back and forth. Shem does the designs and Transurban goes to David to review;
   Shem posts updates on Alltel, then it's with David to upload some info. The Owner is whoever has the next step, and
   changing it used to drop the person who had it off the task, so it left their lists.
+- **Team › Name lists only what the person owns** (owner, 2026-10-31: Team › David showed Josh's tasks David was Also on).
+  `src/pages/Team.jsx` keeps the rows of `prioritiesFor()` they own (`owner`; not `also`, nor second on a task that still
+  has several people; Work in Progress, which has no Owner, by its Contact), on the person page and their card. The
+  Dashboard's My tasks keeps them all: your own list is everything you're on, a Team page is what each person has.
 - **The rule** (`nextValues()`, `src/lib/work.js`): when the Owner changes from one person to another, the one who had it
   goes on **Also on**. That's whether they hand it on themselves, the new owner takes it back, or an admin moves it.
   Handing it back swaps them (the new owner comes off Also on, as before). It still waits on the new owner to accept it
-  when someone else made the change, as before. The exception: giving away your own task before you've started it
-  (status still Not started) only says who it's for, so you aren't kept on it. That covers a new task too: its maker is
-  its first owner, whether it's made with New task (`newTaskValues()`) or added on the board and given its owner after.
+  when someone else made the change, as before. The exception: giving away your own task that has never been started
+  only says who it's for, so you aren't kept on it. "Started" is `values.startedAt`, set by `nextValues()` the first time
+  its status is anything but Not started (In progress, Stuck, Done) and kept for good, so a task ticked Done and unticked
+  (Not started again) still counts as started; an older task without it counts as started unless it's Not started. The
+  exception covers a new task too: its maker is its first owner, whether it's made with New task (`newTaskValues()`) or
+  added on the board and given its owner after.
   Nothing goes on Also on when the Owner is cleared or was empty, on a people list (Work in Progress' Contact), or on a
   board without Also on (personal pages, Work in Progress: `boardValues()`).
-- **AS Team** too: when someone takes a task from AS Team, AS Team stays on it (Also on), so the AS Team page shows who
-  picked up what; take it off in Also on when it isn't wanted.
+- **AS Team** too: when someone takes a task from AS Team, AS Team stays on it (Also on), so the task shows it came from
+  the team pool; Team › AS Team lists only what's still in the pool. Take it off in Also on when it isn't wanted.
 - **Done takes two clicks** (owner, 2026-10-31: a single tick looked like it deleted the task, because Team › Name and
   My tasks list open tasks only). A table's Done box (`DoneBox` in `src/components/board/TableView.jsx`) turns into an
   amber "click again" check on the first click; the second marks the task Done (status Done). It settles back after 4

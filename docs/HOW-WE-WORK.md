@@ -21,8 +21,8 @@ A short note for the team: who owns a task, what comes first, and where work goe
   counts too). Until then you and the team see it as waiting.
 - **Back and forth**: the Owner is whoever has the next step. Done your part (designs ready for review, info needed from
   someone)? Set the next person as **Owner** and post an update saying what's needed. Whoever had it moves to **Also on**,
-  so it stays in their list; it moves back the same way. Take yourself off Also on when you're no longer needed. (Giving
-  away a task you haven't started yet, still Not started, doesn't keep you on it.)
+  so it stays on their Dashboard (Team › their name lists only what they own); it moves back the same way. Take yourself off Also on when you're no longer needed. (Giving
+  away a task you've never started doesn't keep you on it.)
 - **Finished?** Tick the box by the task, then click the amber check that appears to confirm. The task leaves your lists
   but stays on its board, crossed out; untick it there if it isn't done after all.
 - Not accepted after a day? It shows in admins' **Needs attention**.
@@ -44,7 +44,7 @@ Anyone can set the owner and the priority. If two things feel Urgent, ask an adm
    table per board with the same columns (Task, Updates, Owner, Also on, Status, Priority, Due, Department). Change a
    status, priority or due date right there, click a task to open it, and **Today** puts it on your day. The order, the
    groups and adding tasks are on the board itself (open it from the table's title). Team › your name shows the same
-   tables, and everyone can look at anyone's there. Repeating daily work belongs in your routines (it shows on Today),
+   tables with just the tasks you own (not the ones you're Also on), and everyone can look at anyone's there. Repeating daily work belongs in your routines (it shows on Today),
    not as a task kept In progress.
 4. Keep at most **2 tasks In progress**. Finish or pause one before starting another.
 5. Stuck? Set the status to **Stuck** and say why in an update. On a team board, an admin sees it in Needs attention.
@@ -56,8 +56,8 @@ Open the deal (**Pipeline**, click its name) or the client (**Clients**) and, on
 1. **Meeting**: the date, who attended, the link to your meeting notes (the Google Doc) and a short summary of what was
    agreed. Anyone on the team who opens the profile can open the notes from there (share the Doc with the team).
 2. **Add next step** for each follow-up: a task with an owner, a priority and a due date, kept on **Operations › Team
-   Tasks** (linked to the deal). It waits on its owner's Dashboard like any other task, and shows in Team › their name
-   and for anyone you put on **Also on**.
+   Tasks** (linked to the deal). It waits on its owner's Dashboard like any other task, shows in Team › their name, and
+   on the Dashboard of anyone you put on **Also on**.
 3. **Add link** for anything else worth keeping: a demo, deck, proposal or recording.
 
 ## Moving a deal along

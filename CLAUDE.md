@@ -48,11 +48,12 @@ setup steps are in `DEPLOY.md`.
   own `TableView` (`view` mode, `src/components/work/PersonTasks.jsx`, §22); its breadcrumb is `whereOf()`). The owner column keeps
   `values.people` as `[id]`, priority is `PRIORITY` (Urgent → Low, with `PRIORITY_HINTS`), and the rules for handing
   over and accepting, the Dashboard and Team lists, Needs attention, task mentions, a client's tasks and Do today live
-  in `src/lib/work.js` (only `nextValues()` / `acceptedValues()` set `assignedBy` / `assignedAt` / `acceptedAt`). An
+  in `src/lib/work.js` (only `nextValues()` / `acceptedValues()` set `assignedBy` / `assignedAt` / `acceptedAt` /
+  `startedAt`). An
   `@Name` in an update never changes who is on a task. The Projects module is shown as **Operations** (`MODULE_LABELS`);
   its key stays `projects`. **Also on** (`values.also`, §20) puts others on a task without making it theirs: it never
   counts in `workload()`, never waits on them, never lists the owner; when the Owner changes from one person to another,
-  the one who had it goes on it (`nextValues()`, §24; not when they give away their own task still Not started). A task's **Department** is `departmentOf()` (a
+  the one who had it goes on it (`nextValues()`, §24; not when they give away their own task never started: `startedAt`). A task's **Department** is `departmentOf()` (a
   module key; '' = its board's). Both are `team` columns: render a board's columns from `schemaOf(board)`, never
   `BOARD_SCHEMAS[module]` (personal pages don't have them), and save values through `boardValues()`.
 - **Pipeline (0008, §21)**: stages are `DEAL_STAGES` (Opportunities → Contacted → First meetings → Demos → Proposal sent);

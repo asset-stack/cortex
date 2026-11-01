@@ -7,7 +7,7 @@ import NewTaskModal from '@/components/board/NewTaskModal';
 import PersonTasks from '@/components/work/PersonTasks';
 import { boardHref } from '@/lib/boards';
 import { localClock, localYmd } from '@/lib/format';
-import { prioritiesFor, topTasks, workload } from '@/lib/work';
+import { hasOwner, prioritiesFor, topTasks, workload } from '@/lib/work';
 import { cn } from '@/lib/cn';
 
 const COUNTS = [
@@ -18,11 +18,14 @@ const COUNTS = [
   { key: 'open', label: 'Open', tint: '' },
 ];
 
-// Someone's tasks on the team boards (never their notes), as the viewer may see them.
+// The tasks someone owns on the team boards (never their notes, nor what they're only Also on or second on a task that
+// still has several people: §24), as the viewer may see them; Work in Progress (no Owner) by its Contact. Their own
+// Dashboard lists the rest too.
+const owns = (personId) => (r) => !r.also && (!hasOwner(r.board) || r.owner === personId);
 const useRows = (personId) => {
   const { state } = useStore();
   const today = localYmd();
-  return useMemo(() => prioritiesFor(state, personId, { today, teamOnly: true }), [state, personId, today]);
+  return useMemo(() => prioritiesFor(state, personId, { today, teamOnly: true }).filter(owns(personId)), [state, personId, today]);
 };
 
 /** One person's card on the Team page: their numbers and top three tasks. */
@@ -30,7 +33,7 @@ function PersonCard({ user }) {
   const rows = useRows(user.id);
   const load = workload(rows);
   const href = `#/team/${encodeURIComponent(user.id)}`;
-  // Top three by stage: what's stuck, what they're on, what's next (theirs: never Also on, nor the backlog with no priority).
+  // Top three by stage: what's stuck, what they're on, what's next (not the backlog with no priority).
   const top = topTasks(rows);
   return (
     <section aria-label={user.name} className="glass glass-rim flex flex-col rounded-[24px] p-5">
@@ -58,14 +61,14 @@ function PersonCard({ user }) {
             </a>
           </li>
         ))}
-        {top.length === 0 && <li className="dimmer">{rows.some((r) => !r.also) ? 'Nothing prioritised yet.' : 'Nothing assigned.'}</li>}
+        {top.length === 0 && <li className="dimmer">{rows.length ? 'Nothing prioritised yet.' : 'Nothing assigned.'}</li>}
       </ol>
       {rows.length > top.length && <a href={href} className="mt-2 self-start text-[13px] font-semibold underline underline-offset-2">See all</a>}
     </section>
   );
 }
 
-/** One person's page: every task allocated to them (Owner or Also on), as their boards show them, and New task for them. */
+/** One person's page: every task they own, as their boards show them, and New task for them. */
 function Person({ user }) {
   const { state } = useStore();
   const rows = useRows(user.id);

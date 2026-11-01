@@ -1866,8 +1866,8 @@ await check('owners: nextValues — picking an owner sets people to them; handin
   assert.deepEqual(work.nextValues(base, { owner: 'ben' }, { me: 'ana', now }),
     { people: ['ben'], status: 'In progress', priority: 'High', also: ['ana'], assignedBy: 'ana', assignedAt: now }, 'handed to Ben by Ana (who stays on it, §24)');
   const handed = work.nextValues(base, { owner: 'ben' }, { me: 'ana', now });
-  assert.deepEqual(work.nextValues(handed, { status: 'Done' }, { me: 'ben', now: 'later' }), { ...handed, status: 'Done', acceptedAt: 'later' },
-    'other edits keep it (and the owner changing its status accepts it)');
+  assert.deepEqual(work.nextValues(handed, { status: 'Done' }, { me: 'ben', now: 'later' }), { ...handed, status: 'Done', acceptedAt: 'later', startedAt: 'later' },
+    'other edits keep it (and the owner changing its status accepts it, and marks it started)');
   assert.deepEqual(work.nextValues(handed, { owner: 'ben' }, { me: 'cat', now: 'later' }), handed, 'the same owner again changes nothing');
   assert.deepEqual(work.nextValues(handed, { owner: 'cat' }, { me: 'cat', now }), { people: ['cat'], status: 'In progress', priority: 'High', also: ['ana', 'ben'] },
     'taking it yourself: not New (and Ben, who had it, stays on it)');
@@ -1923,7 +1923,7 @@ await check('new task: starts Not started with you as owner; made for someone el
   assert.deepEqual(work.newTaskValues({ owner: 'ben', priority: 'High', due: '2026-10-30', client: 'c-1' }, { me: 'ana', now }),
     { status: 'Not started', people: ['ben'], priority: 'High', due: '2026-10-30', client: 'c-1', assignedBy: 'ana', assignedAt: now });
   assert.deepEqual(work.newTaskValues({ owner: '' }, { me: 'ana', now }), { status: 'Not started', people: [] });
-  assert.deepEqual(work.newTaskValues({ owner: 'ana', status: 'In progress' }, { me: 'ana', now }), { status: 'In progress', people: ['ana'] });
+  assert.deepEqual(work.newTaskValues({ owner: 'ana', status: 'In progress' }, { me: 'ana', now }), { status: 'In progress', people: ['ana'], startedAt: now });
   assert.equal(work.newTaskValues({ owner: 'ben', acceptedAt: 'x' }, { me: 'ana', now }).acceptedAt, undefined);
 });
 
@@ -2123,7 +2123,7 @@ await check('§24 passing a task on: whoever had it falls back to Also on (hande
   assert.deepEqual(work.newTaskValues({ owner: 'josh' }, { me: 'david', now }),
     { status: 'Not started', people: ['josh'], assignedBy: 'david', assignedAt: now });
   assert.deepEqual(work.newTaskValues({ owner: 'josh', status: 'In progress' }, { me: 'david', now }),
-    { status: 'In progress', people: ['josh'], assignedBy: 'david', assignedAt: now }, 'whatever status it starts with');
+    { status: 'In progress', people: ['josh'], startedAt: now, assignedBy: 'david', assignedAt: now }, 'whatever status it starts with');
   // Added on the board (you're its owner, Not started), then given its owner: you aren't kept on it.
   const quick = work.newTaskValues({}, { me: 'david', now });
   assert.deepEqual(nv(quick, { owner: 'josh' }, 'david'), { status: 'Not started', people: ['josh'], assignedBy: 'david', assignedAt: now });
@@ -2133,6 +2133,14 @@ await check('§24 passing a task on: whoever had it falls back to Also on (hande
   for (const status of ['In progress', 'Stuck', 'Done']) {
     assert.deepEqual(nv({ people: ['shem'], status }, { owner: 'josh' }, 'shem').also, ['shem'], status);
   }
+  // Started once, it counts as started for good: ticked Done, unticked (Not started again), then handed on: kept on it.
+  const ticked = nv({ people: ['shem'], status: 'In progress' }, { status: 'Done' }, 'shem');
+  const unticked = nv(ticked, { status: 'Not started' }, 'shem');
+  assert.deepEqual([ticked.startedAt, unticked.startedAt, unticked.status], [now, now, 'Not started']);
+  assert.deepEqual(nv(unticked, { owner: 'david' }, 'shem').also, ['shem']);
+  assert.equal(nv({ people: ['shem'], status: 'Not started' }, { status: 'Not started' }, 'shem').startedAt, undefined, 'Not started never starts it');
+  assert.equal(nv({ people: ['shem'], startedAt: 'early' }, { status: 'Stuck' }, 'shem').startedAt, 'early', 'kept from the first time');
+  assert.equal(nv({ people: ['shem'] }, { startedAt: 'x', priority: 'Low' }, 'shem').startedAt, undefined, 'a patch can’t set it');
   // Someone else moving a task that isn't started yet still keeps whoever had it on it.
   assert.deepEqual(nv({ people: ['shem'], status: 'Not started' }, { owner: 'josh' }, 'david').also, ['shem']);
   // A board without Also on (a personal page, Work in Progress) drops it, as before.

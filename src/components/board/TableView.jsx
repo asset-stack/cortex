@@ -136,7 +136,7 @@ function DoneBox({ name, done, readOnly, onChange }) {
   const settle = (refocus) => { back.current = refocus; setAsking(false); };
   useEffect(() => {
     if (!asking) {
-      if (back.current) { back.current = false; box.current?.focus(); }
+      if (back.current) { back.current = false; box.current?.focus({ preventScroll: true }); }
       return undefined;
     }
     again.current?.focus();
@@ -147,9 +147,10 @@ function DoneBox({ name, done, readOnly, onChange }) {
     return (
       <button ref={again} type="button" aria-label={`Click again to mark ${name} done`} title="Click again to mark done"
         onClick={() => { settle(true); onChange(true); }}
+        onMouseDown={(e) => e.preventDefault()} // Safari and iOS clear focus on press: that would blur it before the click
         onBlur={() => setAsking(false)}
         onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); settle(true); } }}
-        className="inline-grid h-6 w-6 place-items-center rounded-full bg-amber-300 align-middle text-slate-900 ring-2 ring-amber-200/60">
+        className="relative inline-grid h-6 w-6 place-items-center rounded-full bg-amber-300 align-middle text-slate-900 ring-2 ring-amber-200/60">
         <Check className="h-4 w-4" strokeWidth={3} aria-hidden="true" />
       </button>
     );
