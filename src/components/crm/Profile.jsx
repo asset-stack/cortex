@@ -1,5 +1,5 @@
 // The CRM profile's sections (docs/PHASE2.md §19), shared by a deal's profile (Pipeline) and a client's (Clients):
-// Next steps (board tasks linked to it), Timeline (notes and meetings) and Links. `target`: { dealId } or { clientId }.
+// Tasks (board tasks linked to it), Timeline (notes and meetings) and Links. `target`: { dealId } or { clientId }.
 import { useEffect, useId, useRef, useState } from 'react';
 import { CalendarDays, ExternalLink, FileText, Link2, Pencil, Plus, StickyNote, Trash2 } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';

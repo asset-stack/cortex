@@ -11,8 +11,8 @@ import { ClientPicker, DealPicker, LabelPicker, Modal, OwnerPicker, PeoplePicker
  * and your own notes, not Work in Progress), its client (Clients boards), owner, priority and due date, and on a team
  * board who else is on it and its department (§20: the board's unless picked). A task made for someone else waits on
  * them to accept it. `owner` / `clientId` / `dealId` preset those (a Team page, a client, a deal's
- * next step); `modules` narrows where it can go (a client: Clients boards; a deal: Pipeline › Deal tasks, §25, or without
- * it the Operations and Outreach boards with a Deal column). Deal tasks takes only a deal's next steps. `title`: the
+ * next step); `modules` narrows where it can go (a client: Clients boards; a deal: Pipeline › Demos, §25/§26, or without
+ * it the Operations and Outreach boards with a Deal column). Pipeline › Demos takes only a deal's tasks. `title`: the
  * dialog's. Closes when it's added.
  */
 export default function NewTaskModal({ onClose, owner: forOwner = '', clientId = '', dealId = '', modules = null, title = 'New task' }) {
@@ -21,7 +21,7 @@ export default function NewTaskModal({ onClose, owner: forOwner = '', clientId =
   const fits = state.boards.filter((b) => hasOwner(b) && access.canEditBoard(b) && (!b.owner || b.owner === state.me)
     && (!modules || modules.includes(b.module)) && (dealId ? hasDeal(b) : !isDealTasks(b))); // a deal's next step: only where it's kept
   const dealHome = dealId && fits.find(isDealTasks);
-  const targets = dealHome ? [dealHome] : fits; // a deal's next steps live on Deal tasks (§25), once it's there
+  const targets = dealHome ? [dealHome] : fits; // a deal's tasks live on Pipeline › Demos (§25, §26), once it's there
   // To start with: a team board the preset owner can take on, else the first team board, else your notes.
   const first = targets.find((b) => !b.owner && (!forOwner || canEditBoard(state, b, forOwner))) || targets.find((b) => !b.owner) || targets[0];
   const [f, setF] = useState({

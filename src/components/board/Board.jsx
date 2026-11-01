@@ -123,7 +123,7 @@ export default function Board({ board, embedded = false, title: named = '' }) {
   const showPerson = (id) => { const b = personalBoard(state, id); if (b) window.location.hash = boardHref(b); };
 
   // Team board options (admins). A menu choice moves focus to the options button first, so it gets focus back after.
-  // Not on Deal tasks (§25): it's in no menu, so it has no place in the order, and isn't renamed or deleted here.
+  // Not on Pipeline › Demos (§25, §26): it's in no Operations menu, so it has no place in their order, and isn't renamed or deleted here.
   const options = !board.owner && !isDealTasks(board) && access.isAdmin;
   const team = teamBoards(state, board.module).filter((b) => !isDealTasks(b));
   const at = team.findIndex((b) => b.id === board.id);

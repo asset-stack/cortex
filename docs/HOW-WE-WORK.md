@@ -69,14 +69,16 @@ deal's **Lead** when you add it: **LYCO** (co-pitched) or **AssetStack** (direct
 and coloured edge show on the card, and the All · LYCO · AssetStack filter on Pipeline and Clients shows one side's work.
 
 When a deal is made a client, its profile comes with it. Adding a meeting, note or link needs **Edit** on Pipeline (a
-deal) or Clients (a client). A deal's next steps are tasks on Operations › Team Tasks (older ones on Outreach › Sales
-Tasks still show), so adding them needs Edit on Operations; a client's are on the Clients boards. Ask an admin if you
-only have View.
+deal) or Clients (a client). A deal's tasks are on Pipeline › Demos (older ones on Operations or Outreach boards still
+show); Demos is an Operations board underneath, so adding them needs Edit on Operations. A client's are on the Clients
+boards. Ask an admin if you only have View.
 
 ## Where work goes
 - **Operations**: running the business: BAU, finance, development and internal projects.
 - **Marketing**: posts, campaigns and events.
 - **Outreach**: sales tasks.
-- **Clients → Demos / Previews**: demos and design updates for a client. Add it from the client's page so the client is
-  set and it shows there.
+- **Pipeline → Demos**: a deal's tasks, its demos included. Add them from the deal's page (**Add task**) so the deal is
+  set and they show there.
+- **Clients → Previews**: design updates for a client. Add them from the client's page so the client is set and they show
+  there.
 - **Team**: who has what. Everyone's open work, waiting, urgent and overdue, one card per person.

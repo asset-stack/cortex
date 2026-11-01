@@ -2518,6 +2518,7 @@ await check('§25/§26 Pipeline › Demos: one fixed board (Operations underneat
   assert.ok(work.prioritiesFor(st, 'stu', { teamOnly: true }).some((r) => r.item.id === 'dt-1'), 'in its owner’s lists');
   assert.ok(!work.prioritiesFor(st, 'ann', { teamOnly: true }).some((r) => r.item.id === 'dt-1'), 'not in Also on’s');
   assert.ok(work.prioritiesFor(st, 'ann', { teamOnly: true }).some((r) => r.item.id === 'moved'), 'a moved row is its owner’s task');
+  assert.ok(work.clientTasks(st, 'c-1').some((r) => r.item.id === 'moved'), 'a moved row keeps showing on its client’s Tasks (its Client value, §26)');
   const cards = work.byBoard(work.prioritiesFor(st, 'stu', { teamOnly: true }), st.boards).map((c) => c.board.id);
   assert.equal(cards.indexOf(DEAL_TASKS_BOARD) > cards.indexOf('web'), true, 'its card comes with Pipeline’s, after Operations’');
   // Never a module's default board; its own address opens it.

@@ -4,7 +4,7 @@
 import { canEditBoard, canView, canViewBoard } from './access.js';
 import { BOARD_MODULES, MODULE_LABELS, areaOf, boardTitle, departmentOf, departmentValue } from './boards.js';
 import { mentionedUserIds } from './mentionText.js';
-import { PRIORITY, schemaOf, withPeople } from '../data/boards.js';
+import { PRIORITY, isDealTasks, schemaOf, withPeople } from '../data/boards.js';
 
 // A task handed to someone that they haven't accepted this long after goes on Needs attention.
 export const ACCEPT_WITHIN = 864e5;
@@ -214,7 +214,7 @@ export function byBoard(rows, boards = []) {
     if (!cards.has(r.board)) cards.set(r.board, []);
     cards.get(r.board).push(r);
   });
-  const order = (b) => [BOARD_MODULES.indexOf(areaOf(b)), b.owner ? 1 : 0]; // Deal tasks with Pipeline (§25)
+  const order = (b) => [BOARD_MODULES.indexOf(areaOf(b)), b.owner ? 1 : 0]; // Pipeline › Demos with Pipeline (§25)
   const at = (b) => { const k = (boards || []).indexOf(b); return k < 0 ? Infinity : k; };
   return [...cards.entries()].map(([board, list], n) => ({ board, list, n }))
     .sort((a, b) => {
@@ -281,21 +281,22 @@ export function taskMentions(state, person, { viewer = state?.me } = {}) {
     .sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
 }
 
-/** A client's open next steps on the boards the viewer sees, in board order: tasks linked to it (`values.client`, Clients
- *  boards) and to the deals it came from (`values.deal`, on any board with a Deal column; deals are Pipeline's, so only for a Pipeline
- *  viewer, as live mode, where nobody else reads them). → [{ item, board }] */
+/** A client's open tasks on the boards the viewer sees, in board order: tasks linked to it (`values.client`: Clients boards,
+ *  and Pipeline › Demos, which keeps the Client of the tasks that came from Clients › Demos, §26) and to the deals it came
+ *  from (`values.deal`, on any board with a Deal column; deals are Pipeline's, so only for a Pipeline viewer, as live mode,
+ *  where nobody else reads them). → [{ item, board }] */
 export function clientTasks(state, clientId, { viewer = state?.me } = {}) {
   if (!clientId) return [];
   const deals = new Set(canView(state, 'pipeline', viewer) ? (state?.deals || []).filter((d) => d.clientId === clientId).map((d) => d.id) : []);
-  return (state?.boards || []).filter((b) => (hasClient(b) || (deals.size && hasDeal(b))) && canViewBoard(state, b, viewer))
+  const linked = (b) => hasClient(b) || isDealTasks(b);
+  return (state?.boards || []).filter((b) => (linked(b) || (deals.size && hasDeal(b))) && canViewBoard(state, b, viewer))
     .flatMap((board) => board.groups.flatMap((g) => g.items
-      .filter((item) => !item.done && ((hasClient(board) && item.values?.client === clientId) || (hasDeal(board) && deals.has(item.values?.deal))))
+      .filter((item) => !item.done && ((linked(board) && item.values?.client === clientId) || (hasDeal(board) && deals.has(item.values?.deal))))
       .map((item) => ({ item, board }))));
 }
 
-/** A deal's next steps: its open tasks (`values.deal`) on Pipeline › Deal tasks (§25), and older ones on Operations or
- *  Outreach, on the boards the viewer sees, in board order. Not its row on Clients › Demos (§23): that's the deal's record
- *  on that board, a task for its owner, not a next step (§25). [{ item, board }]. */
+/** A deal's tasks (its profile's Tasks): its open tasks (`values.deal`) on Pipeline › Demos (§25, §26), and older ones on
+ *  Operations or Outreach, on the boards the viewer sees, in board order. Clients boards have no Deal column (§26). → [{ item, board }]. */
 export function dealTasks(state, dealId, { viewer = state?.me } = {}) {
   if (!dealId) return [];
   return (state?.boards || []).filter((b) => hasDeal(b) && b.module !== 'clients' && canViewBoard(state, b, viewer)).flatMap((board) => board.groups

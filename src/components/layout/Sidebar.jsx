@@ -57,7 +57,7 @@ function useBoardNav(route, sub) {
   const visible = (state.boards || []).filter(access.canViewBoard);
   const lists = Object.fromEntries(MENU_BOARD_MODULES.map((m) => [m, [
     ...(MODULE_HOMES[m] ? [MODULE_HOMES[m]] : []),
-    ...visible.filter((b) => b.module === m && !b.owner && !isDealTasks(b)) // Deal tasks: in no menu (§25)
+    ...visible.filter((b) => b.module === m && !b.owner && !isDealTasks(b)) // Pipeline › Demos: under Pipeline, not Operations (§26)
       .map((b) => ({ id: b.id, href: boardHref(b), title: boardTitle(state, b) })),
   ]]));
   lists.team = state.users.filter((u) => u.active !== false).map((u) => ({ id: u.id, href: `#/team/${encodeURIComponent(u.id)}`, title: u.name }));
