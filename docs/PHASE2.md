@@ -1206,7 +1206,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Tests**: `scripts/test-sync.mjs` (§22 deal next steps on Operations, the Operations columns, the import fixes);
   Playwright (Team › Name and Dashboard tables, view mode, the drawer, Do today, 390px).
 
-## 23. 0014: one Clients › Demos row per Pipeline deal in Demos or Proposal sent
+## 23. 0014: one Clients › Demos row per Pipeline deal in Demos or Proposal sent (superseded by §26: no automatic row; Clients › Demos moved under Pipeline)
 
 - **Why** (owner, 2026-10-31): Pipeline's Demos and Proposal sent deals and the rows on Clients › Demos were kept apart and
   doubled up. Every deal there (the CRM) should have exactly one row on Clients › Demos, linked to it.
@@ -1302,4 +1302,36 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   department, breadcrumb, card order, `resolveBoard()`, the seed and `migrate()`; `dealTasks()` without the Demos row);
   `scripts/test-db.mjs` checks 117–118 (0015: re-runs, one board and group after Operations' team boards; Operations'
   access to it).
+
+## 26. Pipeline › Demos: the deals' tasks; Add task on a deal; no automatic row (0016)
+
+- **Why** (owner, 2026-11-01): Clients › Demos should sit under Pipeline and be the tasks for every deal in the pipeline.
+  A deal's profile says **Add task** (not "next steps"), with every task field, and the task it makes is saved on the
+  deal (the CRM) and lives on Pipeline › Demos as a task to do. Nothing is added by itself next to it (owner's choice).
+- **The board**: 0015's fixed-id board (`DEAL_TASKS_BOARD`) is named **Demos** (0016; the seed, and `migrate()` for older
+  demo data under `seededBoards` `'pipelineDemos'`). Still an Operations board underneath (Operations' access, staff edit).
+  Its columns: Owner, Also on, Status, Priority, Due, **Department** (its own is Pipeline: `departmentOf()` /
+  `departmentValue()` go by `areaOf()`), Deal.
+- **Where**: Pipeline has a sidebar sub-menu (and a chip row on a phone), like Clients: **Pipeline** (the deals:
+  `#/pipeline`), then **Demos** (`#/projects/<id>`, marked as Pipeline's). No New board there; Work in Progress stays on the
+  Pipeline page under the deals.
+- **Clients › Demos moves** (0016 in the database, `migrate()` in the demo): Clients' team board(s) named Demos give their
+  groups, in order, with their tasks (owners, updates, subtasks, status, Deal), to Pipeline › Demos after its own group,
+  then go. Those tasks now follow Operations' access, not Clients'. Clients boards lose their Deal column.
+- **A deal's Tasks** (`Profile.jsx`, was Next steps): its open tasks on Pipeline › Demos (the ones that came from Clients ›
+  Demos included) and older ones on Operations or Outreach (`dealTasks()`); **Add task** opens New task with the deal
+  preset and Pipeline › Demos the only place, and every field: name, Deal, Owner, Priority, Due, Also on, **Status**,
+  Department and a first **Update** (posted as the task's first update). New task has Status and Update everywhere. A
+  client's profile says Tasks / Add task too.
+- **No automatic row**: 0016 drops 0014's `deal_demo_row` trigger and function (if 0014 ever ran); demo mode no longer
+  adds one (`dealDemoRowLocal()` removed from `src/lib/automations.js` and the store). Production never ran 0014, and
+  skips it.
+- **Release**: 0016 adds no table or column; the app opens without it (the board shows as Deal tasks until it runs, and
+  Clients › Demos stays). Run it after the release is live. Check: `select name from public.boards where id =
+  'dea15000-0000-4000-8000-000000000001';` gives `Demos`, and `select count(*) from public.boards where module =
+  'clients' and name = 'Demos';` gives 0.
+- **Tests**: `scripts/test-sync.mjs` (§25/§26: the board's columns, department, breadcrumb, `dealTasks()`, the seed and
+  `migrate()` moving Clients › Demos; no automatic row); `scripts/test-db.mjs` checks 119–120 (0016: re-runs, the trigger
+  gone, the move with updates and subtasks, same_audience back on; no row after; Operations' access; cross-module moves
+  refused again).
 

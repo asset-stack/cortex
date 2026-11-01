@@ -103,16 +103,15 @@ export function dropPlace(groups, itemId, spot = {}) {
 export const DEPARTMENTS = { projects: '#579bfc', marketing: '#ff5ac4', outreach: '#fdab3d', clients: '#00c875', pipeline: '#784bd1' };
 /** A task's department (a board module): the one set on it, else its board's. */
 export const departmentOf = (board, item) => {
-  if (isDealTasks(board)) return 'pipeline'; // a deal's next steps are Pipeline's (§25)
   const v = item?.values?.department;
-  return BOARD_MODULES.includes(v) ? v : board?.module || '';
+  return BOARD_MODULES.includes(v) ? v : areaOf(board); // Pipeline › Demos' own is Pipeline (§25)
 };
 /** The module a board shows under (its menu label in a breadcrumb or a card title): its own, but Pipeline for Deal tasks
  *  (an Operations board underneath, §25). */
 export const areaOf = (board) => (isDealTasks(board) ? 'pipeline' : board?.module || '');
 /** What `values.department` keeps for department `key` on `board`: '' for the board's own (or an unknown one), so the
  *  stored value only says where a task differs from its board. */
-export const departmentValue = (board, key) => (BOARD_MODULES.includes(key) && key !== board?.module ? key : '');
+export const departmentValue = (board, key) => (BOARD_MODULES.includes(key) && key !== areaOf(board) ? key : '');
 
 /**
  * A group's tasks in Sort's order. `by`: 'due' (the soonest due first, no date last; ties by priority) or 'priority'

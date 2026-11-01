@@ -16,8 +16,8 @@ setup steps are in `DEPLOY.md`.
 - Keep demo mode working. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` the app runs on localStorage
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
-  migration that has been applied** (`0001`–`0013` and `0015` are live in production; `0014` not yet run, and nothing
-  depends on it): fix forward in the next file (`0016_….sql`). A migration must never mention `module_level` unless it redefines it
+  migration that has been applied** (`0001`–`0013` and `0015` are live in production; `0014` not run, and `0016` drops
+  what it adds, so production skips it): fix forward in the next file (`0017_….sql` once 0016 has run). A migration must never mention `module_level` unless it redefines it
   (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table
   keeps row-level security on with policies that require `is_staff()` (directly or through `is_admin()` /
   `can_view()` / `can_edit()` / the board helpers), and is added to the `supabase_realtime` publication if it is synced. Extend
@@ -41,7 +41,8 @@ setup steps are in `DEPLOY.md`.
 - **Boards are records**, not code: `state.boards` is an array of team boards and personal Projects pages
   (`docs/PHASE2.md` §11, §13), and board store actions take a board id. Board modules are Projects, Marketing, Outreach,
   Clients and Pipeline (`BOARD_MODULES`); Outreach's and Clients' menus start with their own page (`MODULE_HOMES`), and
-  Pipeline's boards (Work in Progress) sit on its page under the deals, not in the menu (`PAGE_BOARD_MODULES`). Admins add
+  Pipeline's boards (Work in Progress) sit on its page under the deals, not in the menu (`PAGE_BOARD_MODULES`); Pipeline's
+  menu is its page, then Pipeline › Demos (§26: the `DEAL_TASKS_BOARD`, an Operations board underneath). Admins add
   new team boards in the app; personal pages come and go with their person.
 - **Board tasks have one home and one Owner** (`docs/PHASE2.md` §17, §18, §20): a task lives on one board (the Dashboard,
   Team pages and a client's page are views of it, never copies, and the Dashboard and Team › Name show it in its board's
@@ -60,11 +61,11 @@ setup steps are in `DEPLOY.md`.
 - **Pipeline (0008, §21)**: stages are `DEAL_STAGES` (Opportunities → Contacted → First meetings → Demos → Proposal sent);
   Make client is on the last. A deal's and a client's **Lead** is `source` (0013: `'' | 'lyco' | 'assetstack'`, LYCO
   co-pitched or AssetStack direct; `LEADS` / `leadOf()` in `src/data/boards.js`, the marks in `src/components/LeadIcon.jsx`),
-  and Make client carries it. A deal's next steps are tasks with `values.deal` on **Pipeline › Deal tasks** (§25: one board
-  with the fixed id `DEAL_TASKS_BOARD`, made by 0015 and the demo seed; an Operations board underneath, shown as Pipeline by
-  `areaOf()`, in no menu and never a module's default; older ones stay on Operations or Outreach boards), and a deal in Demos
-  or Proposal sent has one row on Clients › Demos (`values.deal`; 0014's `deal_demo_row` trigger ⇄ `dealDemoRowLocal()`,
-  §23), which is its owner's task but not one of the deal's next steps (`dealTasks()` leaves Clients boards out). Real deals and clients never go in this repo: the live pipeline is loaded with SQL run in the SQL editor.
+  and Make client carries it. A deal's tasks (its profile's **Tasks**, **Add task**) have `values.deal` and live on
+  **Pipeline › Demos** (§25, §26: one board with the fixed id `DEAL_TASKS_BOARD`, made by 0015, named Demos and given Clients
+  › Demos' groups and tasks by 0016, in the demo by the seed and `migrate()`; an Operations board underneath, shown as
+  Pipeline by `areaOf()`, listed under Pipeline in the sidebar, never a module's default; older ones stay on Operations or
+  Outreach boards). Nothing is added by itself when a deal moves (0016 drops 0014's `deal_demo_row`). Real deals and clients never go in this repo: the live pipeline is loaded with SQL run in the SQL editor.
 - **CRM profile (0012)**: a deal's or client's notes, meetings and links are `crm_entries` (`state.crmEntries`; rules in
   `src/lib/crm.js` ⇄ 0012's policies and triggers). An entry on a client follows Clients access, one on a deal that isn't
   a client yet Pipeline's; its author or an admin changes it. Make client gives a deal's entries its client in the

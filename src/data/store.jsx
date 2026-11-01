@@ -13,7 +13,7 @@ import { GateScreen, Spinner } from '@/components/auth/AuthGate';
 import { LEVELS, MODULES, ROLES, STAFF_DEFAULTS, canEdit, canEditBoard, canView, canViewBoard, isAdmin, isSuperadmin } from '@/lib/access';
 import { BOARD_MODULES, FIRST_GROUP, FIRST_GROUP_COLOR, GROUP_COLORS, findBoard, sameAudience, sortedItems, withItemPlaced } from '@/lib/boards';
 import {
-  PLAN_MONTHS, addDays, addMonths, clientCreatedLocal, contactPipelineLocal, dealDemoRowLocal, ensureTodosLocal, generateDueInvoicesLocal, isPlanDate,
+  PLAN_MONTHS, addDays, addMonths, clientCreatedLocal, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isPlanDate,
   isYmd, makeTodo, mondayOf, nextInvoiceNumber, termsOf, toHhmm, uid,
 } from '@/lib/automations';
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
@@ -337,15 +337,12 @@ function createActions(mutate, mode) {
           if (!x) return true;
           made.delete(normName(r?.name)); // a repeat in the file is still a duplicate
           const { id: _id, name: _name, contactId: _contactId, clientId: _clientId, ...fields } = r;
-          const was = x.stage;
           Object.entries(fields).forEach(([k, v]) => { if (v !== '' && v != null) x[k] = v; });
-          if (!mode.live) dealDemoRowLocal(d, x, was); // live: 0014's deal_demo_row trigger
           filled++;
           return false;
         });
         const added = takeNew(d.deals, rest, newDeal, result);
         d.deals.push(...added);
-        if (!mode.live) added.forEach((x) => dealDemoRowLocal(d, x, '')); // a deal imported at Demos gets its Demos row
         result.added += filled;
       } else {
         const board = target;
@@ -800,15 +797,12 @@ function createActions(mutate, mode) {
     addDeal: (deal = {}) => editing('pipeline', (d) => {
       const x = newDeal(deal);
       d.deals.push(x);
-      if (!mode.live) dealDemoRowLocal(d, x, ''); // live: 0014's deal_demo_row trigger
       return x.id;
     }),
     moveDeal: (dealId, stage) => editing('pipeline', (d) => {
       const x = d.deals.find((v) => v.id === dealId);
       if (!x || !DEAL_STAGES.includes(stage)) return false;
-      const was = x.stage;
       x.stage = stage;
-      if (!mode.live) dealDemoRowLocal(d, x, was); // into Demos or Proposal sent: its row on Clients › Demos (live: 0014)
       return true;
     }),
     // Organisation, sector, value, priority, owner, next step, stage and Lead (cleanDealPatch). Refused when nothing valid
@@ -817,9 +811,7 @@ function createActions(mutate, mode) {
       const x = d.deals.find((v) => v.id === dealId);
       const clean = x && cleanDealPatch(patch, d.users.map((u) => u.id));
       if (!x || !Object.keys(clean).length) return false;
-      const was = x.stage;
       Object.assign(x, clean);
-      if (!mode.live && 'stage' in clean) dealDemoRowLocal(d, x, was); // live: 0014's deal_demo_row trigger
       return true;
     }),
     removeDeal: (dealId) => editing('pipeline', (d) => {

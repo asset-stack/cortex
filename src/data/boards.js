@@ -23,8 +23,8 @@ const PRIORITY_COLUMN = { key: 'priority', label: 'Priority', type: 'label', opt
 // Which department a task belongs to (§20): Operations, Marketing, Outreach, Clients or Pipeline. Last on every team board
 // (a sparse Deal link may follow it).
 const DEPARTMENT = { key: 'department', label: 'Department', type: 'department', team: true };
-// The deal a task is for (§19, §22, §23): a next step (first on Outreach's boards, after Department on Operations' team
-// boards) or a deal's row on Clients › Demos (after the Client, §23).
+// The deal a task is for (§19, §22, §26): a task on Pipeline › Demos (last), and older next steps (first on Outreach's
+// boards, after Department on Operations' team boards).
 const DEAL = { key: 'deal', label: 'Deal', type: 'deal' };
 
 // The board modules' columns (BOARD_MODULES): Projects (with the former Admin board merged in), Marketing, Outreach and
@@ -86,7 +86,6 @@ export const BOARD_SCHEMAS = {
     icon: 'Building2',
     columns: [
       { key: 'client', label: 'Client', type: 'client' },
-      { ...DEAL, sparse: true }, // a prospect's row before it's a client (§23): Pipeline's Demos and Proposal sent
       OWNER,
       ALSO,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },
@@ -109,14 +108,14 @@ export const BOARD_SCHEMAS = {
     ],
   },
 };
-// Pipeline › Deal tasks (§25): where a deal's next steps live, one board with a fixed id (made by 0015, and in the demo by
-// the seed and migrate()). Underneath it is an Operations team board, so it has Operations' access (staff edit, as when
-// next steps were on Team Tasks) and its tasks can move to and from Operations' boards; on screen it is Pipeline's
-// (`areaOf()`), in no menu: its tasks show on their deal's profile and in their people's task lists.
+// Pipeline › Demos (§25, §26; made by 0015 as Deal tasks, renamed and given Clients › Demos' rows by 0016; in the demo by
+// the seed and migrate()): the deals' tasks, one board with a fixed id. Underneath it is an Operations team board, so it
+// has Operations' access (staff edit) and its tasks can move to and from Operations' boards; on screen it is Pipeline's
+// (`areaOf()`), listed under Pipeline in the sidebar: its tasks show on their deal's profile and in their owners' lists.
 export const DEAL_TASKS_BOARD = 'dea15000-0000-4000-8000-000000000001';
 export const isDealTasks = (board) => board?.id === DEAL_TASKS_BOARD;
 const DEAL_TASKS = {
-  title: 'Deal tasks',
+  title: 'Demos',
   icon: 'GitBranch',
   columns: [
     OWNER,
@@ -124,6 +123,7 @@ const DEAL_TASKS = {
     { key: 'status', label: 'Status', type: 'status', options: STATUS },
     PRIORITY_COLUMN,
     { key: 'due', label: 'Due', type: 'date' },
+    DEPARTMENT, // Pipeline unless picked (departmentOf(): its area)
     { ...DEAL, team: true },
   ],
 };

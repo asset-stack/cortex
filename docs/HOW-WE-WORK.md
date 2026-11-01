@@ -15,7 +15,7 @@ A short note for the team: who owns a task, what comes first, and where work goe
 
 ## Handing work over
 - Give someone a task by setting them as its **Owner**, or with **New task** (Dashboard, Team › their name, or a client's
-  or deal's page → **Add next step**). Work for the whole team: pick one main Owner and put the others on **Also on**.
+  or deal's page → **Add task**). Work for the whole team: pick one main Owner and put the others on **Also on**.
 - It sits at the top of their Dashboard under **Waiting on you · from you** until they click **Accept** (starting it
   counts too). Until then you and the team see it as waiting.
 - **Back and forth**: the Owner is whoever has the next step. Done your part (designs ready for review, info needed from
@@ -54,17 +54,17 @@ Anyone can set the owner and the priority. If two things feel Urgent, ask an adm
 Open the deal (**Pipeline**, click its name) or the client (**Clients**) and, on its profile:
 1. **Meeting**: the date, who attended, the link to your meeting notes (the Google Doc) and a short summary of what was
    agreed. Anyone on the team who opens the profile can open the notes from there (share the Doc with the team).
-2. **Add next step** for each follow-up: a task with an owner, a priority and a due date, kept with the deal on
-   **Pipeline › Deal tasks**. It shows on the deal's profile and in its owner's lists (their Dashboard and Team › their
-   name, under Pipeline › Deal tasks), and waits on them to accept it like any other task.
+2. **Add task** (under Tasks) for each follow-up: a task with its owner, who else is on it, status, priority, due date,
+   department and a first update, kept with the deal on **Pipeline › Demos** (under Pipeline in the sidebar). It shows on
+   the deal's profile and in its owner's lists (their Dashboard and Team › their name, under Pipeline › Demos), and waits
+   on them to accept it like any other task.
 3. **Add link** for anything else worth keeping: a demo, deck, proposal or recording.
 
 ## Moving a deal along
 Pipeline's columns are **Opportunities → Contacted → First meetings → Demos → Proposal sent**. Move a deal when it
 happens (drag it, or use its stage list): Proposal sent means the proposal is with them. **Make client** is on Proposal
-sent, once they sign. When a deal reaches Demos (or Proposal sent) it gets its row on **Clients › Demos** by itself,
-owned by the deal's owner and linked to the deal: use that row for the demo work, and don't add a second one. If you add
-a Demos row yourself before the deal gets there, set its **Deal** column, or the deal gets a second row when it arrives. Set each
+sent, once they sign. Its work is its tasks on **Pipeline › Demos** (add them from the deal: **Add task**); nothing is
+added by itself when it moves. Set each
 deal's **Lead** when you add it: **LYCO** (co-pitched) or **AssetStack** (direct). Its icon
 and coloured edge show on the card, and the All · LYCO · AssetStack filter on Pipeline and Clients shows one side's work.
 

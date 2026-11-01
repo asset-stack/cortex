@@ -10,7 +10,7 @@ import { ROLE_LABELS, roleOf, useAccess } from '@/lib/access';
 import { MENU_BOARD_MODULES, MODULE_HOMES, MODULE_LABELS, boardHref, boardTitle, resolveBoard } from '@/lib/boards';
 import { DEAL_TASKS_BOARD, isDealTasks } from '@/data/boards';
 
-// Deal tasks lives at #/projects/<id> (an Operations board underneath) but shows as Pipeline's (§25): the nav marks Pipeline.
+// Pipeline › Demos lives at #/projects/<id> (an Operations board underneath) but shows as Pipeline's (§25): the nav marks Pipeline.
 const navRoute = (route, sub) => (route === 'projects' && sub === DEAL_TASKS_BOARD ? 'pipeline' : route);
 import { hashParam } from '@/lib/router';
 import { cn } from '@/lib/cn';
@@ -30,8 +30,10 @@ export const NAV = [
   { id: 'pipeline', label: MODULE_LABELS.pipeline, icon: GitBranch, module: 'pipeline' },
   { id: 'clients', label: MODULE_LABELS.clients, icon: Building2, module: 'clients' },
 ];
-// Nav rows with a sub-menu: the board modules (their boards) and Team (a row per active person).
-const SECTIONS = [...MENU_BOARD_MODULES, 'team'];
+// Nav rows with a sub-menu: the board modules (their boards), Pipeline (its page, then Demos: §26) and Team (a row per
+// active person).
+const SECTIONS = [...MENU_BOARD_MODULES, 'pipeline', 'team'];
+const PIPELINE_HOME = { id: 'pipeline-home', href: '#/pipeline', title: 'Pipeline' };
 
 // Admin-only pages, kept out of NAV (page shortcuts list modules only).
 const ADMIN_NAV = [{ id: 'settings', label: 'Settings', icon: Settings }];
@@ -59,7 +61,11 @@ function useBoardNav(route, sub) {
       .map((b) => ({ id: b.id, href: boardHref(b), title: boardTitle(state, b) })),
   ]]));
   lists.team = state.users.filter((u) => u.active !== false).map((u) => ({ id: u.id, href: `#/team/${encodeURIComponent(u.id)}`, title: u.name }));
+  // Pipeline: its page (the deals), then Demos (the deals' tasks, §26) when you can see it.
+  const demos = visible.find(isDealTasks);
+  lists.pipeline = [PIPELINE_HOME, ...(demos ? [{ id: demos.id, href: boardHref(demos), title: boardTitle(state, demos) }] : [])];
   if (route === 'team') return { lists, current: sub, isAdmin: access.isAdmin };
+  if (route === 'pipeline') return { lists, current: sub === DEAL_TASKS_BOARD ? DEAL_TASKS_BOARD : PIPELINE_HOME.id, isAdmin: access.isAdmin };
   const home = !sub && MODULE_HOMES[route];
   const current = home || !MENU_BOARD_MODULES.includes(route) ? null : resolveBoard(state, visible, route, sub, hashParam('item'));
   return { lists, current: home ? home.id : current?.id || '', isAdmin: access.isAdmin };
@@ -247,7 +253,7 @@ export default function Sidebar({ route: at, sub }) {
           if (!collapsed && SECTIONS.includes(id)) {
             return (
               <BoardSection key={id} item={item} route={route} boards={lists[id]} current={current} open={!!open[id]}
-                onToggle={() => setOpen((o) => ({ ...o, [id]: !o[id] }))} onNew={isAdmin && id !== 'team' ? () => setAdding(id) : undefined} />
+                onToggle={() => setOpen((o) => ({ ...o, [id]: !o[id] }))} onNew={isAdmin && id !== 'team' && id !== 'pipeline' ? () => setAdding(id) : undefined} />
             );
           }
           return (
@@ -311,13 +317,13 @@ export function MobileNav({ route: at, sub }) {
             <a key={b.id} href={b.href} aria-current={b.id === current ? 'page' : undefined}
               className={cn('max-w-[220px] shrink-0 truncate whitespace-nowrap rounded-full px-3 py-1', b.id === current ? 'chip-on font-semibold' : 'chip')}>{b.title}</a>
           ))}
-          {isAdmin && route !== 'team' && (
+          {isAdmin && route !== 'team' && route !== 'pipeline' && (
             <button type="button" onClick={() => setAdding(true)} aria-label="New board" title="New board"
               className="grid h-[28px] w-[28px] shrink-0 place-items-center rounded-full chip"><Plus className="h-3.5 w-3.5" /></button>
           )}
         </nav>
       )}
-      {adding && boards && route !== 'team' && <NewBoardModal module={route} onClose={() => setAdding(false)} />}
+      {adding && boards && route !== 'team' && route !== 'pipeline' && <NewBoardModal module={route} onClose={() => setAdding(false)} />}
     </div>
   );
 }

@@ -195,28 +195,8 @@ export function clientCreatedLocal(state, clientId, { me = state.me, uid: newId 
 // ── Outreach → Pipeline ────────────────────────────────────────────────────────────────────────────────────
 
 export const PIPELINE_STATUSES = ['Replied', 'Meeting booked'];
-// The stages a deal has its row on Clients' first team board (Demos) in (0014's deal_demo_row(), docs/PHASE2.md §23).
-export const DEMO_STAGES = ['Demos', 'Proposal sent'];
-
-/**
- * The deal_demo_row trigger: a deal entering Demos or Proposal sent (from `prevStage`, '' for a new deal) with no row on
- * any Clients team board gets one on the first (Demos), at the end of its first group: named after it, owned by its owner,
- * linked to it (`values.deal`, and `values.client` once it's a client). Moving between the two never makes one again (a
- * row someone deleted stays deleted). → the new task, or null.
- */
-export function dealDemoRowLocal(state, deal, prevStage = '', { uid: newId = uid } = {}) {
-  if (!deal || !DEMO_STAGES.includes(deal.stage) || DEMO_STAGES.includes(prevStage)) return null;
-  const boards = (state.boards || []).filter((b) => b.module === 'clients' && !b.owner);
-  if (boards.some((b) => (b.groups || []).some((g) => (g.items || []).some((i) => i.values?.deal === deal.id)))) return null;
-  const group = boards[0]?.groups?.[0];
-  if (!group) return null;
-  const item = {
-    id: newId(), name: String(deal.name ?? '').trim() || 'Deal', done: false, updates: [], subtasks: [],
-    values: { people: deal.contact ? [deal.contact] : [], status: 'Not started', deal: deal.id, ...(deal.clientId ? { client: deal.clientId } : {}) },
-  };
-  (group.items ||= []).push(item);
-  return item;
-}
+// No automatic row for a deal reaching Demos any more (§26: 0016 drops 0014's deal_demo_row); a deal's tasks are added
+// on it (Add task) and live on Pipeline › Demos.
 
 // The stages a booking moves a deal on from (0008's contact_pipeline()).
 const EARLY_STAGES = ['Opportunities', 'Contacted'];

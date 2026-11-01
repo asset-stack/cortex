@@ -87,7 +87,12 @@ Demos by itself; no table or column, so it can run before or after its release; 
 **after** its release is live, because the app before it would show Deal tasks as an ordinary Operations board, in the
 menu and in every New task;
 check it with `select name from public.boards where id = 'dea15000-0000-4000-8000-000000000001';`, one row `Deal tasks`;
-`docs/PHASE2.md` §25).
+`docs/PHASE2.md` §25), then `0016_pipeline_demos.sql` (Pipeline › Demos: 0015's board renamed Demos, Clients › Demos'
+groups and tasks moved onto it, and 0014's automatic row dropped; run it after its release is live; no table or column;
+check it with the same query, now one row `Demos`, and
+`select count(*) from public.boards where module = 'clients' and name = 'Demos';`, 0; `docs/PHASE2.md` §26). 0014 then
+has nothing left to do: a project that hasn't run it can skip it (running it after 0016 would bring the automatic row
+back).
 
 **0013 must run before the release that needs it is published.** It adds a column (`source`) to `deals` and
 `clients`, and that release saves it with every deal and client: until the file has run, those saves fail. Run it, check
@@ -669,7 +674,7 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
 | "Couldn't load your workspace … crm_entries" after an update (before this was handled: now Cortex opens with a *Database update needed* notice instead) | `0012_crm_profile.sql` hasn't run. In the SQL editor, `select to_regclass('public.crm_entries');`: NULL means run the file (section 2) and look for an error if it doesn't finish; `crm_entries` means the table is there and PostgREST hasn't noticed: run `notify pgrst, 'reload schema';`. Then **Retry**. |
 | **Database update needed: run 00NN_….sql** at the top of Cortex (admins) | That migration hasn't run on this database: run it (section 2), then reload. Until then what it adds is off; everything else works. If `select to_regclass('public.<its table>');` already shows the table, PostgREST hasn't noticed it yet: run `notify pgrst, 'reload schema';`, then reload. Still there? Check that the SQL editor's project is the one in Cloudflare's `VITE_SUPABASE_URL`. |
 | A staff member reads a deal's or a client's profile but has no **Note**, **Meeting** or **Add link** | Expected with View: adding to a deal's profile needs **Pipeline** Edit, to a client's **Clients** Edit (**Settings** → **Team**). Someone else's entry is changed only by its author or an admin. |
-| A deal's profile has no **Next steps**, or no **Add next step** | A deal's next steps are tasks on the Outreach boards: seeing them needs **Outreach** View and adding them Outreach Edit (staff have None by default). |
+| A deal's profile has no **Tasks**, or no **Add task** | A deal's tasks live on Pipeline › Demos, an Operations board underneath: seeing them needs **Operations** View and adding them Operations Edit (staff have Edit by default). Before 0015 runs, Add task uses Operations' and Outreach's boards. |
 | On **Team**, a staff member sees fewer of a teammate's tasks than an admin does, or **New task** says a teammate can't edit a board they can | `0011_team_access_read.sql` hasn't run yet (section 2): until then staff read only their own access levels. |
 | **Projects** / **Marketing** look empty after running 0006, or it showed an error | The run stopped part-way, so tasks aren't linked to a board yet (nothing is deleted). Run the current `0006_boards.sql` again; it links them to **General** / **Posting schedule** and finishes the rest. |
 | A new group turned up on **General** or **Posting schedule** after the 0006 update | An old open tab (the app from before 0006) added it. Move its tasks where they belong, delete it, and reload that tab. |

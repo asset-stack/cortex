@@ -1841,7 +1841,7 @@ await check('owners: Projects, Marketing, Outreach and Clients boards have one O
   // §20: Also on after the Owner, and the Department last, on every team board (Operations then has the Deal, §22).
   assert.equal(cols('projects'), 'people:owner also:also status:status priority:label due:date department:department deal:deal');
   assert.equal(cols('outreach'), 'deal:deal people:owner also:also status:status priority:label due:date department:department', 'Outreach boards link a task to its deal');
-  assert.equal(cols('clients'), 'client:client deal:deal people:owner also:also status:status priority:label due:date department:department', 'Clients boards say which client (and which deal, §23)');
+  assert.equal(cols('clients'), 'client:client people:owner also:also status:status priority:label due:date department:department', 'Clients boards say which client (their Deal column went with Demos, §26)');
   assert.equal(cols('marketing'), 'people:owner also:also status:status priority:label type:label channel:label approval:label due:date department:department');
   assert.equal(cols('pipeline'), 'details:text status:status people:people department:department');
   assert.deepEqual(Object.keys(PRIO), ['Urgent', 'High', 'Medium', 'Low']);
@@ -2304,7 +2304,7 @@ await check('priorities: the demo seed — tasks have one owner (but a few left 
   assert.ok(tasks.some(({ item }) => item.values.priority === 'Urgent'));
   assert.ok(tasks.filter(({ board }) => board.module === 'marketing').some(({ item }) => item.values.priority), 'Marketing has priorities');
   const linked = tasks.filter(({ item }) => item.values.client);
-  assert.ok(linked.length >= 4 && linked.every(({ board, item }) => board.module === 'clients' && s.clients.some((c) => c.id === item.values.client)));
+  assert.ok(linked.length >= 2 && linked.every(({ board, item }) => board.module === 'clients' && s.clients.some((c) => c.id === item.values.client)));
   const handed = tasks.filter(({ item }) => item.values.assignedBy);
   assert.deepEqual(handed.map(({ item }) => [item.name, item.values.people[0], item.values.assignedBy, Boolean(item.values.acceptedAt)]), [
     ['Council landing page', 'hello', 'david', false],
@@ -2449,32 +2449,14 @@ await check('crm: next steps are tasks — a deal’s (Outreach boards’ Deal c
   const blind = { ...st, moduleAccess: [...(st.moduleAccess || []), { userId: 'stu', module: 'pipeline', level: 'none' }, { userId: 'stu', module: 'outreach', level: 'view' }] };
   assert.deepEqual([work.clientTasks(blind, 'c-1', { viewer: 'stu' }).map((r) => r.item.id), work.dealTasks(blind, 'd-3', { viewer: 'stu' }).map((r) => r.item.id)],
     [['d-1'], ['o-5']], 'the deal’s next steps stay on the Outreach board, not on the client');
-  assert.deepEqual([work.dealTasks(st, ''), work.hasDeal({ module: 'outreach' }), work.hasDeal({ module: 'clients' })], [[], true, true]);
+  assert.deepEqual([work.dealTasks(st, ''), work.hasDeal({ module: 'outreach' }), work.hasDeal({ module: 'clients' })], [[], true, false]);
 });
 
-await check('§23 Demos rows: a deal entering Demos or Proposal sent gets one linked row on Clients’ first board (Demos), never two, never again once deleted', () => {
-  const st = taskState();
-  const demos = st.boards.find((b) => b.id === 'demos');
-  st.boards.splice(st.boards.indexOf(demos) + 1, 0, { id: 'previews', module: 'clients', name: 'previews', owner: '', groups: [{ id: 'g-previews', name: 'Active', items: [] }] });
-  const ids = ['r1', 'r2', 'r3', 'r4'];
-  const opts = { uid: () => ids.shift() };
-  const dl = { id: 'd-7', name: '  Example Water ', stage: 'Demos', contact: 'ann', clientId: '' };
-  const made = auto.dealDemoRowLocal(st, dl, 'Contacted', opts);
-  assert.deepEqual(made, { id: 'r1', name: 'Example Water', done: false, updates: [], subtasks: [], values: { people: ['ann'], status: 'Not started', deal: 'd-7' } });
-  assert.equal(demos.groups[0].items.at(-1), made, 'at the end of Demos’ first group');
-  assert.equal(auto.dealDemoRowLocal(st, { ...dl, stage: 'Proposal sent' }, 'First meetings', opts), null, 'already has its row: no second');
-  demos.groups[0].items.pop(); // someone deletes it
-  assert.equal(auto.dealDemoRowLocal(st, { ...dl, stage: 'Proposal sent' }, 'Demos', opts), null, 'between Demos and Proposal sent: not made again');
-  assert.equal(auto.dealDemoRowLocal(st, { ...dl, stage: 'First meetings' }, 'Demos', opts), null, 'only Demos and Proposal sent');
-  assert.equal(auto.dealDemoRowLocal(st, dl, 'First meetings', opts)?.id, 'r2', 'back into Demos later: made again');
-  // A row for the deal on another Clients board counts; a client's id comes along; no owner is nobody.
-  st.boards.find((b) => b.id === 'previews').groups[0].items.push({ id: 'p-1', name: 'x', values: { deal: 'd-8' }, done: false, updates: [], subtasks: [] });
-  assert.equal(auto.dealDemoRowLocal(st, { id: 'd-8', name: 'Y', stage: 'Demos' }, '', opts), null);
-  assert.deepEqual(auto.dealDemoRowLocal(st, { id: 'd-9', name: '', stage: 'Proposal sent', contact: '', clientId: 'c-1' }, '', opts).values,
-    { people: [], status: 'Not started', deal: 'd-9', client: 'c-1' });
-  assert.equal(st.boards.find((b) => b.id === 'previews').groups[0].items.length, 1, 'always the first Clients board');
-  assert.equal(auto.dealDemoRowLocal({ boards: [] }, dl, '', opts), null, 'no Clients board: nothing');
-  assert.deepEqual(auto.DEMO_STAGES, ['Demos', 'Proposal sent']);
+await check('§26 no automatic Demos row: a deal reaching Demos or Proposal sent adds no task (demo mode, as 0016 drops 0014’s trigger)', async () => {
+  const auto = await import('../src/lib/automations.js');
+  assert.equal('dealDemoRowLocal' in auto, false, 'the helper is gone');
+  const store = readFileSync(new URL('../src/data/store.jsx', import.meta.url), 'utf8');
+  assert.equal(/dealDemoRow/.test(store), false, 'nothing in the store adds one');
 });
 
 await check('§22 deal next steps on Operations: a Team Tasks task linked to a deal shows on its profile and for its owner (§25: not for Also on); personal pages have no Deal', () => {
@@ -2499,8 +2481,8 @@ await check('crm: the demo seed — Northside’s deal has a meeting with its no
   assert.deepEqual(tl.map((e) => e.kind), ['meeting', 'note']);
   assert.ok(/docs\.google\.com/.test(tl[0].url) && tl[0].body && tl[0].attendees);
   assert.deepEqual(crm.linksOf(s, { dealId: northside.id }).map((l) => l.label), ['Proposal']);
-  assert.deepEqual(work.dealTasks(s, northside.id).map((r) => r.item.name), ['Book the Northside site visit', 'Send Northside the scope document'],
-    'its next steps: on Deal tasks (§25), then an older one on Sales Tasks; not its row on Clients › Demos (§25)');
+  assert.deepEqual(work.dealTasks(s, northside.id).map((r) => r.item.name), ['Book the Northside site visit', 'Northside Diocese: asset register walkthrough', 'Send Northside the scope document'],
+    'its tasks: on Pipeline › Demos (§26: the one added on it, and the one that came from Clients › Demos), then an older one on Sales Tasks');
   const wt = crm.timelineOf(s, { clientId: westbay.id });
   assert.ok(wt.some((e) => e.kind === 'meeting' && e.dealId), 'the deal’s meeting, now the client’s');
   assert.ok(crm.linksOf(s, { clientId: westbay.id }).some((l) => l.label === 'Demo' && !l.fixed));
@@ -2513,49 +2495,61 @@ const migrationFile = (prefix) => {
   const f = existsSync(migrationsDir) && readdirSync(migrationsDir).find((x) => x.startsWith(prefix) && x.endsWith('.sql'));
   return f ? [f, readFileSync(new URL(f, migrationsDir), 'utf8')] : null;
 };
-await check('§25 Pipeline › Deal tasks: one fixed board (Operations underneath, shown as Pipeline, in no menu), its own columns; a deal’s next steps live there; 0015 makes it', async () => {
+await check('§25/§26 Pipeline › Demos: one fixed board (Operations underneath, shown as Pipeline), its own columns; a deal’s tasks live there; 0015 makes it, 0016 names it', async () => {
   const { DEAL_TASKS_BOARD, isDealTasks, schemaOf } = await import('../src/data/boards.js');
-  const deal = { id: DEAL_TASKS_BOARD, module: 'projects', name: 'Deal tasks', owner: '', groups: [{ id: 'g-dt', name: 'Next steps', items: [] }] };
+  const deal = { id: DEAL_TASKS_BOARD, module: 'projects', name: 'Demos', owner: '', groups: [{ id: 'g-dt', name: 'Next steps', items: [] }] };
   assert.deepEqual([isDealTasks(deal), isDealTasks({ id: 'x', module: 'projects' }), isDealTasks(null)], [true, false, false]);
-  assert.equal(schemaOf(deal).columns.map((c) => c.label).join('|'), 'Owner|Also on|Status|Priority|Due|Deal');
-  assert.deepEqual([work.hasDeal(deal), work.hasOwner(deal), work.hasAlso(deal), work.hasDepartment(deal), work.hasPriority(deal)], [true, true, true, false, true]);
+  assert.equal(schemaOf(deal).columns.map((c) => c.label).join('|'), 'Owner|Also on|Status|Priority|Due|Department|Deal');
+  assert.deepEqual([work.hasDeal(deal), work.hasOwner(deal), work.hasAlso(deal), work.hasDepartment(deal), work.hasPriority(deal)], [true, true, true, true, true]);
   assert.equal(schemaOf(deal), schemaOf({ ...deal }), 'the same schema object');
-  assert.deepEqual([boardsLib.areaOf(deal), boardsLib.areaOf({ module: 'clients' }), boardsLib.departmentOf(deal, { values: { department: 'marketing' } })],
-    ['pipeline', 'clients', 'pipeline']);
+  // Its own department is Pipeline (its area); another can be picked, and picking Pipeline stores ''.
+  assert.deepEqual([boardsLib.areaOf(deal), boardsLib.areaOf({ module: 'clients' }), boardsLib.departmentOf(deal, { values: {} }),
+    boardsLib.departmentOf(deal, { values: { department: 'marketing' } }), boardsLib.departmentValue(deal, 'pipeline'), boardsLib.departmentValue(deal, 'projects')],
+    ['pipeline', 'clients', 'pipeline', 'marketing', '', 'projects']);
   const ts = await import('../src/lib/timesheet.js');
   assert.equal(ts.categoryOf(deal, { values: {} }), 'Clients', 'time on it is Pipeline’s category');
   const st = taskState();
   st.boards.push(deal);
   st.deals = [{ id: 'd-9', name: 'Example deal', clientId: '' }];
   deal.groups[0].items.push({ id: 'dt-1', name: 'Prepare the demo', values: { people: ['stu'], also: ['ann'], deal: 'd-9', status: 'Not started' }, done: false, updates: [], subtasks: [] });
-  st.boards.find((b) => b.module === 'clients' && !b.owner).groups[0].items.push({ id: 'demo-row', name: 'Example deal', values: { people: ['ann'], deal: 'd-9' }, done: false, updates: [], subtasks: [] });
-  assert.deepEqual(work.whereOf(st, deal), ['Pipeline', 'Deal tasks']);
-  assert.deepEqual(work.dealTasks(st, 'd-9').map((r) => r.item.id), ['dt-1'], 'its next steps; not its row on Clients › Demos');
+  deal.groups.push({ id: 'g-moved', name: 'To do', items: [{ id: 'moved', name: 'Example deal', values: { people: ['ann'], deal: 'd-9', client: 'c-1' }, done: false, updates: [], subtasks: [] }] });
+  assert.deepEqual(work.whereOf(st, deal), ['Pipeline', 'Demos']);
+  assert.deepEqual(work.dealTasks(st, 'd-9').map((r) => r.item.id), ['dt-1', 'moved'], 'its tasks, the one from Clients › Demos too (§26)');
   assert.ok(work.prioritiesFor(st, 'stu', { teamOnly: true }).some((r) => r.item.id === 'dt-1'), 'in its owner’s lists');
   assert.ok(!work.prioritiesFor(st, 'ann', { teamOnly: true }).some((r) => r.item.id === 'dt-1'), 'not in Also on’s');
-  assert.ok(work.prioritiesFor(st, 'ann', { teamOnly: true }).some((r) => r.item.id === 'demo-row'), 'the Demos row is its owner’s task');
+  assert.ok(work.prioritiesFor(st, 'ann', { teamOnly: true }).some((r) => r.item.id === 'moved'), 'a moved row is its owner’s task');
   const cards = work.byBoard(work.prioritiesFor(st, 'stu', { teamOnly: true }), st.boards).map((c) => c.board.id);
   assert.equal(cards.indexOf(DEAL_TASKS_BOARD) > cards.indexOf('web'), true, 'its card comes with Pipeline’s, after Operations’');
   // Never a module's default board; its own address opens it.
   const visible = st.boards.filter((b) => b.module === 'projects');
   assert.notEqual(boardsLib.resolveBoard(st, [deal, ...visible.filter((b) => b !== deal)], 'projects', '', '')?.id, DEAL_TASKS_BOARD);
   assert.equal(boardsLib.resolveBoard(st, visible, 'projects', DEAL_TASKS_BOARD, '')?.id, DEAL_TASKS_BOARD);
-  // 0015 makes the board with the app's id, named as the seed's, with its group.
+  // 0015 makes the board with the app's id, with its group; 0016 names it Demos and brings Clients › Demos.
   const sql = migrationFile('0015_');
   if (sql) {
     assert.ok(sql[1].includes(`'${DEAL_TASKS_BOARD}', 'projects', 'Deal tasks'`) && sql[1].includes("'Next steps'"), sql[0]);
   }
+  const sql16 = migrationFile('0016_');
+  if (sql16) {
+    assert.ok(sql16[1].includes(`set name = 'Demos'\nwhere id = '${DEAL_TASKS_BOARD}'`) && sql16[1].includes(`v_to constant uuid := '${DEAL_TASKS_BOARD}'`)
+      && sql16[1].includes('drop trigger if exists deal_demo_row on public.deals'), sql16[0]);
+  }
   if (createSeed) {
     const s = createSeed();
     const b = s.boards.find(isDealTasks);
-    assert.ok(b && b.module === 'projects' && !b.owner && b.name === 'Deal tasks' && b.groups[0].name === 'Next steps');
-    // Older demo data gets it once, after Operations' team boards; deleted, it stays deleted.
+    assert.ok(b && b.module === 'projects' && !b.owner && b.name === 'Demos' && b.groups.map((g) => g.name).join('|') === 'Next steps|To do|Done');
+    assert.equal(s.boards.some((x) => x.module === 'clients' && x.name === 'Demos'), false, 'no Clients › Demos in the demo');
+    // Older demo data gets it once, after Operations' team boards, called Demos, with Clients › Demos' groups; deleted, it
+    // stays deleted.
     const old = structuredClone(s);
     old.boards = old.boards.filter((x) => !isDealTasks(x));
-    old.seededBoards = old.seededBoards.filter((m) => m !== 'dealTasks');
+    old.boards.push({ id: 'old-demos', module: 'clients', name: 'Demos', owner: '', groups: [{ id: 'og', name: 'MVP', items: [{ id: 'oi', name: 'Old demo', values: {}, updates: [], subtasks: [] }] }] });
+    old.seededBoards = old.seededBoards.filter((m) => m !== 'dealTasks' && m !== 'pipelineDemos');
     const m = migrate(old);
     const at = m.boards.findIndex(isDealTasks);
-    assert.ok(at > 0 && m.boards[at - 1].module === 'projects' && !m.boards[at - 1].owner && m.boards[at].groups.length === 1);
+    assert.ok(at > 0 && m.boards[at - 1].module === 'projects' && !m.boards[at - 1].owner && m.boards[at].name === 'Demos'
+      && m.boards[at].groups.map((g) => g.name).join('|') === 'Next steps|MVP' && !m.boards.some((x) => x.id === 'old-demos'), m.boards[at]);
+    assert.ok(m.seededBoards.includes('pipelineDemos'));
     m.boards = m.boards.filter((x) => !isDealTasks(x));
     assert.equal(migrate(m).boards.some(isDealTasks), false, 'deleted: not again');
   }
@@ -3031,15 +3025,17 @@ if (createSeed) {
       [['projects', '', 'david'], ['projects', '', 'josh'], ['projects', '', 'hello']]);
     assert.deepEqual(s.boards.filter((b) => b.owner).map((b) => boardTitle(s, b)), ['David’s notes', 'Josh’s notes', 'Hello’s notes']);
     const { isDealTasks } = await import('../src/data/boards.js');
-    BOARD_MODULES.forEach((module) => assert.deepEqual(teamBoards(s, module).filter((b) => !isDealTasks(b)).map((b) => b.name), STARTING_BOARDS[module], module));
-    // Projects (own pages first, then Deal tasks after the team boards: §25), Marketing, then Outreach, as the live order
-    // has them; every board has somewhere to add tasks.
+    // Clients › Demos moved under Pipeline (§26), so the demo's Clients boards are its others.
+    const demoStart = (module) => STARTING_BOARDS[module].filter((n) => !(module === 'clients' && n === 'Demos'));
+    BOARD_MODULES.forEach((module) => assert.deepEqual(teamBoards(s, module).filter((b) => !isDealTasks(b)).map((b) => b.name), demoStart(module), module));
+    // Projects (own pages first, then Pipeline › Demos after the team boards: §25, §26), Marketing, then Outreach, as the
+    // live order has them; every board has somewhere to add tasks.
     assert.deepEqual(s.boards.map((b) => `${b.module}:${b.owner ? 'own' : 'team'}`), [
       ...Array(3).fill('projects:own'), ...Array(STARTING_BOARDS.projects.length + 1).fill('projects:team'),
       ...Array(STARTING_BOARDS.marketing.length).fill('marketing:team'), ...Array(STARTING_BOARDS.outreach.length).fill('outreach:team'),
-      ...Array(STARTING_BOARDS.clients.length).fill('clients:team'), ...Array(STARTING_BOARDS.pipeline.length).fill('pipeline:team'),
+      ...Array(demoStart('clients').length).fill('clients:team'), ...Array(STARTING_BOARDS.pipeline.length).fill('pipeline:team'),
     ]);
-    assert.deepEqual(s.seededBoards, [...BOARD_MODULES, 'dealTasks'], 'the demo has every module’s starting boards, and Deal tasks');
+    assert.deepEqual(s.seededBoards, [...BOARD_MODULES, 'dealTasks', 'pipelineDemos'], 'the demo has every module’s starting boards, and Pipeline › Demos');
     s.boards.forEach((b) => assert.ok(b.groups.length, boardTitle(s, b)));
     // Ids are unique across boards, groups, tasks, updates and subtasks; people are real users.
     const ids = s.boards.flatMap((b) => [b.id, ...b.groups.flatMap((g) => [g.id, ...g.items.flatMap((it) => [
@@ -3052,8 +3048,8 @@ if (createSeed) {
     assert.deepEqual(['david', 'josh', 'hello'].map((me) => pagesFor(me).filter((b) => b.owner).map((b) => b.owner)),
       [['david', 'josh', 'hello'], ['josh', 'hello'], ['hello']]);
     assert.deepEqual(pagesFor('hello').filter((b) => !b.owner).map((b) => [b.name, access.canEditBoard({ ...s, me: 'hello' }, b)]),
-      [...[...STARTING_BOARDS.projects, 'Deal tasks', ...STARTING_BOARDS.marketing].map((n) => [n, true]),
-        ...[...STARTING_BOARDS.clients, ...STARTING_BOARDS.pipeline].map((n) => [n, false])],
+      [...[...STARTING_BOARDS.projects, 'Demos', ...STARTING_BOARDS.marketing].map((n) => [n, true]),
+        ...[...demoStart('clients'), ...STARTING_BOARDS.pipeline].map((n) => [n, false])],
       'staff edit every Projects and Marketing team board by default (0006); Clients’, Pipeline’s and Outreach’s follow those modules (view, view, none)');
     // Outreach's boards follow each person's Outreach level: none by default for staff, then view or edit.
     const sales = teamBoards(s, 'outreach')[0];
@@ -3065,7 +3061,7 @@ if (createSeed) {
     assert.deepEqual([helloAt(''), helloAt('view'), helloAt('edit')], [[false, false], [true, false], [true, true]]);
     assert.deepEqual(['david', 'josh'].map((me) => access.canEditBoard({ ...s, me }, sales)), [true, true], 'admins edit');
     assert.deepEqual(sales.groups.map((g) => g.name), ['To do', 'Done']);
-    assert.deepEqual(teamBoards(s, 'clients').map((b) => [b.name, b.groups.map((g) => g.name)]), [['Demos', ['To do', 'Done']], ['Previews', ['To do']]]);
+    assert.deepEqual(teamBoards(s, 'clients').map((b) => [b.name, b.groups.map((g) => g.name)]), [['Previews', ['To do']]], 'Clients › Demos moved under Pipeline (§26)');
   });
 }
 
@@ -3191,8 +3187,9 @@ if (migrate) {
     m.boards.filter((b) => b.owner).forEach((b) => assert.deepEqual(b.groups.map((g) => [g.name, g.color, g.items]), [['Active', FIRST_GROUP_COLOR, []]]));
     // The starting team boards in order: the old groups on General / Posting schedule, the others one empty group.
     BOARD_MODULES.forEach((module) => {
-      const starting = m.boards.filter((b) => b.module === module && !b.owner && b.name !== 'Deal tasks');
-      assert.deepEqual(starting.map((b) => b.name), STARTING_BOARDS[module], module);
+      // Pipeline › Demos (§25, §26) is no starting board; Clients › Demos moved onto it.
+      const starting = m.boards.filter((b) => b.module === module && !b.owner && b.id !== 'dea15000-0000-4000-8000-000000000001');
+      assert.deepEqual(starting.map((b) => b.name), STARTING_BOARDS[module].filter((n) => !(module === 'clients' && n === 'Demos')), module);
       starting.filter((b) => b.name !== EXISTING_BOARD[module])
         .forEach((b) => assert.deepEqual(b.groups.map((g) => [g.name, g.color, g.items]), [[FIRST_GROUP[module], FIRST_GROUP_COLOR, []]], b.name));
     });
@@ -3211,8 +3208,9 @@ if (migrate) {
       const x = migrate({ ...phase1(), boards });
       ownPages(x);
       assert.deepEqual(x.boards.filter((b) => !b.owner).map((b) => [b.module, b.name, b.groups.map((g) => g.name)]),
-        BOARD_MODULES.flatMap((module) => [...STARTING_BOARDS[module].map((name) => [module, name, [FIRST_GROUP[module]]]),
-          ...(module === 'projects' ? [['projects', 'Deal tasks', ['Next steps']]] : [])]), JSON.stringify(boards));
+        BOARD_MODULES.flatMap((module) => [...STARTING_BOARDS[module].filter((name) => !(module === 'clients' && name === 'Demos'))
+          .map((name) => [module, name, [FIRST_GROUP[module]]]),
+          ...(module === 'projects' ? [['projects', 'Demos', ['Next steps', FIRST_GROUP.clients]]] : [])]), JSON.stringify(boards));
       assert.equal(new Set(boardIds(x)).size, boardIds(x).length);
       assert.deepEqual(plain(roundTrip({ ...x, mode: 'live' })), plain(flatten(x)));
     });
@@ -3761,9 +3759,9 @@ if (createSeed && migrate) {
     assert.ok(s.deals.every((d) => DEAL_STAGES.includes(d.stage)), JSON.stringify(s.deals.map((d) => d.stage)));
     assert.deepEqual(DEAL_STAGES.map((st) => s.deals.filter((d) => d.stage === st && !d.clientId).length).map((n) => n > 0), [true, true, true, true, true],
       'something in every column');
-    // Every deal in Demos or Proposal sent has its row on Clients › Demos (§23).
-    const demoRows = s.boards.filter((b) => b.module === 'clients' && !b.owner)[0].groups.flatMap((g) => g.items);
-    assert.ok(s.deals.filter((d) => ['Demos', 'Proposal sent'].includes(d.stage)).every((d) => demoRows.some((i) => i.values.deal === d.id)), 'each Demos deal has its Demos row');
+    // The demo deals' tasks are on Pipeline › Demos (§26), each linked to a real deal.
+    const demoTasks = s.boards.find((b) => b.id === 'dea15000-0000-4000-8000-000000000001').groups.flatMap((g) => g.items);
+    assert.ok(demoTasks.length >= 4 && demoTasks.every((i) => s.deals.some((d) => d.id === i.values.deal)), 'Pipeline › Demos tasks link their deals');
     // Both Leads and none on the board; the client Westbay became carries its deal's (§21).
     assert.deepEqual(['lyco', 'assetstack', ''].map((src) => s.deals.some((d) => d.source === src && !d.clientId)), [true, true, true]);
     assert.ok(s.deals.concat(s.clients).every((x) => ['', 'lyco', 'assetstack'].includes(x.source)));
@@ -3786,11 +3784,12 @@ if (createSeed && migrate) {
     old.boards = old.boards.filter((b) => !added.includes(b.module));
     delete old.seededBoards;
     const m = migrate(structuredClone(old));
+    // Clients' Demos comes (0007) and moves onto Pipeline › Demos (0016, §26), as in the database.
     added.forEach((module) => assert.deepEqual(
       teamBoards(m, module).map((b) => [b.name, b.owner, b.groups.map((g) => [g.name, g.color, g.items])]),
-      STARTING_BOARDS[module].map((n) => [n, '', [[FIRST_GROUP[module], FIRST_GROUP_COLOR, []]]]), module));
-    assert.deepEqual(m.boards.slice(-4).map((b) => b.module), ['outreach', 'clients', 'clients', 'pipeline'], 'after Marketing, as the live order has them');
-    assert.deepEqual(m.seededBoards, ['projects', 'marketing', 'outreach', 'clients', 'pipeline', 'dealTasks']);
+      STARTING_BOARDS[module].filter((n) => !(module === 'clients' && n === 'Demos')).map((n) => [n, '', [[FIRST_GROUP[module], FIRST_GROUP_COLOR, []]]]), module));
+    assert.deepEqual(m.boards.slice(-3).map((b) => b.module), ['outreach', 'clients', 'pipeline'], 'after Marketing, as the live order has them');
+    assert.deepEqual(m.seededBoards, ['projects', 'marketing', 'outreach', 'clients', 'pipeline', 'dealTasks', 'pipelineDemos']);
     assert.deepEqual(migrate(structuredClone(m)), m, 'running it again adds nothing');
     const deleted = structuredClone(m);
     deleted.boards = deleted.boards.filter((b) => !added.includes(b.module));

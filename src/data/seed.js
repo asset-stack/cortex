@@ -101,10 +101,19 @@ function boards(clientId = () => '', dealId = () => '') {
         item('Outsource time logger', { people: ['david'], status: 'Done', priority: 'Low', due: '2026-10-09' }),
       ]),
     ]),
-    // Pipeline › Deal tasks (§25): a deal's next steps; an Operations board underneath, with its fixed id, in no menu.
-    { ...board('projects', 'Deal tasks', [
+    // Pipeline › Demos (§25, §26): the deals' tasks; an Operations board underneath, with its fixed id, under Pipeline in
+    // the sidebar. Clients › Demos' groups came here (0016).
+    { ...board('projects', 'Demos', [
       group('Next steps', '#c9ffe6', [
         item('Book the Northside site visit', { deal: dealId('Northside Diocese'), people: ['david'], also: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-11-04' }),
+      ]),
+      group('To do', '#c9ffe6', [
+        item('Northside Diocese: asset register walkthrough', { deal: dealId('Northside Diocese'), people: ['david'], status: 'In progress', priority: 'Urgent', due: '2026-10-27' }),
+        item('Coastal Rail: condition data demo', { deal: dealId('Coastal Rail'), people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-10-29' }),
+        item('Harbour Construction: digital twin demo', { deal: dealId('Harbour Construction'), people: ['david'], status: 'Not started', priority: 'Low', due: '' }),
+      ]),
+      group('Done', '#bfe9ff', [
+        item('Westbay Council: onboarding demo', { deal: dealId('Westbay Council'), people: ['josh'], status: 'Done', priority: 'High', due: '2026-10-14' }),
       ]),
     ]), id: DEAL_TASKS_BOARD },
     board('marketing', 'Daily Automation', [
@@ -158,17 +167,6 @@ function boards(clientId = () => '', dealId = () => '') {
       ]),
       group('Done', '#bfe9ff', [
         item('Intro call with Glenmore Shire Council', { people: ['david'], status: 'Done', priority: 'Medium', due: '2026-10-15' }),
-      ]),
-    ]),
-    board('clients', 'Demos', [
-      group('To do', '#c9ffe6', [
-        // Pipeline's Demos and Proposal sent deals each have their row here, linked to the deal (§23).
-        item('Northside Diocese: asset register walkthrough', { client: clientId('Northside Diocese'), deal: dealId('Northside Diocese'), people: ['david'], status: 'In progress', priority: 'Urgent', due: '2026-10-27' }),
-        item('Coastal Rail: condition data demo', { client: clientId('Coastal Rail'), deal: dealId('Coastal Rail'), people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-10-29' }),
-        item('Harbour Construction: digital twin demo', { client: clientId('Harbour Construction'), deal: dealId('Harbour Construction'), people: ['david'], status: 'Not started', priority: 'Low', due: '' }),
-      ]),
-      group('Done', '#bfe9ff', [
-        item('Westbay Council: onboarding demo', { client: clientId('Westbay Council'), deal: dealId('Westbay Council'), people: ['josh'], status: 'Done', priority: 'High', due: '2026-10-14' }),
       ]),
     ]),
     board('clients', 'Previews', [
@@ -650,7 +648,7 @@ export function createSeed() {
     routines: routines(),
     todos: [],
     routineRuns: [], // demo only: the routine runs ensureTodosLocal has made (routine_runs in the database)
-    seededBoards: [...BOARD_MODULES, 'dealTasks'], // demo only: modules whose starting boards this demo has (migrate() adds new ones once; 'dealTasks': §25)
+    seededBoards: [...BOARD_MODULES, 'dealTasks', 'pipelineDemos'], // demo only: modules whose starting boards this demo has (migrate() adds new ones once; 'dealTasks' §25, 'pipelineDemos' §26)
     calendarSeeded: true, // demo only: Posting schedule's calendar was switched on (migrate() does it once for older data)
     calendarEvents: demoCalendarEvents(today, id),
     payments: [
@@ -771,6 +769,17 @@ export function migrate(data) {
       groups: [{ id: uid(), name: 'Next steps', color: FIRST_GROUP_COLOR, items: [] }] });
   }
   if (!data.seededBoards.includes('dealTasks')) data.seededBoards.push('dealTasks');
+  // Pipeline › Demos (§26, as 0016): the board is called Demos, and Clients' Demos boards' groups and tasks move onto it.
+  if (!data.seededBoards.includes('pipelineDemos')) {
+    const demos = data.boards.find((b) => b.id === DEAL_TASKS_BOARD);
+    if (demos) {
+      if (demos.name === 'Deal tasks') demos.name = 'Demos';
+      const from = data.boards.filter((b) => b.module === 'clients' && !b.owner && b.name === 'Demos');
+      from.forEach((b) => { (demos.groups ||= []).push(...(b.groups || [])); });
+      data.boards = data.boards.filter((b) => !from.includes(b));
+    }
+    data.seededBoards.push('pipelineDemos');
+  }
   // An item's single owner becomes its people, as the 0002 migration does in the database.
   const userIds = new Set(data.users.map((u) => u.id));
   data.boards.forEach((b) => {

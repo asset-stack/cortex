@@ -16,7 +16,8 @@
 // and writes them, and how they follow a deal to its client); then 0013_lead.sql (the Lead on deals and clients, LYCO or
 // AssetStack direct: its values, and who reads and sets it); then 0014_deal_demo_rows.sql (a deal entering Demos or Proposal sent
 // gets one row on Clients › Demos, added by the database whoever moves it, never twice); then 0015_deal_tasks_board.sql (the
-// Deal tasks board, with Operations' access). Last, the sync engine's writes of every
+// Deal tasks board, with Operations' access); then 0016_pipeline_demos.sql (no automatic Demos row; the board called Demos,
+// with Clients › Demos' groups and tasks). Last, the sync engine's writes of every
 // synced table (flatten() rows as PostgREST upserts), personal pages, Outreach and calendar events included.
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
@@ -42,6 +43,7 @@ const migration12 = await readFile(new URL('supabase/migrations/0012_crm_profile
 const migration13 = await readFile(new URL('supabase/migrations/0013_lead.sql', root), 'utf8');
 const migration14 = await readFile(new URL('supabase/migrations/0014_deal_demo_rows.sql', root), 'utf8');
 const migration15 = await readFile(new URL('supabase/migrations/0015_deal_tasks_board.sql', root), 'utf8');
+const migration16 = await readFile(new URL('supabase/migrations/0016_pipeline_demos.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -6144,6 +6146,88 @@ async function phase15(ctx) {
   return ctx;
 }
 
+// ── 0016: Pipeline › Demos — no automatic row; Clients › Demos' groups and tasks move onto the board ─────────────
+
+async function phase16(ctx) {
+  const { alice, boss } = ctx;
+  const ID = 'dea15000-0000-4000-8000-000000000001';
+  await as(null);
+  // Clients › Demos as it may be live: its To do group with a task (an update, a subtask, a Client and a Deal), and a
+  // second group with a task.
+  const demos = await one("select id from boards where module = 'clients' and owner_id is null and name = 'Demos' order by position, id limit 1");
+  const g1 = (await one('select id from board_groups where board_id = $1 order by position, id limit 1', [demos.id])).id;
+  const g2 = (await one(`insert into board_groups (board_key, board_id, name, color, position) values ('clients', $1, 'Example MVP', '#bfe9ff', 5) returning id`, [demos.id])).id;
+  const deal = (await one("insert into deals (name, stage) values ('Example Gulf', 'First meetings') returning id")).id;
+  const t1 = (await one(`insert into items (board_key, board_id, group_id, name, "values") values ('clients', $1, $2, 'Example Gulf demo',
+    jsonb_build_object('deal', $3::text, 'client', 'c', 'people', '[]'::jsonb, 'status', 'In progress')) returning id`, [demos.id, g1, deal])).id;
+  const t2 = (await one(`insert into items (board_key, board_id, group_id, name, "values") values ('clients', $1, $2, 'Example MVP task', '{}'::jsonb) returning id`, [demos.id, g2])).id;
+  await db.query("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Example update')", [t1, boss]);
+  await db.query("insert into subtasks (item_id, text) values ($1, 'Example subtask')", [t1]);
+  const ownGroups = (await one('select count(*)::int as n from board_groups where board_id = $1', [ID])).n;
+
+  // 119. Runs on top of 0015, whole, again, and statement by statement; its done row last.
+  const run = async () => db.exec(migration16).then(
+    (r) => ({ error: null, done: r.at(-1)?.rows?.[0]?.done ?? null }),
+    async (e) => { await db.exec('rollback').catch(() => {}); return { error: e.message, done: null }; });
+  const first = await run();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration16, { continueOnError: true });
+  const body = migration16.replace(/--.*$/gm, '').trim();
+  const state16 = {
+    trigger: (await one("select count(*)::int as n from pg_trigger where tgname = 'deal_demo_row'")).n,
+    fn: (await one("select count(*)::int as n from pg_proc where proname = 'deal_demo_row' and pronamespace = 'public'::regnamespace")).n,
+    name: (await one('select name from boards where id = $1', [ID])).name,
+    clientsDemos: (await one("select count(*)::int as n from boards where module = 'clients' and owner_id is null and name = 'Demos'")).n,
+    groups: (await rows('select name, board_key from board_groups where board_id = $1 order by position, id', [ID])).map((g) => `${g.name}:${g.board_key}`),
+    moved: (await rows('select name, board_key, "values" ->> \'deal\' as deal from items where id = any($1) and board_id = $2 order by name', [[t1, t2], ID]))
+      .map((i) => `${i.name}:${i.board_key}:${i.deal ? 'deal' : '-'}`),
+    kept: (await one('select (select count(*) from item_updates where item_id = $1)::int as u, (select count(*) from subtasks where item_id = $1)::int as s', [t1])),
+    checksOn: (await rows("select tgrelid::regclass::text as t, tgenabled from pg_trigger where tgname = 'same_audience' order by 1")).map((r) => `${r.t}:${r.tgenabled}`),
+  };
+  check('119. 0016 runs on top of 0015, re-runs whole and statement by statement, never mentions module_level, and ends (after commit) with its '
+    + 'done row: no deal_demo_row trigger or function; the board is called Demos; Clients › Demos\' groups (in order) and tasks (with their updates, '
+    + 'subtasks and Deal) are on it after its own group, as Operations rows, and the empty Clients board is gone; same_audience is on again',
+    first.error === null && second.error === null && !splitErrors.length && first.done === 'Cortex 0016 applied' && second.done === 'Cortex 0016 applied'
+      && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0016 applied' as done;$/i.test(body) && !migration16.includes('module_level')
+      && state16.trigger === 0 && state16.fn === 0 && state16.name === 'Demos' && state16.clientsDemos === 0
+      && state16.groups.length === ownGroups + 2 && state16.groups.slice(-2).join('|') === 'To do:projects|Example MVP:projects'
+      && state16.moved.join('|') === 'Example Gulf demo:projects:deal|Example MVP task:projects:-'
+      && state16.kept.u === 1 && state16.kept.s === 1 && state16.checksOn.join('|') === 'board_groups:O|items:O',
+    { first, second, splitErrors, state16, ownGroups });
+  if (first.error) return null;
+
+  // 120. After it: a deal reaching Demos or Proposal sent gets no row anywhere; the moved tasks follow Operations' access
+  // (staff with Operations edit change them); moves between modules are refused again.
+  await as(boss);
+  await db.query("update deals set stage = 'Demos' where id = $1", [deal]);
+  const fresh = (await one("insert into deals (name, stage) values ('Example Fresh', 'Proposal sent') returning id")).id;
+  await as(null);
+  const after = {
+    rows: (await one(`select count(*)::int as n from items where "values" ->> 'deal' = any($1)`, [[deal, fresh]])).n,
+  };
+  const accessBefore = await rows("select user_id, module, level from module_access where user_id = $1 and module = 'projects'", [alice]);
+  await db.query("delete from module_access where user_id = $1 and module = 'projects'", [alice]);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', 'edit')", [alice]);
+  await as(alice);
+  after.aliceEdits = (await db.query(`update items set "values" = "values" || '{"priority": "High"}'::jsonb where id = $1`, [t1])).affectedRows || 0;
+  await as(null);
+  await db.query("delete from module_access where user_id = $1 and module = 'projects'", [alice]);
+  for (const a of accessBefore) await db.query('insert into module_access (user_id, module, level) values ($1, $2, $3)', [a.user_id, a.module, a.level]);
+  const prev = await one("select id, (select id from board_groups where board_id = boards.id limit 1) as grp from boards where module = 'clients' and owner_id is null order by position limit 1");
+  after.crossRefused = prev ? await db.query('update items set board_id = $1, group_id = $2 where id = $3', [prev.id, prev.grp, t2]).then(() => false, () => true) : true;
+  check('120. after 0016 a deal reaching Demos or Proposal sent gets no row; the moved tasks have Operations\' access (Operations edit changes them); '
+    + 'a move to a Clients board is refused again',
+    stable(after) === stable({ rows: 1, aliceEdits: 1, crossRefused: true }), after);
+
+  // Tidy up: the deals and tasks added here (the board and its groups stay, as 0016 leaves them).
+  await as(null);
+  await db.query('delete from items where id = any($1)', [[t1, t2]]);
+  await db.query('delete from board_groups where id = $1', [g2]);
+  await db.query('delete from deals where id = any($1)', [[deal, fresh]]);
+  return ctx;
+}
+
 async function runSplit(dbx, sql, { continueOnError = false, skip = () => false } = {}) {
   const errors = [];
   for (const st of splitSql(sql)) {
@@ -6264,7 +6348,8 @@ try {
   const ctx13 = ctx12 && await phase13(ctx12);
   const ctx14 = ctx13 && await phase14(ctx13);
   const ctx15 = ctx14 && await phase15(ctx14);
-  if (ctx15) await syncWriteCheck(ctx15);
+  const ctx16 = ctx15 && await phase16(ctx15);
+  if (ctx16) await syncWriteCheck(ctx16);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);
