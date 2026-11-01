@@ -3,7 +3,7 @@
 import { addDays, addMonths, isoDow, isYmd, mondayOf } from './automations.js';
 import { canView, canViewBoard } from './access.js';
 import { ymdIn } from './format.js';
-import { alsoOf, hasAlso } from './work.js';
+import { hasOwner, ownerOf } from './work.js';
 import { BOARD_SCHEMAS, hasDates } from '../data/boards.js';
 
 // What an entry is, its colour and its filter label.
@@ -92,7 +92,7 @@ export function collectEntries(state, { meetings = [], tz, userId = state?.me } 
       if (!isYmd(due)) return;
       out.push(entry(kind, {
         key: `item:${it.id}`, date: due, endDate: due, title: String(it.name || '').trim() || 'Untitled',
-        people: [...new Set([...(it.values.people || []), ...(hasAlso(b) ? alsoOf(it) : [])])], // the owner and Also on
+        people: hasOwner(b) ? [ownerOf(it)].filter(Boolean) : [...new Set(it.values.people || [])], // whose it is (§25)
         done: Boolean(it.done) || it.values.status === 'Done', status: it.values.status || '', boardId: b.id, itemId: it.id,
       }));
     }));

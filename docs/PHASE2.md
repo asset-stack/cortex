@@ -1238,7 +1238,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 
 - **Why** (owner, 2026-10-31): work goes back and forth. Shem does the designs and Transurban goes to David to review;
   Shem posts updates on Alltel, then it's with David to upload some info. The Owner is whoever has the next step, and
-  changing it used to drop the person who had it off the task, so it left their lists.
+  changing it used to drop the person who had it off the task. (Since §25 Also on shows on the task only, not in
+  anyone's lists: the one who had it stays on the task, and their lists show what they own.)
 - **Team › Name lists only what the person owns** (owner, 2026-10-31: Team › David showed Josh's tasks David was Also on).
   `src/pages/Team.jsx` keeps the rows of `prioritiesFor()` they own (`owner`; not `also`, nor second on a task that still
   has several people; Work in Progress, which has no Owner, by its Contact), on the person page and their card. The
@@ -1254,8 +1255,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   added on the board and given its owner after.
   Nothing goes on Also on when the Owner is cleared or was empty, on a people list (Work in Progress' Contact), or on a
   board without Also on (personal pages, Work in Progress: `boardValues()`).
-- **AS Team** too: when someone takes a task from AS Team, AS Team stays on it (Also on), so the task shows it came from
-  the team pool; Team › AS Team lists only what's still in the pool. Take it off in Also on when it isn't wanted.
+- **AS Team** (removed in §25): while it was there, a task taken from AS Team kept AS Team on Also on.
 - **Done takes two clicks** (owner, 2026-10-31: a single tick looked like it deleted the task, because Team › Name and
   My tasks list open tasks only). A table's Done box (`DoneBox` in `src/components/board/TableView.jsx`) turns into an
   amber "click again" check on the first click; the second marks the task Done (status Done). It settles back after 4
@@ -1264,3 +1264,39 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Data**: `values.also` only (jsonb), synced as before; nothing to run in Supabase.
 - **Tests**: `scripts/test-sync.mjs` (§24, and the hand-over expectations in the owners, accept and §20 checks);
   Playwright (handing on and back, taking it back, a new task; the Done box at 1440 and 390px).
+
+## 25. A person's lists are what they own; Pipeline › Deal tasks; AS Team removed (0015)
+
+- **Why** (owner, 2026-11-01): Team › David showed tasks David was only Also on (Shem's G2 reviews, a supplier task),
+  and a task added on the Oman deal for Josh showed in four places (Team Tasks, Clients › Demos, AS Team's page, Team ›
+  David). It should be on the deal (the CRM) and in Josh's lists, and nowhere else that reads as a copy.
+- **Lists are what you own** (`ownedBy()`, `src/lib/work.js`): a person's Dashboard (My tasks, Waiting on you), Team page
+  and Team card, a board's person filter (`itemMatches()`) and the Calendar's people (`collectEntries()`) take the tasks
+  they own: the owner (the first of `values.people`) on a board with an Owner column; on Work in Progress (no Owner) one
+  of its Contacts. Also on, and being second on a task that still has several people, shows on the task only. Workload,
+  Waiting and Needs attention were the owner's already.
+- **Pipeline › Deal tasks** (`DEAL_TASKS_BOARD` in `src/data/boards.js`, made by `0015_deal_tasks_board.sql`; demo mode: the
+  seed, and `migrate()` once for older demo data): the one board a deal's next steps live on.
+  - Underneath it is an Operations ('projects') team board with a fixed id: Operations' access and policies (staff edit,
+    as when next steps were on Team Tasks), and its tasks move to and from Operations' boards (the drawer's Board list).
+  - On screen it is Pipeline's (`areaOf()`: breadcrumbs, card titles "Pipeline › Deal tasks", the New task list, card
+    order with Pipeline's) and its department is Pipeline (`departmentOf()`). It is in no menu and never a module's
+    default board (`resolveBoard()`); its own address opens it.
+  - Its columns (`schemaOf()`): Owner, Also on, Status, Priority, Due, Deal. No Department.
+  - A deal's **Add next step** puts the task there (`NewTaskModal`: with a deal preset, Deal tasks is the only place once it
+    exists; before 0015, Operations' and Outreach's boards with a Deal column, as in §22). A plain New task never offers it.
+  - Older next steps stay where they are (Team Tasks, Sales Tasks); one on an Operations board can be moved to Deal tasks in
+    its drawer (Board). Tasks can't move between modules, so one on Outreach stays there.
+- **A deal's Next steps are its tasks, not its Clients › Demos row** (`dealTasks()` leaves Clients boards out). The Demos
+  row (§23) stays its owner's task (owner's choice, 2026-11-01).
+- **AS Team removed** (data; SQL in the editor, not in this repo): the tasks AS Team owned were deleted, AS Team came off
+  every Also on and people list, its deals and clients lost it as owner (to be reassigned in the app), its to-dos and
+  routines went, and the profile was switched off. Work for the whole team: one main Owner, the others on Also on.
+- **Release**: 0015 adds no table or column, so the app opens either way (without it, Add next step uses Operations'
+  boards). Check it with `select name from public.boards where id = 'dea15000-0000-4000-8000-000000000001';` (one row,
+  `Deal tasks`).
+- **Tests**: `scripts/test-sync.mjs` (§25: `ownedBy()`, the lists, filters and Calendar; Deal tasks' schema, area,
+  department, breadcrumb, card order, `resolveBoard()`, the seed and `migrate()`; `dealTasks()` without the Demos row);
+  `scripts/test-db.mjs` checks 117–118 (0015: re-runs, one board and group after Operations' team boards; Operations'
+  access to it).
+

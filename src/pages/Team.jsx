@@ -7,7 +7,7 @@ import NewTaskModal from '@/components/board/NewTaskModal';
 import PersonTasks from '@/components/work/PersonTasks';
 import { boardHref } from '@/lib/boards';
 import { localClock, localYmd } from '@/lib/format';
-import { hasOwner, prioritiesFor, topTasks, workload } from '@/lib/work';
+import { prioritiesFor, topTasks, workload } from '@/lib/work';
 import { cn } from '@/lib/cn';
 
 const COUNTS = [
@@ -18,14 +18,12 @@ const COUNTS = [
   { key: 'open', label: 'Open', tint: '' },
 ];
 
-// The tasks someone owns on the team boards (never their notes, nor what they're only Also on or second on a task that
-// still has several people: §24), as the viewer may see them; Work in Progress (no Owner) by its Contact. Their own
-// Dashboard lists the rest too.
-const owns = (personId) => (r) => !r.also && (!hasOwner(r.board) || r.owner === personId);
+// The tasks someone owns on the team boards (never their notes; not what they're only Also on: §25), as the viewer may
+// see them.
 const useRows = (personId) => {
   const { state } = useStore();
   const today = localYmd();
-  return useMemo(() => prioritiesFor(state, personId, { today, teamOnly: true }).filter(owns(personId)), [state, personId, today]);
+  return useMemo(() => prioritiesFor(state, personId, { today, teamOnly: true }), [state, personId, today]);
 };
 
 /** One person's card on the Team page: their numbers and top three tasks. */

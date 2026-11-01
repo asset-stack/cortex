@@ -7,7 +7,7 @@ import {
   addDays, addMonths, contactPipelineLocal, ensureTodosLocal, generateDueInvoicesLocal, isoDow, makeTodo, uid,
 } from '../lib/automations.js';
 import { TEAM_TIMEZONE, localYmd } from '../lib/format.js';
-import { withPeople } from './boards.js';
+import { DEAL_TASKS_BOARD, withPeople } from './boards.js';
 import { TOOL_PRESETS } from '../lib/tools.js';
 import { BOARD_MODULES, EXISTING_BOARD, FIRST_GROUP, FIRST_GROUP_COLOR, STARTING_BOARDS } from '../lib/boards.js';
 
@@ -101,6 +101,12 @@ function boards(clientId = () => '', dealId = () => '') {
         item('Outsource time logger', { people: ['david'], status: 'Done', priority: 'Low', due: '2026-10-09' }),
       ]),
     ]),
+    // Pipeline › Deal tasks (§25): a deal's next steps; an Operations board underneath, with its fixed id, in no menu.
+    { ...board('projects', 'Deal tasks', [
+      group('Next steps', '#c9ffe6', [
+        item('Book the Northside site visit', { deal: dealId('Northside Diocese'), people: ['david'], also: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-11-04' }),
+      ]),
+    ]), id: DEAL_TASKS_BOARD },
     board('marketing', 'Daily Automation', [
       group('Every day', '#bfe9ff', [
         item('Morning LinkedIn post', { people: ['hello'], status: 'Not started', priority: 'Medium', type: 'Industry', channel: 'LinkedIn', approval: 'Yes', due: '' }),
@@ -644,7 +650,7 @@ export function createSeed() {
     routines: routines(),
     todos: [],
     routineRuns: [], // demo only: the routine runs ensureTodosLocal has made (routine_runs in the database)
-    seededBoards: [...BOARD_MODULES], // demo only: modules whose starting boards this demo has (migrate() adds new ones once)
+    seededBoards: [...BOARD_MODULES, 'dealTasks'], // demo only: modules whose starting boards this demo has (migrate() adds new ones once; 'dealTasks': §25)
     calendarSeeded: true, // demo only: Posting schedule's calendar was switched on (migrate() does it once for older data)
     calendarEvents: demoCalendarEvents(today, id),
     payments: [
@@ -758,6 +764,13 @@ export function migrate(data) {
     }
     data.seededBoards.push(module);
   });
+  // Pipeline › Deal tasks (§25, 0015): older demo data gets the board once, after Operations' team boards.
+  if (!data.boards.some((b) => b.id === DEAL_TASKS_BOARD) && !data.seededBoards.includes('dealTasks')) {
+    const at = data.boards.findLastIndex((b) => b.module === 'projects' && !b.owner) + 1;
+    data.boards.splice(at, 0, { id: DEAL_TASKS_BOARD, module: 'projects', name: 'Deal tasks', owner: '', calendar: false,
+      groups: [{ id: uid(), name: 'Next steps', color: FIRST_GROUP_COLOR, items: [] }] });
+  }
+  if (!data.seededBoards.includes('dealTasks')) data.seededBoards.push('dealTasks');
   // An item's single owner becomes its people, as the 0002 migration does in the database.
   const userIds = new Set(data.users.map((u) => u.id));
   data.boards.forEach((b) => {

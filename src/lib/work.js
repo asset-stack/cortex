@@ -2,7 +2,7 @@
 // it, the Dashboard's task lists, the Team pages, the admins' Needs attention list, @mentions in task updates, where a
 // task lives, a client's linked tasks and Do today. Pure, with relative imports, so scripts/test-sync.mjs runs it in Node.
 import { canEditBoard, canView, canViewBoard } from './access.js';
-import { BOARD_MODULES, MODULE_LABELS, boardTitle, departmentOf, departmentValue } from './boards.js';
+import { BOARD_MODULES, MODULE_LABELS, areaOf, boardTitle, departmentOf, departmentValue } from './boards.js';
 import { mentionedUserIds } from './mentionText.js';
 import { PRIORITY, schemaOf, withPeople } from '../data/boards.js';
 
@@ -125,7 +125,7 @@ export const newTaskValues = (values = {}, { me = '', now = new Date().toISOStri
 export function whereOf(state, board, item) {
   if (!board) return [];
   const client = clientOf(state, item);
-  return [...(board.owner ? [] : [MODULE_LABELS[board.module] || '']), boardTitle(state, board), ...(client ? [client.name] : [])].filter(Boolean);
+  return [...(board.owner ? [] : [MODULE_LABELS[areaOf(board)] || '']), boardTitle(state, board), ...(client ? [client.name] : [])].filter(Boolean);
 }
 
 // The boards `personId` sees that the signed-in user (`viewer`) sees too, in state order: an admin looking at someone's
@@ -138,25 +138,30 @@ function clientOf(state, item) {
 }
 const rank = (p) => { const k = PRIORITIES.indexOf(p); return k < 0 ? PRIORITIES.length : k; };
 
+/** Whether `personId` owns a task (§25): its owner (the first of its people) on a board with an Owner column; on Work in
+ *  Progress (no Owner) one of its Contacts. Also on, or being second on a task that still has several people, isn't
+ *  owning it: a person's lists (the Dashboard, Team pages, a board's or the Calendar's person filter) show only theirs. */
+export const ownedBy = (board, item, personId) => Boolean(personId) && (hasOwner(board)
+  ? ownerOf(item) === personId
+  : (item?.values?.people || []).includes(personId));
+
 /**
- * The Dashboard's task lists (and a Team page's): the open tasks `personId` is on (their owner, among the people of a
- * task that still has several, or on its Also on), on every board they see (`teamOnly`: team boards only), Urgent
- * first, then High, Medium, Low and none; ties by the soonest due (none last), then board order. Each row: { item,
- * board, priority, due, overdue (due before `today`), client, waiting (waits on them to accept it), from (who handed it
- * to them), also (they're on it, someone else owns it), owner }.
+ * The Dashboard's task lists (and a Team page's): the open tasks `personId` owns (`ownedBy()`), on every board they see
+ * (`teamOnly`: team boards only), Urgent first, then High, Medium, Low and none; ties by the soonest due (none last), then
+ * board order. Each row: { item, board, priority, due, overdue (due before `today`), client, waiting (waits on them to
+ * accept it), from (who handed it to them), owner }.
  */
 export function prioritiesFor(state, personId, { today = '', viewer = state?.me, teamOnly = false } = {}) {
   if (!personId) return [];
   const rows = boardsFor(state, personId, viewer, teamOnly).flatMap((board) => board.groups.flatMap((g) => g.items
-    .filter((item) => !item.done && ((item.values?.people || []).includes(personId) || (hasAlso(board) && alsoOf(item).includes(personId))))
+    .filter((item) => !item.done && ownedBy(board, item, personId))
     .map((item) => {
       const v = item.values || {};
       const due = ymd(v[dateKey(board)]);
-      const also = !(v.people || []).includes(personId);
-      const waiting = !also && hasOwner(board) && isWaiting(item) && ownerOf(item) === personId; // Work in Progress' rows aren't tasks
+      const waiting = hasOwner(board) && isWaiting(item); // Work in Progress' rows aren't tasks
       return {
         item, board, priority: PRIORITIES.includes(v.priority) ? v.priority : '', due, overdue: Boolean(due && today && due < today),
-        client: clientOf(state, item), waiting, from: waiting ? v.assignedBy : '', also, owner: ownerOf(item),
+        client: clientOf(state, item), waiting, from: waiting ? v.assignedBy : '', owner: ownerOf(item),
       };
     })));
   const byDue = (a, b) => (a.due === b.due ? 0 : !a.due ? 1 : !b.due ? -1 : a.due < b.due ? -1 : 1);
@@ -180,9 +185,9 @@ export function byStage(rows) {
 
 /** How many of someone's tasks wait on them, are Urgent, In progress or overdue, and are open (the Dashboard's numbers,
  *  the Team cards and the team rule: MAX_URGENT, MAX_IN_PROGRESS). Only the ones they own, on boards with an owner
- *  column: Also on isn't theirs to answer for, and Work in Progress' rows are clients someone looks after, not tasks. */
+ *  column: Work in Progress' rows are clients someone looks after, not tasks. */
 export function workload(rows) {
-  const tasks = (rows || []).filter((r) => hasOwner(r.board) && !r.also);
+  const tasks = (rows || []).filter((r) => hasOwner(r.board));
   return {
     waiting: tasks.filter((r) => r.waiting).length,
     urgent: tasks.filter((r) => r.priority === 'Urgent').length,
@@ -194,7 +199,7 @@ export function workload(rows) {
 
 /** A Team card's top tasks: the first `n` they own that are Stuck, In progress or Up next (stage order, each Urgent
  *  first), so the backlog with no priority doesn't fill it. */
-export const topTasks = (rows, n = 3) => byStage((rows || []).filter((r) => !r.also))
+export const topTasks = (rows, n = 3) => byStage(rows || [])
   .filter((g) => g.stage !== 'No priority').flatMap((g) => g.rows).slice(0, n);
 
 /**
@@ -209,7 +214,7 @@ export function byBoard(rows, boards = []) {
     if (!cards.has(r.board)) cards.set(r.board, []);
     cards.get(r.board).push(r);
   });
-  const order = (b) => [BOARD_MODULES.indexOf(b.module), b.owner ? 1 : 0];
+  const order = (b) => [BOARD_MODULES.indexOf(areaOf(b)), b.owner ? 1 : 0]; // Deal tasks with Pipeline (§25)
   const at = (b) => { const k = (boards || []).indexOf(b); return k < 0 ? Infinity : k; };
   return [...cards.entries()].map(([board, list], n) => ({ board, list, n }))
     .sort((a, b) => {
@@ -229,7 +234,7 @@ export function byBoard(rows, boards = []) {
 export function itemMatches(board, item, { q = '', person = '', status = '', department = '' } = {}) {
   const v = item?.values || {};
   if (q && !String(item?.name || '').toLowerCase().includes(String(q).toLowerCase())) return false;
-  if (person && !(v.people || []).includes(person) && !(hasAlso(board) && alsoOf(item).includes(person))) return false;
+  if (person && !ownedBy(board, item, person)) return false; // theirs (§25), not what they're only Also on
   if (status && v.status !== status) return false;
   if (department && departmentOf(board, item) !== department) return false;
   return true;
@@ -288,12 +293,12 @@ export function clientTasks(state, clientId, { viewer = state?.me } = {}) {
       .map((item) => ({ item, board }))));
 }
 
-/** A deal's open tasks (`values.deal`: its next steps on Operations or Outreach, its row on Clients › Demos) on the boards
- *  the viewer sees, in board order:
- *  [{ item, board }]. */
+/** A deal's next steps: its open tasks (`values.deal`) on Pipeline › Deal tasks (§25), and older ones on Operations or
+ *  Outreach, on the boards the viewer sees, in board order. Not its row on Clients › Demos (§23): that's the deal's record
+ *  on that board, a task for its owner, not a next step (§25). [{ item, board }]. */
 export function dealTasks(state, dealId, { viewer = state?.me } = {}) {
   if (!dealId) return [];
-  return (state?.boards || []).filter((b) => hasDeal(b) && canViewBoard(state, b, viewer)).flatMap((board) => board.groups
+  return (state?.boards || []).filter((b) => hasDeal(b) && b.module !== 'clients' && canViewBoard(state, b, viewer)).flatMap((board) => board.groups
     .flatMap((g) => g.items.filter((item) => !item.done && item.values?.deal === dealId).map((item) => ({ item, board }))));
 }
 

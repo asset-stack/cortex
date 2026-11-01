@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useStore } from '@/data/store';
-import { PRIORITY, PRIORITY_HINTS } from '@/data/boards';
+import { PRIORITY, PRIORITY_HINTS, isDealTasks } from '@/data/boards';
 import { canEditBoard, useAccess } from '@/lib/access';
-import { BOARD_MODULES, DEPARTMENTS, MODULE_LABELS, boardTitle, departmentOf, departmentValue } from '@/lib/boards';
+import { BOARD_MODULES, DEPARTMENTS, MODULE_LABELS, areaOf, boardTitle, departmentOf, departmentValue } from '@/lib/boards';
 import { hasAlso, hasClient, hasDeal, hasDepartment, hasOwner, taggable } from '@/lib/work';
 import { ClientPicker, DealPicker, LabelPicker, Modal, OwnerPicker, PeoplePicker } from '@/components/ui';
 
@@ -11,14 +11,17 @@ import { ClientPicker, DealPicker, LabelPicker, Modal, OwnerPicker, PeoplePicker
  * and your own notes, not Work in Progress), its client (Clients boards), owner, priority and due date, and on a team
  * board who else is on it and its department (§20: the board's unless picked). A task made for someone else waits on
  * them to accept it. `owner` / `clientId` / `dealId` preset those (a Team page, a client, a deal's
- * next step); `modules` narrows where it can go (a client: Clients boards; a deal: Operations and Outreach boards with a Deal column). `title`: the
+ * next step); `modules` narrows where it can go (a client: Clients boards; a deal: Pipeline › Deal tasks, §25, or without
+ * it the Operations and Outreach boards with a Deal column). Deal tasks takes only a deal's next steps. `title`: the
  * dialog's. Closes when it's added.
  */
 export default function NewTaskModal({ onClose, owner: forOwner = '', clientId = '', dealId = '', modules = null, title = 'New task' }) {
   const { state, actions } = useStore();
   const access = useAccess();
-  const targets = state.boards.filter((b) => hasOwner(b) && access.canEditBoard(b) && (!b.owner || b.owner === state.me)
-    && (!modules || modules.includes(b.module)) && (!dealId || hasDeal(b))); // a deal's next step: only where it's kept
+  const fits = state.boards.filter((b) => hasOwner(b) && access.canEditBoard(b) && (!b.owner || b.owner === state.me)
+    && (!modules || modules.includes(b.module)) && (dealId ? hasDeal(b) : !isDealTasks(b))); // a deal's next step: only where it's kept
+  const dealHome = dealId && fits.find(isDealTasks);
+  const targets = dealHome ? [dealHome] : fits; // a deal's next steps live on Deal tasks (§25), once it's there
   // To start with: a team board the preset owner can take on, else the first team board, else your notes.
   const first = targets.find((b) => !b.owner && (!forOwner || canEditBoard(state, b, forOwner))) || targets.find((b) => !b.owner) || targets[0];
   const [f, setF] = useState({
@@ -53,9 +56,9 @@ export default function NewTaskModal({ onClose, owner: forOwner = '', clientId =
           <input className="field" placeholder="Task" aria-label="Task" value={f.name} onChange={(e) => set('name', e.target.value)} maxLength={300} autoFocus />
           <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Where</span>
             <select className="field" value={f.board} onChange={(e) => set('board', e.target.value)}>
-              {BOARD_MODULES.map((m) => targets.some((b) => b.module === m && !b.owner) && (
+              {BOARD_MODULES.map((m) => targets.some((b) => areaOf(b) === m && !b.owner) && (
                 <optgroup key={m} label={MODULE_LABELS[m]}>
-                  {targets.filter((b) => b.module === m && !b.owner).map((b) => <option key={b.id} value={b.id}>{boardTitle(state, b)}</option>)}
+                  {targets.filter((b) => areaOf(b) === m && !b.owner).map((b) => <option key={b.id} value={b.id}>{boardTitle(state, b)}</option>)}
                 </optgroup>
               ))}
               {targets.filter((b) => b.owner).map((b) => <option key={b.id} value={b.id}>My notes</option>)}

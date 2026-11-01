@@ -82,7 +82,10 @@ Contacted → First meetings → Demos, and Work in Progress under the deals; `d
 `docs/PHASE2.md` §19), then `0013_lead.sql` (a deal's and a client's Lead: LYCO, co-pitched, or AssetStack direct;
 `docs/PHASE2.md` §21), then `0014_deal_demo_rows.sql` (a deal reaching Demos or Proposal sent gets its row on Clients ›
 Demos by itself; no table or column, so it can run before or after its release; check it with
-`select tgname from pg_trigger where tgname = 'deal_demo_row';`; `docs/PHASE2.md` §23).
+`select tgname from pg_trigger where tgname = 'deal_demo_row';`; `docs/PHASE2.md` §23), then `0015_deal_tasks_board.sql`
+(Pipeline › Deal tasks, where a deal's next steps live; no table or column, so it can run before or after its release;
+check it with `select name from public.boards where id = 'dea15000-0000-4000-8000-000000000001';`, one row `Deal tasks`;
+`docs/PHASE2.md` §25).
 
 **0013 must run before the release that needs it is published.** It adds a column (`source`) to `deals` and
 `clients`, and that release saves it with every deal and client: until the file has run, those saves fail. Run it, check

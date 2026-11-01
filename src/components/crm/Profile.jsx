@@ -48,8 +48,8 @@ const linkProblem = (v) => {
 const escapeCancels = (cancel) => (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); cancel(); } };
 
 /** A deal's or client's next steps: its open linked tasks (each opens it) and Add next step (a task for someone, linked
- *  to it: on an Operations board, Team Tasks first, or an Outreach one for a deal (§22); a Clients board for a client).
- *  It shows in the Team view and Dashboard of its owner and of whoever is Also on it. */
+ *  to it: on Pipeline › Deal tasks for a deal (§25; before 0015, an Operations or Outreach board); a Clients board for a
+ *  client). It shows in its owner's Team view and Dashboard. A deal's row on Clients › Demos isn't a next step (§25). */
 export function NextSteps({ target }) {
   const { state } = useStore();
   const access = useAccess();

@@ -15,7 +15,8 @@
 // access levels, for the Team pages); then 0012_crm_profile.sql (deals' and clients' notes, meetings and links, who reads
 // and writes them, and how they follow a deal to its client); then 0013_lead.sql (the Lead on deals and clients, LYCO or
 // AssetStack direct: its values, and who reads and sets it); then 0014_deal_demo_rows.sql (a deal entering Demos or Proposal sent
-// gets one row on Clients › Demos, added by the database whoever moves it, never twice). Last, the sync engine's writes of every
+// gets one row on Clients › Demos, added by the database whoever moves it, never twice); then 0015_deal_tasks_board.sql (the
+// Deal tasks board, with Operations' access). Last, the sync engine's writes of every
 // synced table (flatten() rows as PostgREST upserts), personal pages, Outreach and calendar events included.
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
@@ -40,6 +41,7 @@ const migration11 = await readFile(new URL('supabase/migrations/0011_team_access
 const migration12 = await readFile(new URL('supabase/migrations/0012_crm_profile.sql', root), 'utf8');
 const migration13 = await readFile(new URL('supabase/migrations/0013_lead.sql', root), 'utf8');
 const migration14 = await readFile(new URL('supabase/migrations/0014_deal_demo_rows.sql', root), 'utf8');
+const migration15 = await readFile(new URL('supabase/migrations/0015_deal_tasks_board.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -6059,6 +6061,89 @@ async function phase14(ctx) {
   return ctx;
 }
 
+// ── 0015: Pipeline › Deal tasks, the board a deal's next steps live on (an Operations board underneath) ─────────────
+
+async function phase15(ctx) {
+  const { alice, boss, hello } = ctx;
+  const ID = 'dea15000-0000-4000-8000-000000000001';
+  await as(null);
+  const opsBefore = await rows("select position from boards where module = 'projects' and owner_id is null");
+  const maxBefore = Math.max(-1, ...opsBefore.map((r) => r.position));
+
+  // 117. Runs on top of 0014, whole, again, and statement by statement: one board, after Operations' team boards, with one
+  // group; its done row last.
+  const run = async () => db.exec(migration15).then(
+    (r) => ({ error: null, done: r.at(-1)?.rows?.[0]?.done ?? null }),
+    async (e) => { await db.exec('rollback').catch(() => {}); return { error: e.message, done: null }; });
+  const first = await run();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration15, { continueOnError: true });
+  const body = migration15.replace(/--.*$/gm, '').trim();
+  const boards15 = await rows('select module, name, owner_id, position from boards where id = $1', [ID]);
+  const groups15 = await rows('select id, board_key, name, position from board_groups where board_id = $1', [ID]);
+  check('117. 0015 runs on top of 0014, re-runs whole and statement by statement, never mentions module_level, and ends (after commit) '
+    + 'with its done row; it makes one Deal tasks board (Operations underneath, no owner, after Operations\' team boards) with one group',
+    first.error === null && second.error === null && !splitErrors.length && first.done === 'Cortex 0015 applied'
+      && second.done === 'Cortex 0015 applied' && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0015 applied' as done;$/i.test(body)
+      && !migration15.includes('module_level') && boards15.length === 1 && boards15[0].module === 'projects'
+      && boards15[0].name === 'Deal tasks' && boards15[0].owner_id === null && boards15[0].position === maxBefore + 1
+      && groups15.length === 1 && groups15[0].board_key === 'projects' && groups15[0].name === 'Next steps',
+    { first, second, splitErrors, boards15, groups15, maxBefore });
+  if (first.error || groups15.length !== 1) return null;
+  const group = groups15[0].id;
+
+  // 118. Operations' access, as any Operations team board: whoever can edit Operations adds a deal's next step there and
+  // moves a task in from another Operations board; whoever can only view can't; only admins delete the board.
+  await as(null);
+  const accessBefore = await rows("select user_id, module, level from module_access where user_id = any($1) and module = 'projects'", [[alice, hello]]);
+  await db.query("delete from module_access where user_id = any($1) and module = 'projects'", [[alice, hello]]);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', 'edit'), ($2, 'projects', 'view')", [alice, hello]);
+  const other = await one("select b.id as board, g.id as grp from boards b join board_groups g on g.board_id = b.id where b.module = 'projects' and b.owner_id is null and b.id <> $1 order by b.position, g.position limit 1", [ID]);
+  const res = {};
+  const tryAdd = async (who) => {
+    await as(who);
+    try {
+      const r = await db.query(`insert into items (board_key, board_id, group_id, name, "values") values ('projects', $1, $2, 'Example next step',
+        '{"deal": "example", "people": []}'::jsonb) returning id`, [ID, group]);
+      return r.rows.length === 1;
+    } catch { return false; }
+  };
+  res.aliceAdds = await tryAdd(alice);
+  res.helloAdds = await tryAdd(hello);
+  await as(null);
+  const moving = (await one(`insert into items (board_key, board_id, group_id, name, "values") values ('projects', $1, $2, 'Example moved', '{}'::jsonb)
+    returning id`, [other.board, other.grp])).id;
+  await as(hello);
+  res.helloMoves = (await db.query('update items set board_id = $1, group_id = $2 where id = $3', [ID, group, moving]).catch(() => ({ affectedRows: 0 }))).affectedRows || 0;
+  await as(alice);
+  res.aliceMoves = (await db.query('update items set board_id = $1, group_id = $2 where id = $3', [ID, group, moving]).catch(() => ({ affectedRows: 0 }))).affectedRows || 0;
+  await as(alice);
+  res.aliceDeletes = (await db.query('delete from boards where id = $1', [ID]).catch(() => ({ affectedRows: 0 }))).affectedRows || 0;
+  await db.exec('begin');
+  try {
+    await as(boss);
+    res.bossDeletes = (await db.query('delete from boards where id = $1', [ID])).affectedRows || 0;
+  } finally {
+    await db.exec('rollback');
+  }
+  await as(null);
+  res.stillThere = (await one('select count(*)::int as n from boards where id = $1', [ID])).n;
+  res.onIt = (await one('select count(*)::int as n from items where board_id = $1', [ID])).n;
+  check('118. Deal tasks has Operations\' access: Operations edit adds a next step and moves a task in from another Operations board; '
+    + 'Operations view does neither; staff can\'t delete the board (an admin can)',
+    stable(res) === stable({ aliceAdds: true, helloAdds: false, helloMoves: 0, aliceMoves: 1, aliceDeletes: 0, bossDeletes: 1, stillThere: 1, onIt: 2 }), res);
+
+  // Tidy up: the tasks added here, and the access rows back as they were.
+  await as(null);
+  await db.query('delete from items where board_id = $1', [ID]);
+  await db.query("delete from module_access where user_id = any($1) and module = 'projects'", [[alice, hello]]);
+  for (const a of accessBefore) {
+    await db.query('insert into module_access (user_id, module, level) values ($1, $2, $3)', [a.user_id, a.module, a.level]);
+  }
+  return ctx;
+}
+
 async function runSplit(dbx, sql, { continueOnError = false, skip = () => false } = {}) {
   const errors = [];
   for (const st of splitSql(sql)) {
@@ -6178,7 +6263,8 @@ try {
   const ctx12 = ctx11 && await phase12(ctx11);
   const ctx13 = ctx12 && await phase13(ctx12);
   const ctx14 = ctx13 && await phase14(ctx13);
-  if (ctx14) await syncWriteCheck(ctx14);
+  const ctx15 = ctx14 && await phase15(ctx14);
+  if (ctx15) await syncWriteCheck(ctx15);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);

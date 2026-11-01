@@ -1,8 +1,8 @@
 // Board schemas: column definitions and label colours for the Monday-style boards, plus the other label sets.
 // Column types: owner (one person) | people | also | client | deal | department | status | label | date | text. `owner`
 // and `people` are both kept in `values.people` (user ids): an owner column holds one, so a task has one person
-// answerable for it (docs/PHASE2.md §17). `also` (Also on, §20) holds the other people on it in `values.also`: they see it
-// in their task lists, but it isn't theirs to answer for. `client` holds a client id in `values.client`, `deal` a deal id
+// answerable for it (docs/PHASE2.md §17). `also` (Also on, §20) holds the other people on it in `values.also`: shown on the
+// task, never in their lists or filters (§25: those show what a person owns). `client` holds a client id in `values.client`, `deal` a deal id
 // in `values.deal` (a next step on a deal's profile, §19), `department` a board module in `values.department` ('' = the
 // board's own: departmentOf() in src/lib/boards.js). `team`: a column only team boards have (not personal pages).
 
@@ -109,11 +109,29 @@ export const BOARD_SCHEMAS = {
     ],
   },
 };
+// Pipeline › Deal tasks (§25): where a deal's next steps live, one board with a fixed id (made by 0015, and in the demo by
+// the seed and migrate()). Underneath it is an Operations team board, so it has Operations' access (staff edit, as when
+// next steps were on Team Tasks) and its tasks can move to and from Operations' boards; on screen it is Pipeline's
+// (`areaOf()`), in no menu: its tasks show on their deal's profile and in their people's task lists.
+export const DEAL_TASKS_BOARD = 'dea15000-0000-4000-8000-000000000001';
+export const isDealTasks = (board) => board?.id === DEAL_TASKS_BOARD;
+const DEAL_TASKS = {
+  title: 'Deal tasks',
+  icon: 'GitBranch',
+  columns: [
+    OWNER,
+    ALSO,
+    { key: 'status', label: 'Status', type: 'status', options: STATUS },
+    PRIORITY_COLUMN,
+    { key: 'due', label: 'Due', type: 'date' },
+    { ...DEAL, team: true },
+  ],
+};
 // A board's schema: its module's, less the `team` columns (Also on, Department) on a personal page (`owner` set: notes
-// nobody else is on, all in Operations). The same object every time, so it can be compared and memoised.
+// nobody else is on, all in Operations); Deal tasks' own. The same object every time, so it can be compared and memoised.
 const PERSONAL = Object.fromEntries(Object.entries(BOARD_SCHEMAS)
   .map(([m, s]) => [m, { ...s, columns: s.columns.filter((c) => !c.team) }]));
-export const schemaOf = (board) => (board?.owner ? PERSONAL : BOARD_SCHEMAS)[board?.module];
+export const schemaOf = (board) => (isDealTasks(board) ? DEAL_TASKS : (board?.owner ? PERSONAL : BOARD_SCHEMAS)[board?.module]);
 // What a board's rows are called ("Task", or "Client" on Work in Progress), and whether it has dates (the calendar).
 export const itemWord = (schema) => schema?.item || 'Task';
 export const hasDates = (schema) => (schema?.columns || []).some((c) => c.type === 'date');

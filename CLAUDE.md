@@ -52,16 +52,19 @@ setup steps are in `DEPLOY.md`.
   `startedAt`). An
   `@Name` in an update never changes who is on a task. The Projects module is shown as **Operations** (`MODULE_LABELS`);
   its key stays `projects`. **Also on** (`values.also`, §20) puts others on a task without making it theirs: it never
-  counts in `workload()`, never waits on them, never lists the owner; when the Owner changes from one person to another,
+  counts in `workload()`, never waits on them, never lists the owner, and never puts a task in their lists or filters
+  (§25: a person's Dashboard, Team page and person filters show what they own, `ownedBy()`); when the Owner changes from one person to another,
   the one who had it goes on it (`nextValues()`, §24; not when they give away their own task never started: `startedAt`). A task's **Department** is `departmentOf()` (a
   module key; '' = its board's). Both are `team` columns: render a board's columns from `schemaOf(board)`, never
   `BOARD_SCHEMAS[module]` (personal pages don't have them), and save values through `boardValues()`.
 - **Pipeline (0008, §21)**: stages are `DEAL_STAGES` (Opportunities → Contacted → First meetings → Demos → Proposal sent);
   Make client is on the last. A deal's and a client's **Lead** is `source` (0013: `'' | 'lyco' | 'assetstack'`, LYCO
   co-pitched or AssetStack direct; `LEADS` / `leadOf()` in `src/data/boards.js`, the marks in `src/components/LeadIcon.jsx`),
-  and Make client carries it. A deal's next steps are tasks with `values.deal` on Operations (Team Tasks) or Outreach
-  boards (§22), and a deal in Demos or Proposal sent has one row on Clients › Demos (`values.deal`; 0014's
-  `deal_demo_row` trigger ⇄ `dealDemoRowLocal()`, §23). Real deals and clients never go in this repo: the live pipeline is loaded with SQL run in the SQL editor.
+  and Make client carries it. A deal's next steps are tasks with `values.deal` on **Pipeline › Deal tasks** (§25: one board
+  with the fixed id `DEAL_TASKS_BOARD`, made by 0015 and the demo seed; an Operations board underneath, shown as Pipeline by
+  `areaOf()`, in no menu and never a module's default; older ones stay on Operations or Outreach boards), and a deal in Demos
+  or Proposal sent has one row on Clients › Demos (`values.deal`; 0014's `deal_demo_row` trigger ⇄ `dealDemoRowLocal()`,
+  §23), which is its owner's task but not one of the deal's next steps (`dealTasks()` leaves Clients boards out). Real deals and clients never go in this repo: the live pipeline is loaded with SQL run in the SQL editor.
 - **CRM profile (0012)**: a deal's or client's notes, meetings and links are `crm_entries` (`state.crmEntries`; rules in
   `src/lib/crm.js` ⇄ 0012's policies and triggers). An entry on a client follows Clients access, one on a deal that isn't
   a client yet Pipeline's; its author or an admin changes it. Make client gives a deal's entries its client in the

@@ -8,6 +8,7 @@ import { Avatar, Modal, Popover } from '@/components/ui';
 import NewBoardModal from '@/components/board/NewBoard';
 import { ROLE_LABELS, roleOf, useAccess } from '@/lib/access';
 import { MENU_BOARD_MODULES, MODULE_HOMES, MODULE_LABELS, boardHref, boardTitle, resolveBoard } from '@/lib/boards';
+import { isDealTasks } from '@/data/boards';
 import { hashParam } from '@/lib/router';
 import { cn } from '@/lib/cn';
 import Logo from '@/components/Logo';
@@ -51,7 +52,8 @@ function useBoardNav(route, sub) {
   const visible = (state.boards || []).filter(access.canViewBoard);
   const lists = Object.fromEntries(MENU_BOARD_MODULES.map((m) => [m, [
     ...(MODULE_HOMES[m] ? [MODULE_HOMES[m]] : []),
-    ...visible.filter((b) => b.module === m && !b.owner).map((b) => ({ id: b.id, href: boardHref(b), title: boardTitle(state, b) })),
+    ...visible.filter((b) => b.module === m && !b.owner && !isDealTasks(b)) // Deal tasks: in no menu (§25)
+      .map((b) => ({ id: b.id, href: boardHref(b), title: boardTitle(state, b) })),
   ]]));
   lists.team = state.users.filter((u) => u.active !== false).map((u) => ({ id: u.id, href: `#/team/${encodeURIComponent(u.id)}`, title: u.name }));
   if (route === 'team') return { lists, current: sub, isAdmin: access.isAdmin };

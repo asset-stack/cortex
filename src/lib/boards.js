@@ -3,6 +3,8 @@
 // Projects page (`owner` set). Pure helpers; access rules are in src/lib/access.js.
 // Relative imports with extensions, so scripts/test-sync.mjs can load this file in Node.
 
+import { isDealTasks } from '../data/boards.js';
+
 export const BOARD_MODULES = ['projects', 'marketing', 'outreach', 'clients', 'pipeline'];
 // What each board module is called on screen (its menu, a task's breadcrumb, Settings → Team). Projects is shown as
 // Operations since §18 (its key, database and timesheet category stay 'projects' / Projects).
@@ -101,9 +103,13 @@ export function dropPlace(groups, itemId, spot = {}) {
 export const DEPARTMENTS = { projects: '#579bfc', marketing: '#ff5ac4', outreach: '#fdab3d', clients: '#00c875', pipeline: '#784bd1' };
 /** A task's department (a board module): the one set on it, else its board's. */
 export const departmentOf = (board, item) => {
+  if (isDealTasks(board)) return 'pipeline'; // a deal's next steps are Pipeline's (§25)
   const v = item?.values?.department;
   return BOARD_MODULES.includes(v) ? v : board?.module || '';
 };
+/** The module a board shows under (its menu label in a breadcrumb or a card title): its own, but Pipeline for Deal tasks
+ *  (an Operations board underneath, §25). */
+export const areaOf = (board) => (isDealTasks(board) ? 'pipeline' : board?.module || '');
 /** What `values.department` keeps for department `key` on `board`: '' for the board's own (or an unknown one), so the
  *  stored value only says where a task differs from its board. */
 export const departmentValue = (board, key) => (BOARD_MODULES.includes(key) && key !== board?.module ? key : '');
@@ -153,5 +159,7 @@ export function resolveBoard(state, visible, module, sub, itemId) {
   const holding = itemId && mine.find((b) => b.groups.some((g) => g.items.some((i) => i.id === itemId)));
   if (holding) return holding;
   if (MODULE_HOMES[module] || PAGE_BOARD_MODULES.includes(module)) return null;
-  return mine.find((b) => !b.owner) || (module === 'projects' && mine.find((b) => b.owner === state?.me)) || mine[0];
+  // Deal tasks is never a module's default (it's in no menu, §25); only its own address opens it.
+  return mine.find((b) => !b.owner && !isDealTasks(b)) || (module === 'projects' && mine.find((b) => b.owner === state?.me))
+    || mine.find((b) => !isDealTasks(b)) || null;
 }
