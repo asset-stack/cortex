@@ -27,7 +27,7 @@ function DoToday({ board, item, personId }) {
 }
 
 /**
- * Someone's allocated tasks (rows from src/lib/work.js prioritiesFor: the ones they own and the ones they're Also on),
+ * Someone's allocated tasks (rows from src/lib/work.js prioritiesFor: the ones they own, §25),
  * as their boards show them (docs/PHASE2.md §22): a card per board, titled where it lives, holding that board's own
  * table with just their tasks, in the board's order and groups. The same columns and cells as the board, edited by
  * whoever can edit the board, and a task opens in the same drawer; what belongs to the board itself (groups, adding,
@@ -39,7 +39,7 @@ export default function PersonTasks({ rows, personId, title = 'My tasks', empty 
   const access = useAccess();
   const [open, setOpen] = useState(null); // { boardId, itemId } of the task in the drawer
   const openBoard = open ? findBoard(state, open.boardId) : null;
-  // A task that leaves these tables (Done, another owner, off Also on) takes its row's controls with it; so does closing
+  // A task that leaves these tables (Done, another owner) takes its row's controls with it; so does closing
   // the drawer on one. Focus then goes to its card's heading (else the list's), never to the page.
   const section = useRef(null);
   const inside = useRef(false); // focus is in the tables (removing the focused row fires no blur, so this stays true)

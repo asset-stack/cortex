@@ -5,7 +5,7 @@
 // can't do it; RLS is the real enforcement.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createSeed, demoMeetings, migrate } from './seed';
-import { BOARD_SCHEMAS, DEAL_STAGES, cleanDealPatch, hasDates, isLead, leadOf, withPeople } from './boards';
+import { BOARD_SCHEMAS, DEAL_STAGES, cleanDealPatch, hasDates, isDealTasks, isLead, leadOf, withPeople } from './boards';
 import { LIVE, supabase } from '@/data/backend/client';
 import { TABLES, assemble, diff, flatten, normalizeRow, stable } from '@/data/backend/schema';
 import { createSync } from '@/data/backend/sync';
@@ -385,9 +385,10 @@ function createActions(mutate, mode) {
       b.calendar = Boolean(on);
       return true;
     }),
-    // Among its module's team boards.
+    // Among its module's team boards (the ones in its menu: not Deal tasks, §25).
     moveBoard: (boardId, dir) => onTeamBoard(boardId, (d, b) => {
-      const at = d.boards.map((x, i) => (x.module === b.module && !x.owner ? i : -1)).filter((i) => i >= 0);
+      if (isDealTasks(b)) return false;
+      const at = d.boards.map((x, i) => (x.module === b.module && !x.owner && !isDealTasks(x) ? i : -1)).filter((i) => i >= 0);
       const k = at.indexOf(d.boards.indexOf(b));
       const j = k + (dir < 0 ? -1 : 1);
       if (k < 0 || j < 0 || j >= at.length) return false;

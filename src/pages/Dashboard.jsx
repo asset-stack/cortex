@@ -34,7 +34,7 @@ const byStart = (todos) => todos
 
 /**
  * The Dashboard (docs/PHASE2.md §18, §20, §22; was My Work): someone's master task list (Waiting on you, the day's to-dos,
- * My tasks: each board's own table with their tasks, the ones they're Also on included) and their notes (their own page), with Needs
+ * My tasks: each board's own table with the tasks they own, §25) and their notes (their own page), with Needs
  * attention (admins), Mentions and Tools beside it. Admins look at anyone's.
  */
 export default function Dashboard() {

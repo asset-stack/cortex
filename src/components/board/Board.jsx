@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { useAccess } from '@/lib/access';
-import { STATUS, hasDates, itemWord, schemaOf } from '@/data/boards';
+import { STATUS, hasDates, isDealTasks, itemWord, schemaOf } from '@/data/boards';
 import { DEPARTMENTS, MODULE_LABELS, boardHref, boardItems, boardTitle, personalBoard, teamBoards } from '@/lib/boards';
 import { hasDepartment, itemMatches } from '@/lib/work';
 import { Avatar, ConfirmModal, IconButton, Modal, Popover, SearchField, Segmented } from '@/components/ui';
@@ -88,7 +88,7 @@ export default function Board({ board, embedded = false, title: named = '' }) {
   }, [embedded]);
 
   // Tasks show in their saved order (dragged, or set by Sort); search and the filters only hide some (the person filter
-  // finds their tasks and the ones they're also on: src/lib/work.js itemMatches).
+  // finds the tasks they own, §25: src/lib/work.js itemMatches / ownedBy).
   const groups = useMemo(() => (board.groups || []).map((g) => ({
     ...g,
     items: g.items.filter((it) => added.includes(it.id) || itemMatches(board, it, { q, person, status, department })),
@@ -123,8 +123,9 @@ export default function Board({ board, embedded = false, title: named = '' }) {
   const showPerson = (id) => { const b = personalBoard(state, id); if (b) window.location.hash = boardHref(b); };
 
   // Team board options (admins). A menu choice moves focus to the options button first, so it gets focus back after.
-  const options = !board.owner && access.isAdmin;
-  const team = teamBoards(state, board.module);
+  // Not on Deal tasks (§25): it's in no menu, so it has no place in the order, and isn't renamed or deleted here.
+  const options = !board.owner && !isDealTasks(board) && access.isAdmin;
+  const team = teamBoards(state, board.module).filter((b) => !isDealTasks(b));
   const at = team.findIndex((b) => b.id === board.id);
   const fromMenu = (fn) => () => { optionsAnchor?.querySelector('button')?.focus({ preventScroll: true }); setPopover(null); fn(); };
   const groupCount = board.groups.length;

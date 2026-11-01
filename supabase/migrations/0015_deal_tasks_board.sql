@@ -1,6 +1,8 @@
 -- Cortex 0015 (docs/PHASE2.md §25): Pipeline › Deal tasks, the one board a deal's next steps live on.
--- Run in the Supabase SQL editor after 0014. Safe to re-run, also statement by statement (the SQL editor may run it that
--- way). No new table or column: the app opens without it (a deal's Add next step then uses Operations' boards, as before),
+-- Run in the Supabase SQL editor after 0014, once the release that knows the board is live (an older app would show it
+-- as an ordinary Operations board, in the menu and in New task). Safe to re-run, also statement by statement (the SQL
+-- editor may run it that way). No new table or column: the app opens without it (a deal's Add next step then uses
+-- Operations' boards, as before),
 -- and the board arrives through the boards sync like any other. Demo mode makes the same board in src/data/seed.js
 -- (the seed and migrate()); keep the id in step with DEAL_TASKS_BOARD in src/data/boards.js.
 --

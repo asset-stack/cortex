@@ -1117,9 +1117,9 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   never the owner (`nextValues()` drops them, and the key when it's empty). Picking the owner of a task that still has
   several people puts the others on Also on (they used to drop off it). The store adds only people who can see the
   board, and keeps those already on a task when they lose access for a while (deactivated, or set to None): they're
-  back on it when restored, and the lists hide it from them meanwhile. `prioritiesFor()` includes the tasks someone is
-  also on (`also: true`, `owner`), `workload()` and `topTasks()` (Team cards) leave them out, and Waiting on you is the
-  owner's only. The board's person filter (`itemMatches()`) and the Calendar's people include Also on.
+  back on it when restored, and the lists hide it from them meanwhile. `prioritiesFor()` included the tasks someone is
+  also on (`also: true`, `owner`; until §25: lists are what you own, `ownedBy()`), `workload()` and `topTasks()` (Team cards) leave them out, and Waiting on you is the
+  owner's only. The board's person filter (`itemMatches()`) and the Calendar's people included Also on (superseded by §25: the owner only).
 - **Department**: the board's own shows muted; picking another stores it, picking the board's own (or Clear) stores ''.
   The board's filter has a Department section. A Kanban card and a My tasks row show it when it isn't the board's. Do
   today's to-do and a timesheet's suggestions go under the task's department (`categoryOf()` in `src/lib/timesheet.js`:
@@ -1180,8 +1180,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Why** (owner, 2026-10-31): the same job showed on the board (a table you edit), Team › Name (a compact list, editable
   only on your own page), the Dashboard (the same list) and My notes; it read as duplicates and confused the team.
 - **Team › Name** (`src/pages/Team.jsx`) is "just a view of all the allocated work": every open task the person owns
-  (since §24 not the ones they're only Also on; their own Dashboard still lists those), on the team boards both of you
-  can see (`prioritiesFor(…, { teamOnly: true })` without the `also` rows), as
+  (since §24 not the ones they're only Also on; since §25 their Dashboard doesn't list those either), on the team boards both of you
+  can see (`prioritiesFor(…, { teamOnly: true })`, which since §25 returns only what they own), as
   `src/components/work/PersonTasks.jsx`: a card per board (`byBoard()`), titled where it lives and linked to the board,
   holding that board's own `TableView` with just their tasks, in the board's groups and order. Same columns and cells as
   the board (Operations: Task, Updates, Owner, Also on, Status, Priority, Due, Department), edited by whoever can edit the
@@ -1197,7 +1197,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   `sparse`: a table shows it only once a task on the board has one; the drawer always does). A deal's **Add next step**
   offers Operations boards first (Team Tasks), then Outreach's, only boards with a Deal column (`NewTaskModal`).
   `dealTasks()` / `clientTasks()` find them on either; they show in Team › Name for the Owner (since §24) and on the
-  Dashboard for the Owner and Also on. Older next steps on Sales Tasks stay there (tasks don't move across modules).
+  Dashboard for the Owner (and Also on, until §25). Older next steps on Sales Tasks stay there (tasks don't move across modules).
 - **Data (SQL in the editor, not in this repo)**: the shared profile *Asset Stack* became **AS Team** (Edit on Operations,
   Marketing, Outreach and Clients, so it can own a task on any team board); Operations' *Clients* and *Projects* boards
   were folded into Team Tasks (their groups kept, prefixed with the old board's name) and deleted.
@@ -1242,8 +1242,9 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   anyone's lists: the one who had it stays on the task, and their lists show what they own.)
 - **Team › Name lists only what the person owns** (owner, 2026-10-31: Team › David showed Josh's tasks David was Also on).
   `src/pages/Team.jsx` keeps the rows of `prioritiesFor()` they own (`owner`; not `also`, nor second on a task that still
-  has several people; Work in Progress, which has no Owner, by its Contact), on the person page and their card. The
-  Dashboard's My tasks keeps them all: your own list is everything you're on, a Team page is what each person has.
+  has several people; Work in Progress, which has no Owner, by its Contact), on the person page and their card. Until §25
+  the Dashboard's My tasks kept them all (superseded: `prioritiesFor()` itself keeps only what the person owns, for the
+  Dashboard too, and Team.jsx filters nothing).
 - **The rule** (`nextValues()`, `src/lib/work.js`): when the Owner changes from one person to another, the one who had it
   goes on **Also on**. That's whether they hand it on themselves, the new owner takes it back, or an admin moves it.
   Handing it back swaps them (the new owner comes off Also on, as before). It still waits on the new owner to accept it
@@ -1293,7 +1294,9 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   every Also on and people list, its deals and clients lost it as owner (to be reassigned in the app), its to-dos and
   routines went, and the profile was switched off. Work for the whole team: one main Owner, the others on Also on.
 - **Release**: 0015 adds no table or column, so the app opens either way (without it, Add next step uses Operations'
-  boards). Check it with `select name from public.boards where id = 'dea15000-0000-4000-8000-000000000001';` (one row,
+  boards). Run it **after** the release is live: the app before it shows Deal tasks as an ordinary Operations board (in the
+  menu and in New task). Board options (Move up/down, rename, delete) leave it out (`Board.jsx`, the store's `moveBoard`),
+  and the nav marks Pipeline on its page. Check it with `select name from public.boards where id = 'dea15000-0000-4000-8000-000000000001';` (one row,
   `Deal tasks`).
 - **Tests**: `scripts/test-sync.mjs` (§25: `ownedBy()`, the lists, filters and Calendar; Deal tasks' schema, area,
   department, breadcrumb, card order, `resolveBoard()`, the seed and `migrate()`; `dealTasks()` without the Demos row);

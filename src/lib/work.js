@@ -41,7 +41,7 @@ export const ownerOf = (item) => (Array.isArray(item?.values?.people) ? item.val
 // Also on: a clean list of user ids, each once, never the owner.
 const cleanAlso = (list, owner) => [...new Set((Array.isArray(list) ? list : []).filter((id) => id && typeof id === 'string'))]
   .filter((id) => id !== owner);
-/** The other people on a task (Also on, §20): they see it in their task lists; it's the owner's to answer for. */
+/** The other people on a task (Also on, §20): shown on the task, never in their lists (§25); it's the owner's to answer for. */
 export const alsoOf = (item) => cleanAlso(item?.values?.also, ownerOf(item));
 /** Who can be put on a task's Also on: active teammates who can see its board, not its owner. */
 export const taggable = (state, board, item) => (state?.users || [])
@@ -74,8 +74,8 @@ export function isWaiting(item) {
  * the task to someone else records who did it and when (`assignedBy`, `assignedAt`): it then waits on them to accept it
  * (`acceptedAt`, set by acceptedValues(), or here when they change its status: starting it accepts it). Taking it
  * yourself or leaving it with no one clears all three. Only this and acceptedValues() set them, so a patch can't.
- * Passing it from one owner to another (handed on, or taken back) puts whoever had it on Also on (§24), so it stays in
- * their lists; except when they give away their own task that has never been started, which only says who it's for (a
+ * Passing it from one owner to another (handed on, or taken back) puts whoever had it on Also on (§24), so they stay on
+ * the task (their lists show what they own, §25); except when they give away their own task that has never been started, which only says who it's for (a
  * new task's starting owner is its maker). Its first status other than Not started records `startedAt`, kept for good
  * (unticking Done sets it back to Not started). Only this sets it.
  */
@@ -229,7 +229,7 @@ export function byBoard(rows, boards = []) {
     });
 }
 
-/** Whether a board's task shows under its filters: the search `q` (its name), `person` (its owner or Also on),
+/** Whether a board's task shows under its filters: the search `q` (its name), `person` (theirs: `ownedBy()`, §25),
  *  `status` and `department` (its own, or its board's). */
 export function itemMatches(board, item, { q = '', person = '', status = '', department = '' } = {}) {
   const v = item?.values || {};

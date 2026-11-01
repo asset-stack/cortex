@@ -83,7 +83,9 @@ Contacted → First meetings → Demos, and Work in Progress under the deals; `d
 `docs/PHASE2.md` §21), then `0014_deal_demo_rows.sql` (a deal reaching Demos or Proposal sent gets its row on Clients ›
 Demos by itself; no table or column, so it can run before or after its release; check it with
 `select tgname from pg_trigger where tgname = 'deal_demo_row';`; `docs/PHASE2.md` §23), then `0015_deal_tasks_board.sql`
-(Pipeline › Deal tasks, where a deal's next steps live; no table or column, so it can run before or after its release;
+(Pipeline › Deal tasks, where a deal's next steps live; no table or column, so the new app opens without it; run it
+**after** its release is live, because the app before it would show Deal tasks as an ordinary Operations board, in the
+menu and in every New task;
 check it with `select name from public.boards where id = 'dea15000-0000-4000-8000-000000000001';`, one row `Deal tasks`;
 `docs/PHASE2.md` §25).
 

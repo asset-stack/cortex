@@ -8,7 +8,10 @@ import { Avatar, Modal, Popover } from '@/components/ui';
 import NewBoardModal from '@/components/board/NewBoard';
 import { ROLE_LABELS, roleOf, useAccess } from '@/lib/access';
 import { MENU_BOARD_MODULES, MODULE_HOMES, MODULE_LABELS, boardHref, boardTitle, resolveBoard } from '@/lib/boards';
-import { isDealTasks } from '@/data/boards';
+import { DEAL_TASKS_BOARD, isDealTasks } from '@/data/boards';
+
+// Deal tasks lives at #/projects/<id> (an Operations board underneath) but shows as Pipeline's (§25): the nav marks Pipeline.
+const navRoute = (route, sub) => (route === 'projects' && sub === DEAL_TASKS_BOARD ? 'pipeline' : route);
 import { hashParam } from '@/lib/router';
 import { cn } from '@/lib/cn';
 import Logo from '@/components/Logo';
@@ -219,7 +222,8 @@ function BoardSection({ item, route, boards, current, open, onToggle, onNew }) {
   );
 }
 
-export default function Sidebar({ route, sub }) {
+export default function Sidebar({ route: at, sub }) {
+  const route = navRoute(at, sub);
   const [collapsed, setCollapsed] = useState(false);
   const nav = useNav();
   const { lists, current, isAdmin } = useBoardNav(route, sub);
@@ -271,7 +275,8 @@ export default function Sidebar({ route, sub }) {
   );
 }
 
-export function MobileNav({ route, sub }) {
+export function MobileNav({ route: at, sub }) {
+  const route = navRoute(at, sub);
   const nav = useNav();
   const { lists, current, isAdmin } = useBoardNav(route, sub);
   const boards = SECTIONS.includes(route) ? lists[route] : null;
