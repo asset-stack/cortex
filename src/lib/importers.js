@@ -1,8 +1,7 @@
 // CSV import mapping (docs/BACKEND.md §4): which columns feed which fields, and one CSV row → one record in
 // state shape for actions.importRecords(), which adds ids and skips names that already exist. Pure functions.
 import {
-  ALL_DEAL_STAGES, BOARD_SCHEMAS, CLIENT_STATUSES, CONTACT_STATUSES, CURRENCIES, DEAL_STAGES, LOST, OLD_DEAL_STAGES, PRIORITY, STATUS,
-  dealStage as boardStage,
+  ALL_DEAL_STAGES, BOARD_SCHEMAS, CLIENT_STATUSES, CONTACT_STATUSES, CURRENCIES, DEAL_STAGES, LEADS, LOST, PRIORITY, STATUS,
 } from '@/data/boards';
 import { LIFECYCLES } from '@/lib/accounts';
 import { localYmd } from '@/lib/format';
@@ -37,6 +36,7 @@ export const FIELDS = {
     field('demoUrl', 'Demo link', 'text', ['demo url', 'demo link']),
     field('abn', 'ABN', 'text', ['abn', 'australian business number']),
     field('billingAddress', 'Billing address', 'text', ['billing address', 'address', 'postal address']),
+    field('source', 'Lead', 'text', ['lead', 'lead source', 'source', 'partner', 'channel']),
     field('notes', 'Notes', 'note', NOTES),
     field('created', 'Created', 'ts', CREATED),
   ],
@@ -54,15 +54,16 @@ export const FIELDS = {
     field('sector', 'Sector', 'text', ['sector', 'industry', 'segment', 'vertical']),
     field('value', 'Value', 'money', ['value', 'amount', 'deal value', 'annual value', 'contract value', 'acv', 'arr']),
     field('priority', 'Priority', 'text', ['priority']),
-    field('stage', 'Stage', 'text', ['stage', 'status', 'deal stage', 'pipeline stage']),
+    field('stage', 'Stage', 'text', ['stage', 'status', 'deal stage', 'pipeline stage', 'lead status']), // 'Lead Status' (CRM exports) is the stage, not the Lead
     field('contact', 'Owner', 'user', ['owner', 'contact', 'deal owner', 'assigned to', 'assignee', 'account manager']),
     field('next', 'Next step', 'text', ['next step', 'next steps', 'next action', 'next']),
-    // 0014: the deal's currency, expected close and account (else the account named like the deal).
+    // 0018: the deal's currency, expected close and account (else the account named like the deal).
     field('currency', 'Currency', 'text', ['currency', 'deal currency', 'currency code']),
     field('closeOn', 'Close date', 'date', ['close date', 'expected close', 'expected close date', 'closing date', 'close']),
     field('account', 'Account', 'text', ['account', 'account name', 'company', 'company name', 'organisation', 'organization'], { secondary: true }),
+    field('source', 'Lead', 'text', ['lead', 'lead source', 'source', 'partner', 'channel']),
   ],
-  // The CRM (0014): organisations, then the people at them (by their account's name).
+  // The CRM (0018): organisations, then the people at them (by their account's name).
   accounts: [
     field('name', 'Name', 'text', ['name', 'account', 'account name', 'company', 'company name', 'organisation', 'organization', 'organisation name'], NAME),
     field('kind', 'Type', 'text', ['type', 'account type', 'company type', 'kind', 'relationship']),
@@ -88,7 +89,7 @@ export const FIELDS = {
     field('timezone', 'Time zone', 'text', ['time zone', 'timezone']),
     field('contact', 'Owner', 'user', ['owner', 'contact owner', 'assigned to']),
   ],
-  // Leads (0016): a prospect list from Apollo, LinkedIn or HubSpot (first and last name columns become Full name).
+  // Leads (0020): a prospect list from Apollo, LinkedIn or HubSpot (first and last name columns become Full name).
   leads: [
     field('name', 'Name', 'text', ['full name', 'name', 'contact name', 'contact', 'person'], NAME),
     field('title', 'Title', 'text', ['title', 'job title', 'position']),
@@ -319,24 +320,25 @@ function priority(v, allowP3) {
   return 'P2';
 }
 
-const [INTERESTED, BOOKED, INTRO, DEMO, PROPOSAL, CONTRACT] = DEAL_STAGES;
-// Pipeline's stages (0014): the names as they are (or as they were before 0014); lost or dead is Lost; negated ("Won't
-// proceed", "Not signed", "Uncontacted") is Interested; won, signed, closed, a contract, a client or onboarding is
-// Contract sent, the last open stage (Make client is the deal's Won); then proposal or quote wording, demo, pilot or trial,
-// an intro, and a meeting or call; anything else is Interested.
+// By name, so a stage added or moved can't shift them. Make client is on the last column; there's no Won.
+const [OPPORTUNITIES, CONTACTED, MEETINGS, DEMOS, PROPOSALS] = ['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Proposal sent'];
+const LAST = DEAL_STAGES[DEAL_STAGES.length - 1];
+// Lost or dead is Lost (0018). Negated ("Won't proceed", "Not signed", "Uncontacted") is back to Opportunities. Won, signed or client wording is the last
+// stage, where Make client is; a client or onboarding mention only once proposal, demo and meeting wording is ruled out ("Client
+// demo", "Onboarding call"). Proposal, quote, tender or contract wording is Proposal sent ("Quote sent" before Contacted's "sent");
+// demo, pilot or trial is Demos. Contacted, emailed or reached out is Contacted.
 function dealStage(v) {
   const s = norm(v);
-  const named = exactly(s, ALL_DEAL_STAGES) || exactly(s, Object.keys(OLD_DEAL_STAGES).filter((k) => k !== 'Won'));
-  if (named) return boardStage({ stage: named });
-  return (/\blost\b|\bdead\b|lost to|closed.?lost/.test(s) && LOST)
-    || (/\bnot\b|\bnever\b|\bno\b|won['’]t|\bun ?-?(contacted|sent|emailed|reached|signed)/.test(s) && INTERESTED)
-    || (/\bwon\b|closed|\bsigned\b|contract/.test(s) && CONTRACT)
-    || (/proposal|quote|pricing|negotiat/.test(s) && PROPOSAL)
-    || (/demo|pilot|trial/.test(s) && DEMO)
-    || (/intro/.test(s) && INTRO)
-    || (/meeting|call|discovery/.test(s) && BOOKED)
-    || (/client|onboard/.test(s) && CONTRACT)
-    || INTERESTED;
+  return exactly(s, ALL_DEAL_STAGES)
+    || (/\blost\b|\bdead\b|closed.?lost/.test(s) && LOST)
+    || (/\bnot\b|\bnever\b|\bno\b|won['’]t|\bun ?-?(contacted|sent|emailed|reached)/.test(s) && OPPORTUNITIES)
+    || (/\bwon\b|closed|\bsigned\b/.test(s) && LAST)
+    || (/proposal|quote|tender|contract|negotiat/.test(s) && PROPOSALS)
+    || (/demo|pilot|trial/.test(s) && DEMOS)
+    || (/meeting|call|discovery/.test(s) && MEETINGS)
+    || (/contacted|emailed|reached|outreach|\bsent\b/.test(s) && CONTACTED)
+    || (/client|onboard/.test(s) && LAST)
+    || OPPORTUNITIES;
 }
 
 // An account's type from an export's wording ("Partner", "Reseller", "Customer", "Vendor"…); anything else a prospect.
@@ -372,6 +374,17 @@ function zoneOf(v) {
   const s = String(v ?? '').trim();
   if (!/^[A-Za-z]+\/[A-Za-z_+\-/]+$/.test(s)) return '';
   try { new Intl.DateTimeFormat('en-AU', { timeZone: s }); return s; } catch { return ''; }
+}
+
+// A Lead as written ("LYCO", "Co-pitched", "Partner" → lyco; "AssetStack", "Direct" → assetstack), else none.
+function leadSource(v) {
+  const s = norm(v);
+  const exact = Object.keys(LEADS).find((k) => k === s.replace(/\s/g, '') || norm(LEADS[k].label) === s);
+  if (exact) return exact;
+  if (NOT_PRIORITY.test(s)) return ''; // "Not LYCO", "Non-partner": not a Lead we can name
+  if (/lyco|co ?-?pitch|partner/.test(s)) return 'lyco';
+  if (/asset ?stack|\bdirect\b/.test(s)) return 'assetstack'; // not "Indirect"
+  return '';
 }
 
 // Outreach stages are free text; the usual ones are tidied, others kept as written.
@@ -469,7 +482,7 @@ export function normalise(kind, row, mapping, { users = [], me = '', board, now 
         next: get('next'), sector: get('sector'), contact, team: [...new Set([contact, ...matchUsers(get('team'), users)].filter(Boolean))],
         lastContact: toYmd(get('lastContact')), demo: get('demo'), demoUrl: get('demoUrl'), platformUrl: get('platformUrl'),
         contacts: person.name || person.email || person.phone ? [person] : [],
-        avatar: avatarFor(name), abn: get('abn'), billingAddress: get('billingAddress'),
+        avatar: avatarFor(name), abn: get('abn'), billingAddress: get('billingAddress'), source: leadSource(get('source')),
         notes: note(), tasks: [], invoices: [], access: [],
       };
     }
@@ -482,7 +495,7 @@ export function normalise(kind, row, mapping, { users = [], me = '', board, now 
       const currency = get('currency').toUpperCase();
       return {
         name, sector: get('sector'), value: parseMoney(get('value')), priority: priority(get('priority'), true),
-        stage: dealStage(get('stage')), contact: owner('contact') || me, next: get('next'),
+        stage: dealStage(get('stage')), contact: owner('contact') || me, next: get('next'), source: leadSource(get('source')),
         currency: CURRENCIES.includes(currency) ? currency : 'AUD', closeOn: toYmd(get('closeOn')), account: get('account').replace(/\s+/g, ' '),
       };
     }

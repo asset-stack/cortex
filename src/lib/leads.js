@@ -1,4 +1,4 @@
-// Leads (docs/PHASE2.md §23, 0016): lists of prospects pulled from a CSV export (Apollo, LinkedIn, HubSpot …), the leads on
+// Leads (docs/PHASE2.md §29, 0020): lists of prospects pulled from a CSV export (Apollo, LinkedIn, HubSpot …), the leads on
 // them, and the suppress list. All on the Outreach access level. A lead is checked against the suppress list and the CRM
 // before it goes to the outreach agent; Convert to CRM makes it an account and a contact (Pipeline edit too). Pure, with
 // relative imports, so scripts/test-sync.mjs runs it in Node.
@@ -15,7 +15,7 @@ export const SUPPRESSION_KINDS = { email: 'Email', domain: 'Domain' };
 export const FREE_MAIL = new Set(['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'yahoo.com', 'icloud.com',
   'me.com', 'bigpond.com', 'bigpond.net.au', 'optusnet.com.au', 'proton.me', 'protonmail.com', 'aol.com']);
 
-// Longest text each field keeps (0016's checks).
+// Longest text each field keeps (0020's checks).
 const MAX = {
   name: 200, title: 200, email: 254, phone: 50, linkedin: 2000, company: 200, domain: 253, sector: 100, country: 100, region: 100,
   timezone: 64, size: 100, note: 2000, notes: 2000, reason: 200,
@@ -29,7 +29,7 @@ export const leadDomain = (lead) => {
   return d && !FREE_MAIL.has(d) ? d : '';
 };
 
-/** A lead's fields as saved: text trimmed to 0016's limits, an email that looks like one (lower case), a LinkedIn link as
+/** A lead's fields as saved: text trimmed to 0020's limits, an email that looks like one (lower case), a LinkedIn link as
  *  http(s), a domain from what was given (else its email's), a known status and an owner among `userIds`. Only the
  *  fields given; invalid ones are left out. */
 export function cleanLead(patch = {}, { userIds = null } = {}) {

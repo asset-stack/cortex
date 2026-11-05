@@ -1,5 +1,5 @@
-// Pipeline → Reports (docs/PHASE2.md §22): the numbers a sales review asks for, from the deals and their stage history
-// (0015). Values stay in each deal's currency (never converted): every total is a list per currency (totalsList()).
+// Pipeline → Reports (docs/PHASE2.md §28): the numbers a sales review asks for, from the deals and their stage history
+// (0019). Values stay in each deal's currency (never converted): every total is a list per currency (totalsList()).
 // Pure, with relative imports, so scripts/test-sync.mjs runs it in Node.
 import { DEAL_STAGES, LOST, dealProbability, dealStage } from '../data/boards.js';
 import { accountOf, isOpenDeal } from './accounts.js';

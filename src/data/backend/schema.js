@@ -63,27 +63,28 @@ const COLUMNS = {
   clients: {
     id: 'id', name: t, group_name: t, status: t, priority: t, next_step: t, sector: t, contact_id: 'fk', team: 'uuids',
     last_contact: 'date', demo: t, demo_url: t, platform_url: t, avatar: t, abn: t, billing_address: t, position: 'int',
+    source: t, // the Lead (0013): '' | 'lyco' | 'assetstack'
   },
   deals: {
     id: 'id', name: t, sector: t, priority: t, stage: t, next_step: t, value: 'num', owner_id: 'fk', client_id: 'fk', contact_id: 'fk',
-    position: 'int',
-    // 0014 (DEAL_0014: left out of writes until it has run). stage_at is the database's (set when the stage changes).
+    position: 'int', source: t, // the Lead (0013), as on clients
+    // 0018 (DEAL_0018: left out of writes until it has run). stage_at is the database's (set when the stage changes).
     account_id: 'fk', contact_ids: 'uuids', currency: t, close_on: 'date', probability: 'nint', waiting_on: t, lost_reason: t,
     stage_at: 'ts',
   },
-  // The CRM (0014): organisations and the people at them.
+  // The CRM (0018): organisations and the people at them.
   accounts: {
     id: 'id', name: t, kind: t, lifecycle: t, lifecycle_note: t, revisit_on: 'date', sector: t, country: t, region: t, timezone: t,
     domain: t, website: t, size: t, guardrails: t, prep_url: t, referred_by: 'fk', owner_id: 'fk', client_id: 'fk', position: 'int',
     created_at: 'ts',
   },
-  // 0015: written only by the database (log_deal_stage); the app reads it.
+  // 0019: written only by the database (log_deal_stage); the app reads it.
   deal_stage_history: { id: 'id', deal_id: 'id', from_stage: t, to_stage: t, changed_at: 'ts', changed_by: 'fk' },
   crm_contacts: {
     id: 'id', account_id: 'id', name: t, title: t, email: t, phone: t, linkedin: t, timezone: t, role: t, status: t, owner_id: 'fk',
     position: 'int', created_at: 'ts',
   },
-  // Leads (0016): lists of prospects, the leads on them and the suppress list (Outreach's access level).
+  // Leads (0020): lists of prospects, the leads on them and the suppress list (Outreach's access level).
   lead_lists: { id: 'id', name: t, source: t, notes: t, created_by: 'fk', created_at: 'ts', position: 'int' },
   leads: {
     id: 'id', list_id: 'id', name: t, title: t, email: t, phone: t, linkedin: t, company: t, domain: t, sector: t, country: t,
@@ -147,7 +148,7 @@ const COLUMNS = {
   // The CRM profile (0012): a deal's or client's notes, meetings and links (Make client carries a deal's to its client).
   crm_entries: {
     id: 'id', deal_id: 'fk', client_id: 'fk', kind: t, title: t, body: t, url: t, label: t, happened_on: 'date', attendees: t,
-    user_id: 'fk', created_at: 'ts', account_id: 'fk', contact_id: 'fk', // the last two: 0014
+    user_id: 'fk', created_at: 'ts', account_id: 'fk', contact_id: 'fk', // the last two: 0018
   },
   // Outreach (0007). outreach_emails is not here: the app reads it on demand (store.outreach) and never writes it.
   outreach_mailboxes: { id: 'id', name: t, addresses: 'texts', owner_id: 'fk', active: 'bool', position: 'int' },
@@ -157,7 +158,7 @@ const COLUMNS = {
 };
 
 const byId = (r) => String(r.id);
-const DEAL_0014 = ['account_id', 'contact_ids', 'currency', 'close_on', 'probability', 'waiting_on', 'lost_reason', 'stage_at'];
+const DEAL_0018 = ['account_id', 'contact_ids', 'currency', 'close_on', 'probability', 'waiting_on', 'lost_reason', 'stage_at'];
 
 // Parents before children (FK-safe insert order; deletes run in reverse).
 // update: the rows always exist (sign-up trigger, seeded org row), so the sync engine updates them in place. A
@@ -181,30 +182,30 @@ export const TABLES = [
   { name: 'subtasks', key: byId, parent: ['items', 'item_id'] },
   { name: 'clients', key: byId },
   { name: 'contacts', key: byId, setNull: { owner_id: 'profiles' } }, // before deals (deals.contact_id)
-  // The CRM (0014): accounts before deals (deals.account_id); an account's contacts go with it (on delete cascade).
+  // The CRM (0018): accounts before deals (deals.account_id); an account's contacts go with it (on delete cascade).
   {
     name: 'accounts', key: byId, setNull: { owner_id: 'profiles', client_id: 'clients', referred_by: 'accounts' },
-    since: '0014_crm_accounts.sql',
+    since: '0018_crm_accounts.sql',
   },
   {
     name: 'crm_contacts', key: byId, parent: ['accounts', 'account_id'], setNull: { owner_id: 'profiles' },
-    since: '0014_crm_accounts.sql',
+    since: '0018_crm_accounts.sql',
   },
   {
     name: 'deals', key: byId, setNull: { client_id: 'clients', contact_id: 'contacts', account_id: 'accounts' },
-    later: [{ table: 'accounts', columns: DEAL_0014 }],
+    later: [{ table: 'accounts', columns: DEAL_0018 }],
   },
   {
     name: 'deal_stage_history', key: byId, parent: ['deals', 'deal_id'], setNull: { changed_by: 'profiles' },
-    since: '0015_deal_history.sql', readOnly: true,
+    since: '0019_deal_history.sql', readOnly: true,
   },
-  // Leads (0016), after accounts and crm_contacts (a converted lead's account_id / person_id); a list's leads go with it.
-  { name: 'lead_lists', key: byId, setNull: { created_by: 'profiles' }, since: '0016_leads.sql' },
+  // Leads (0020), after accounts and crm_contacts (a converted lead's account_id / person_id); a list's leads go with it.
+  { name: 'lead_lists', key: byId, setNull: { created_by: 'profiles' }, since: '0020_leads.sql' },
   {
     name: 'leads', key: byId, parent: ['lead_lists', 'list_id'],
-    setNull: { account_id: 'accounts', person_id: 'crm_contacts', owner_id: 'profiles' }, since: '0016_leads.sql',
+    setNull: { account_id: 'accounts', person_id: 'crm_contacts', owner_id: 'profiles' }, since: '0020_leads.sql',
   },
-  { name: 'suppressions', key: byId, setNull: { created_by: 'profiles' }, since: '0016_leads.sql' },
+  { name: 'suppressions', key: byId, setNull: { created_by: 'profiles' }, since: '0020_leads.sql' },
   { name: 'client_notes', key: byId, parent: ['clients', 'client_id'] },
   // After deals and clients. A client deleted takes its entries (on delete cascade; the store drops them too); a deal
   // deleted takes the ones that never reached a client and leaves the others off it (0012's trigger, then set null).
@@ -327,7 +328,7 @@ export function flatten(state) {
     put('clients', {
       id: c.id, name: c.name, group_name: c.group, status: c.status, priority: c.priority, next_step: c.next, sector: c.sector,
       contact_id: c.contact, team: c.team, last_contact: c.lastContact, demo: c.demo, demo_url: c.demoUrl, platform_url: c.platformUrl,
-      avatar: c.avatar, abn: c.abn, billing_address: c.billingAddress, position: fromEnd(state.clients, ci),
+      avatar: c.avatar, abn: c.abn, billing_address: c.billingAddress, position: fromEnd(state.clients, ci), source: c.source,
     });
     // A client's own people (client.contacts) — not the outreach contacts (state.contacts).
     (c.contacts || []).forEach((x, i) => put('client_contacts', {
@@ -386,7 +387,7 @@ export function flatten(state) {
   }));
   (state.deals || []).forEach((d, i) => put('deals', {
     id: d.id, name: d.name, sector: d.sector, priority: d.priority, stage: d.stage, next_step: d.next, value: d.value,
-    owner_id: d.contact, client_id: d.clientId, contact_id: d.contactId, position: i, account_id: d.accountId,
+    owner_id: d.contact, client_id: d.clientId, contact_id: d.contactId, position: i, source: d.source, account_id: d.accountId,
     contact_ids: d.contactIds, currency: d.currency || 'AUD', close_on: d.closeOn, probability: d.probability, waiting_on: d.waitingOn,
     lost_reason: d.lostReason, stage_at: d.stageAt,
   }));
@@ -528,7 +529,7 @@ export function assemble(rowsByTable, { me } = {}) {
   const clients = all('clients').sort(byPosDesc).map((c) => ({
     id: c.id, name: c.name, group: c.group_name, status: c.status, priority: c.priority, next: c.next_step, sector: c.sector,
     contact: c.contact_id ?? '', team: [...c.team], lastContact: c.last_contact ?? '', demo: c.demo, demoUrl: c.demo_url,
-    platformUrl: c.platform_url, avatar: c.avatar, abn: c.abn, billingAddress: c.billing_address,
+    platformUrl: c.platform_url, avatar: c.avatar, abn: c.abn, billingAddress: c.billing_address, source: c.source,
     contacts: kids(people, c.id, byPos).map((x) => ({
       id: x.id, name: x.name, role: x.role, email: x.email, phone: x.phone, billing: x.billing,
     })),
@@ -579,7 +580,8 @@ export function assemble(rowsByTable, { me } = {}) {
     boards,
     deals: all('deals').sort(byPos).map((d) => ({
       id: d.id, name: d.name, sector: d.sector, value: d.value, priority: d.priority, stage: d.stage,
-      contact: d.owner_id ?? '', next: d.next_step, contactId: d.contact_id ?? '', ...(d.client_id ? { clientId: d.client_id } : {}),
+      contact: d.owner_id ?? '', next: d.next_step, contactId: d.contact_id ?? '', source: d.source,
+      ...(d.client_id ? { clientId: d.client_id } : {}),
       accountId: d.account_id ?? '', contactIds: [...d.contact_ids], currency: d.currency || 'AUD', closeOn: d.close_on ?? '',
       probability: d.probability, waitingOn: d.waiting_on, lostReason: d.lost_reason, stageAt: d.stage_at ?? '',
     })),
@@ -589,7 +591,7 @@ export function assemble(rowsByTable, { me } = {}) {
       website: a.website, size: a.size, guardrails: a.guardrails, prepUrl: a.prep_url, referredBy: a.referred_by ?? '',
       owner: a.owner_id ?? '', clientId: a.client_id ?? '', createdAt: a.created_at ?? '',
     })),
-    // Oldest first (0015).
+    // Oldest first (0019).
     dealHistory: all('deal_stage_history').sort((a, b) => cmp(a.changed_at || '', b.changed_at || '') || cmp(a.id, b.id)).map((h) => ({
       id: h.id, dealId: h.deal_id, from: h.from_stage, to: h.to_stage, at: h.changed_at ?? '', by: h.changed_by ?? '',
     })),
@@ -600,7 +602,7 @@ export function assemble(rowsByTable, { me } = {}) {
     leadLists: all('lead_lists').sort(byPos).map((l) => ({
       id: l.id, name: l.name, source: l.source || 'csv', notes: l.notes, createdBy: l.created_by ?? '', createdAt: l.created_at ?? '',
     })),
-    // In the order they were added (0016).
+    // In the order they were added (0020).
     leads: all('leads').sort((a, b) => cmp(a.created_at || '', b.created_at || '') || cmp(a.id, b.id)).map((l) => ({
       id: l.id, listId: l.list_id, name: l.name, title: l.title, email: l.email, phone: l.phone, linkedin: l.linkedin, company: l.company,
       domain: l.domain, sector: l.sector, country: l.country, region: l.region, timezone: l.timezone, size: l.size,

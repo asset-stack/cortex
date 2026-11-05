@@ -1,7 +1,7 @@
-// Pipeline (docs/PHASE2.md §14, §22): the CRM. Opportunities (the deals by stage, or as a table), Accounts (the
+// Pipeline (docs/PHASE2.md §14, §28): the CRM. Opportunities (the deals by stage, or as a table), Accounts (the
 // organisations), Contacts (the people at them), each opening its profile, and Reports; Work in Progress (and any other Pipeline
 // board) under the deals. Pipeline view reads it all; Pipeline edit changes it; Make client also needs Clients edit.
-// Accounts and Contacts arrive with 0014: until it has run they're hidden and the deals work as before.
+// Accounts and Contacts arrive with 0018: until it has run they're hidden and the deals work as before.
 import { useCallback, useEffect, useState } from 'react';
 import { BarChart3, Building2, Target, Users } from 'lucide-react';
 import { useStore } from '@/data/store';

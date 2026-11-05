@@ -1,4 +1,4 @@
-// Leads → one lead (docs/PHASE2.md §23): its details and status, why it mustn't be contacted, the CRM record it already is
+// Leads → one lead (docs/PHASE2.md §29): its details and status, why it mustn't be contacted, the CRM record it already is
 // or Convert to CRM, its contact history (the outreach agent's sheet rows and Gmail threads for its email) and, once in
 // the CRM, that person's timeline.
 import { useEffect, useState } from 'react';

@@ -1,5 +1,5 @@
 // The CRM profile's sections (docs/PHASE2.md §19), shared by a deal's profile (Pipeline) and a client's (Clients):
-// Next steps (board tasks linked to it), Timeline (notes and meetings) and Links. `target`: { dealId } or { clientId }.
+// Tasks (board tasks linked to it), Timeline (notes and meetings) and Links. `target`: { dealId } or { clientId }.
 import { useEffect, useId, useRef, useState } from 'react';
 import { CalendarDays, ExternalLink, FileText, Link2, MoveRight, Pencil, Plus, StickyNote, Trash2 } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
@@ -47,25 +47,26 @@ const linkProblem = (v) => {
 // Escape cancels the form, not the whole profile.
 const escapeCancels = (cancel) => (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); cancel(); } };
 
-/** A deal's or client's next steps: its open linked tasks (each opens it) and Add next step (a task for someone, linked
- *  to it, on an Outreach board for a deal and a Clients board for a client). */
+/** A deal's or client's Tasks: its open linked tasks (each opens it) and Add task (a task for someone, linked to it, with
+ *  every task field: on Pipeline › Demos for a deal (§26; before 0015, an Operations or Outreach board); a Clients board
+ *  for a client). It shows in its owner's Team view and Dashboard. */
 export function NextSteps({ target }) {
   const { state } = useStore();
   const access = useAccess();
   const [adding, setAdding] = useState(false);
   const rows = target.dealId ? dealTasks(state, target.dealId) : clientTasks(state, target.clientId);
-  const modules = target.dealId ? ['outreach'] : ['clients'];
+  const modules = target.dealId ? ['projects', 'outreach'] : ['clients'];
   const boards = state.boards.filter((b) => modules.includes(b.module) && !b.owner);
   const canAdd = boards.some(access.canEditBoard);
-  // Next steps live on those boards (and a client's also on its deal's Outreach ones): without any to see, say nothing.
+  // Next steps live on those boards (and a client's also on its deal's): without any to see, say nothing.
   if (!rows.length && !boards.some(access.canViewBoard)) return null;
   return (
     <section>
-      <Heading actions={canAdd && <button type="button" onClick={() => setAdding(true)} className={SMALL_BTN}><Plus className="h-3.5 w-3.5" aria-hidden="true" />Add next step</button>}>
-        Next steps
+      <Heading actions={canAdd && <button type="button" onClick={() => setAdding(true)} className={SMALL_BTN}><Plus className="h-3.5 w-3.5" aria-hidden="true" />Add task</button>}>
+        Tasks
       </Heading>
       {adding && (
-        <NewTaskModal title="New next step" onClose={() => setAdding(false)} modules={modules}
+        <NewTaskModal title="New task" onClose={() => setAdding(false)} modules={modules}
           {...(target.dealId ? { dealId: target.dealId } : { clientId: target.clientId })} />
       )}
       {rows.length === 0 ? <p className="mt-1 dimmer">None open.</p> : (

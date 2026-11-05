@@ -1,4 +1,4 @@
-// Leads (docs/PHASE2.md §23, 0016): prospect lists imported from a CSV export (Apollo, LinkedIn, HubSpot …), checked
+// Leads (docs/PHASE2.md §29, 0020): prospect lists imported from a CSV export (Apollo, LinkedIn, HubSpot …), checked
 // against the suppress list and the CRM, with each lead's contact history; Export for agent hands the ready ones to the
 // outreach agent, Convert to CRM makes one an account and contact. The suppress list, and a scoreboard of how each sector
 // and country answers. Outreach view reads it all; Outreach edit changes it; Convert to CRM also needs Pipeline edit.
@@ -131,7 +131,7 @@ export default function Leads() {
   useEffect(() => {
     if (!open && (hashParam('lead') || hashParam('list'))) window.history.replaceState(window.history.state, '', '#/leads');
   }, [open]);
-  if (missing.includes('leads')) return <div><PageHeader title="Leads" /><p className="mt-6 dimmer">Leads needs database update 0016.</p></div>;
+  if (missing.includes('leads')) return <div><PageHeader title="Leads" /><p className="mt-6 dimmer">Leads needs database update 0020.</p></div>;
   return (
     <div>
       <PageHeader title="Leads" action={editable ? 'Import CSV' : undefined} onAction={() => setImporting(true)} />

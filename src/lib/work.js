@@ -2,9 +2,9 @@
 // it, the Dashboard's task lists, the Team pages, the admins' Needs attention list, @mentions in task updates, where a
 // task lives, a client's linked tasks and Do today. Pure, with relative imports, so scripts/test-sync.mjs runs it in Node.
 import { canEditBoard, canView, canViewBoard } from './access.js';
-import { BOARD_MODULES, MODULE_LABELS, boardTitle, departmentOf, departmentValue } from './boards.js';
+import { BOARD_MODULES, MODULE_LABELS, areaOf, boardTitle, departmentOf, departmentValue } from './boards.js';
 import { mentionedUserIds } from './mentionText.js';
-import { PRIORITY, schemaOf, withPeople } from '../data/boards.js';
+import { PRIORITY, isDealTasks, schemaOf, withPeople } from '../data/boards.js';
 
 // A task handed to someone that they haven't accepted this long after goes on Needs attention.
 export const ACCEPT_WITHIN = 864e5;
@@ -26,7 +26,7 @@ export const hasOwner = (board) => columns(board).some((c) => c.type === 'owner'
 export const hasPriority = (board) => columns(board).some((c) => c.key === 'priority');
 /** Whether a board's tasks can be linked to a client (a `client` column: the Clients boards). */
 export const hasClient = (board) => columns(board).some((c) => c.type === 'client');
-/** Whether a board's tasks can be linked to a deal (a `deal` column: the Outreach boards). */
+/** Whether a board's tasks can be linked to a deal (a `deal` column: Operations', Outreach's and Clients' team boards). */
 export const hasDeal = (board) => columns(board).some((c) => c.type === 'deal');
 /** Whether a board's tasks can have other people on them besides the owner (Also on: team boards with an owner). */
 export const hasAlso = (board) => columns(board).some((c) => c.type === 'also');
@@ -41,7 +41,7 @@ export const ownerOf = (item) => (Array.isArray(item?.values?.people) ? item.val
 // Also on: a clean list of user ids, each once, never the owner.
 const cleanAlso = (list, owner) => [...new Set((Array.isArray(list) ? list : []).filter((id) => id && typeof id === 'string'))]
   .filter((id) => id !== owner);
-/** Whether saving a task may email its owner (0013's triggers decide; this only says when to ask the google function
+/** Whether saving a task may email its owner (0017's triggers decide; this only says when to ask the google function
  *  to send): the task has an owner who isn't `me`, and either it's an update (`update`) or the owner is new (`before`,
  *  the owner before the save; undefined for a new task). Never for a done task being handed over, or Work in Progress. */
 export function mailsOwner(item, { me = '', before, update = false, module = '' } = {}) {
@@ -50,7 +50,7 @@ export function mailsOwner(item, { me = '', before, update = false, module = '' 
   if (update) return true;
   return owner !== before && !item?.done;
 }
-/** The other people on a task (Also on, §20): they see it in their task lists; it's the owner's to answer for. */
+/** The other people on a task (Also on, §20): shown on the task, never in their lists (§25); it's the owner's to answer for. */
 export const alsoOf = (item) => cleanAlso(item?.values?.also, ownerOf(item));
 /** Who can be put on a task's Also on: active teammates who can see its board, not its owner. */
 export const taggable = (state, board, item) => (state?.users || [])
@@ -83,6 +83,10 @@ export function isWaiting(item) {
  * the task to someone else records who did it and when (`assignedBy`, `assignedAt`): it then waits on them to accept it
  * (`acceptedAt`, set by acceptedValues(), or here when they change its status: starting it accepts it). Taking it
  * yourself or leaving it with no one clears all three. Only this and acceptedValues() set them, so a patch can't.
+ * Passing it from one owner to another (handed on, or taken back) puts whoever had it on Also on (§24), so they stay on
+ * the task (their lists show what they own, §25); except when they give away their own task that has never been started, which only says who it's for (a
+ * new task's starting owner is its maker). Its first status other than Not started records `startedAt`, kept for good
+ * (unticking Done sets it back to Not started). Only this sets it.
  */
 export function nextValues(prev, patch, { me = '', now = new Date().toISOString() } = {}) {
   const next = { ...patch };
@@ -92,13 +96,19 @@ export function nextValues(prev, patch, { me = '', now = new Date().toISOString(
   delete next.assignedBy;
   delete next.assignedAt;
   delete next.acceptedAt;
+  delete next.startedAt;
   const earlier = withPeople(prev);
   const before = ownerOf({ values: earlier });
   const values = withPeople({ ...prev, ...next });
+  if (!values.startedAt && next.status && next.status !== 'Not started') values.startedAt = now; // started, for good
   const after = ownerOf({ values });
   // A task that still has several people (from before one owner per task): picking its owner puts the rest on Also on,
   // so nobody drops off it. Also on never lists the owner, and goes when it's empty.
-  if (picked && earlier.people.length > 1) values.also = [...(Array.isArray(values.also) ? values.also : []), ...earlier.people];
+  const onIt = Array.isArray(values.also) ? values.also : [];
+  if (picked && earlier.people.length > 1) values.also = [...onIt, ...earlier.people];
+  else if (picked && before && after && after !== before && (me !== before || earlier.startedAt || (earlier.status || 'Not started') !== 'Not started')) {
+    values.also = [...onIt, before]; // the previous owner stays on it
+  }
   if ('also' in values) {
     const also = cleanAlso(values.also, after);
     if (also.length) values.also = also; else delete values.also;
@@ -124,7 +134,7 @@ export const newTaskValues = (values = {}, { me = '', now = new Date().toISOStri
 export function whereOf(state, board, item) {
   if (!board) return [];
   const client = clientOf(state, item);
-  return [...(board.owner ? [] : [MODULE_LABELS[board.module] || '']), boardTitle(state, board), ...(client ? [client.name] : [])].filter(Boolean);
+  return [...(board.owner ? [] : [MODULE_LABELS[areaOf(board)] || '']), boardTitle(state, board), ...(client ? [client.name] : [])].filter(Boolean);
 }
 
 // The boards `personId` sees that the signed-in user (`viewer`) sees too, in state order: an admin looking at someone's
@@ -137,25 +147,30 @@ function clientOf(state, item) {
 }
 const rank = (p) => { const k = PRIORITIES.indexOf(p); return k < 0 ? PRIORITIES.length : k; };
 
+/** Whether `personId` owns a task (§25): its owner (the first of its people) on a board with an Owner column; on Work in
+ *  Progress (no Owner) one of its Contacts. Also on, or being second on a task that still has several people, isn't
+ *  owning it: a person's lists (the Dashboard, Team pages, a board's or the Calendar's person filter) show only theirs. */
+export const ownedBy = (board, item, personId) => Boolean(personId) && (hasOwner(board)
+  ? ownerOf(item) === personId
+  : (item?.values?.people || []).includes(personId));
+
 /**
- * The Dashboard's task lists (and a Team page's): the open tasks `personId` is on (their owner, among the people of a
- * task that still has several, or on its Also on), on every board they see (`teamOnly`: team boards only), Urgent
- * first, then High, Medium, Low and none; ties by the soonest due (none last), then board order. Each row: { item,
- * board, priority, due, overdue (due before `today`), client, waiting (waits on them to accept it), from (who handed it
- * to them), also (they're on it, someone else owns it), owner }.
+ * The Dashboard's task lists (and a Team page's): the open tasks `personId` owns (`ownedBy()`), on every board they see
+ * (`teamOnly`: team boards only), Urgent first, then High, Medium, Low and none; ties by the soonest due (none last), then
+ * board order. Each row: { item, board, priority, due, overdue (due before `today`), client, waiting (waits on them to
+ * accept it), from (who handed it to them), owner }.
  */
 export function prioritiesFor(state, personId, { today = '', viewer = state?.me, teamOnly = false } = {}) {
   if (!personId) return [];
   const rows = boardsFor(state, personId, viewer, teamOnly).flatMap((board) => board.groups.flatMap((g) => g.items
-    .filter((item) => !item.done && ((item.values?.people || []).includes(personId) || (hasAlso(board) && alsoOf(item).includes(personId))))
+    .filter((item) => !item.done && ownedBy(board, item, personId))
     .map((item) => {
       const v = item.values || {};
       const due = ymd(v[dateKey(board)]);
-      const also = !(v.people || []).includes(personId);
-      const waiting = !also && hasOwner(board) && isWaiting(item) && ownerOf(item) === personId; // Work in Progress' rows aren't tasks
+      const waiting = hasOwner(board) && isWaiting(item); // Work in Progress' rows aren't tasks
       return {
         item, board, priority: PRIORITIES.includes(v.priority) ? v.priority : '', due, overdue: Boolean(due && today && due < today),
-        client: clientOf(state, item), waiting, from: waiting ? v.assignedBy : '', also, owner: ownerOf(item),
+        client: clientOf(state, item), waiting, from: waiting ? v.assignedBy : '', owner: ownerOf(item),
       };
     })));
   const byDue = (a, b) => (a.due === b.due ? 0 : !a.due ? 1 : !b.due ? -1 : a.due < b.due ? -1 : 1);
@@ -179,9 +194,9 @@ export function byStage(rows) {
 
 /** How many of someone's tasks wait on them, are Urgent, In progress or overdue, and are open (the Dashboard's numbers,
  *  the Team cards and the team rule: MAX_URGENT, MAX_IN_PROGRESS). Only the ones they own, on boards with an owner
- *  column: Also on isn't theirs to answer for, and Work in Progress' rows are clients someone looks after, not tasks. */
+ *  column: Work in Progress' rows are clients someone looks after, not tasks. */
 export function workload(rows) {
-  const tasks = (rows || []).filter((r) => hasOwner(r.board) && !r.also);
+  const tasks = (rows || []).filter((r) => hasOwner(r.board));
   return {
     waiting: tasks.filter((r) => r.waiting).length,
     urgent: tasks.filter((r) => r.priority === 'Urgent').length,
@@ -193,7 +208,7 @@ export function workload(rows) {
 
 /** A Team card's top tasks: the first `n` they own that are Stuck, In progress or Up next (stage order, each Urgent
  *  first), so the backlog with no priority doesn't fill it. */
-export const topTasks = (rows, n = 3) => byStage((rows || []).filter((r) => !r.also))
+export const topTasks = (rows, n = 3) => byStage(rows || [])
   .filter((g) => g.stage !== 'No priority').flatMap((g) => g.rows).slice(0, n);
 
 /**
@@ -208,7 +223,7 @@ export function byBoard(rows, boards = []) {
     if (!cards.has(r.board)) cards.set(r.board, []);
     cards.get(r.board).push(r);
   });
-  const order = (b) => [BOARD_MODULES.indexOf(b.module), b.owner ? 1 : 0];
+  const order = (b) => [BOARD_MODULES.indexOf(areaOf(b)), b.owner ? 1 : 0]; // Pipeline › Demos with Pipeline (§25)
   const at = (b) => { const k = (boards || []).indexOf(b); return k < 0 ? Infinity : k; };
   return [...cards.entries()].map(([board, list], n) => ({ board, list, n }))
     .sort((a, b) => {
@@ -223,12 +238,12 @@ export function byBoard(rows, boards = []) {
     });
 }
 
-/** Whether a board's task shows under its filters: the search `q` (its name), `person` (its owner or Also on),
+/** Whether a board's task shows under its filters: the search `q` (its name), `person` (theirs: `ownedBy()`, §25),
  *  `status` and `department` (its own, or its board's). */
 export function itemMatches(board, item, { q = '', person = '', status = '', department = '' } = {}) {
   const v = item?.values || {};
   if (q && !String(item?.name || '').toLowerCase().includes(String(q).toLowerCase())) return false;
-  if (person && !(v.people || []).includes(person) && !(hasAlso(board) && alsoOf(item).includes(person))) return false;
+  if (person && !ownedBy(board, item, person)) return false; // theirs (§25), not what they're only Also on
   if (status && v.status !== status) return false;
   if (department && departmentOf(board, item) !== department) return false;
   return true;
@@ -275,23 +290,25 @@ export function taskMentions(state, person, { viewer = state?.me } = {}) {
     .sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
 }
 
-/** A client's open next steps on the boards the viewer sees, in board order: tasks linked to it (`values.client`, Clients
- *  boards) and to the deals it came from (`values.deal`, Outreach boards; deals are Pipeline's, so only for a Pipeline
- *  viewer, as live mode, where nobody else reads them). → [{ item, board }] */
+/** A client's open tasks on the boards the viewer sees, in board order: tasks linked to it (`values.client`: Clients boards,
+ *  and Pipeline › Demos, which keeps the Client of the tasks that came from Clients › Demos, §26) and to the deals it came
+ *  from (`values.deal`, on any board with a Deal column; deals are Pipeline's, so only for a Pipeline viewer, as live mode,
+ *  where nobody else reads them). → [{ item, board }] */
 export function clientTasks(state, clientId, { viewer = state?.me } = {}) {
   if (!clientId) return [];
   const deals = new Set(canView(state, 'pipeline', viewer) ? (state?.deals || []).filter((d) => d.clientId === clientId).map((d) => d.id) : []);
-  return (state?.boards || []).filter((b) => (hasClient(b) || (deals.size && hasDeal(b))) && canViewBoard(state, b, viewer))
+  const linked = (b) => hasClient(b) || isDealTasks(b);
+  return (state?.boards || []).filter((b) => (linked(b) || (deals.size && hasDeal(b))) && canViewBoard(state, b, viewer))
     .flatMap((board) => board.groups.flatMap((g) => g.items
-      .filter((item) => !item.done && ((hasClient(board) && item.values?.client === clientId) || (hasDeal(board) && deals.has(item.values?.deal))))
+      .filter((item) => !item.done && ((linked(board) && item.values?.client === clientId) || (hasDeal(board) && deals.has(item.values?.deal))))
       .map((item) => ({ item, board }))));
 }
 
-/** A deal's open next steps (`values.deal`, Outreach boards) on the boards the viewer sees, in board order:
- *  [{ item, board }]. */
+/** A deal's tasks (its profile's Tasks): its open tasks (`values.deal`) on Pipeline › Demos (§25, §26), and older ones on
+ *  Operations or Outreach, on the boards the viewer sees, in board order. Clients boards have no Deal column (§26). → [{ item, board }]. */
 export function dealTasks(state, dealId, { viewer = state?.me } = {}) {
   if (!dealId) return [];
-  return (state?.boards || []).filter((b) => hasDeal(b) && canViewBoard(state, b, viewer)).flatMap((board) => board.groups
+  return (state?.boards || []).filter((b) => hasDeal(b) && b.module !== 'clients' && canViewBoard(state, b, viewer)).flatMap((board) => board.groups
     .flatMap((g) => g.items.filter((item) => !item.done && item.values?.deal === dealId).map((item) => ({ item, board }))));
 }
 

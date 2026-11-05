@@ -1,8 +1,8 @@
 // Board schemas: column definitions and label colours for the Monday-style boards, plus the other label sets.
 // Column types: owner (one person) | people | also | client | deal | department | status | label | date | text. `owner`
 // and `people` are both kept in `values.people` (user ids): an owner column holds one, so a task has one person
-// answerable for it (docs/PHASE2.md §17). `also` (Also on, §20) holds the other people on it in `values.also`: they see it
-// in their task lists, but it isn't theirs to answer for. `client` holds a client id in `values.client`, `deal` a deal id
+// answerable for it (docs/PHASE2.md §17). `also` (Also on, §20) holds the other people on it in `values.also`: shown on the
+// task, never in their lists or filters (§25: those show what a person owns). `client` holds a client id in `values.client`, `deal` a deal id
 // in `values.deal` (a next step on a deal's profile, §19), `department` a board module in `values.department` ('' = the
 // board's own: departmentOf() in src/lib/boards.js). `team`: a column only team boards have (not personal pages).
 
@@ -20,8 +20,12 @@ export const PRIORITY_HINTS = { Urgent: 'Today: drop other work. One at a time.'
 const OWNER = { key: 'people', label: 'Owner', type: 'owner' };
 const ALSO = { key: 'also', label: 'Also on', type: 'also', team: true };
 const PRIORITY_COLUMN = { key: 'priority', label: 'Priority', type: 'label', options: PRIORITY, hints: PRIORITY_HINTS };
-// Which department a task belongs to (§20): Operations, Marketing, Outreach, Clients or Pipeline. Last on every team board.
+// Which department a task belongs to (§20): Operations, Marketing, Outreach, Clients or Pipeline. Last on every team board
+// (a sparse Deal link may follow it).
 const DEPARTMENT = { key: 'department', label: 'Department', type: 'department', team: true };
+// The deal a task is for (§19, §22, §26): a task on Pipeline › Demos (last), and older next steps (first on Outreach's
+// boards, after Department on Operations' team boards).
+const DEAL = { key: 'deal', label: 'Deal', type: 'deal' };
 
 // The board modules' columns (BOARD_MODULES): Projects (with the former Admin board merged in), Marketing, Outreach and
 // Clients. All are modules in src/lib/access.js.
@@ -36,6 +40,9 @@ export const BOARD_SCHEMAS = {
       PRIORITY_COLUMN,
       { key: 'due', label: 'Due', type: 'date' },
       DEPARTMENT,
+      // A deal's next steps live here (§22); personal pages don't have it. `sparse`: a table shows it only once a task on
+      // the board has one (the drawer always does), so boards that don't use it stay as they were.
+      { ...DEAL, team: true, sparse: true },
     ],
   },
   marketing: {
@@ -60,12 +67,12 @@ export const BOARD_SCHEMAS = {
     ],
   },
   // Outreach's boards (Sales Tasks …) have the standard task columns, as Projects, and say which deal a task is for (a
-  // next step on its profile); Clients' (Demos, Previews …) say which client.
+  // next step on its profile, as Operations' can); Clients' (Demos, Previews …) say which client.
   outreach: {
     title: 'Outreach',
     icon: 'Mail',
     columns: [
-      { key: 'deal', label: 'Deal', type: 'deal' },
+      DEAL,
       OWNER,
       ALSO,
       { key: 'status', label: 'Status', type: 'status', options: STATUS },
@@ -101,11 +108,30 @@ export const BOARD_SCHEMAS = {
     ],
   },
 };
+// Pipeline › Demos (§25, §26; made by 0015 as Deal tasks, renamed and given Clients › Demos' rows by 0016; in the demo by
+// the seed and migrate()): the deals' tasks, one board with a fixed id. Underneath it is an Operations team board, so it
+// has Operations' access (staff edit) and its tasks can move to and from Operations' boards; on screen it is Pipeline's
+// (`areaOf()`), listed under Pipeline in the sidebar: its tasks show on their deal's profile and in their owners' lists.
+export const DEAL_TASKS_BOARD = 'dea15000-0000-4000-8000-000000000001';
+export const isDealTasks = (board) => board?.id === DEAL_TASKS_BOARD;
+const DEAL_TASKS = {
+  title: 'Demos',
+  icon: 'GitBranch',
+  columns: [
+    OWNER,
+    ALSO,
+    { key: 'status', label: 'Status', type: 'status', options: STATUS },
+    PRIORITY_COLUMN,
+    { key: 'due', label: 'Due', type: 'date' },
+    DEPARTMENT, // Pipeline unless picked (departmentOf(): its area)
+    { ...DEAL, team: true },
+  ],
+};
 // A board's schema: its module's, less the `team` columns (Also on, Department) on a personal page (`owner` set: notes
-// nobody else is on, all in Operations). The same object every time, so it can be compared and memoised.
+// nobody else is on, all in Operations); Deal tasks' own. The same object every time, so it can be compared and memoised.
 const PERSONAL = Object.fromEntries(Object.entries(BOARD_SCHEMAS)
   .map(([m, s]) => [m, { ...s, columns: s.columns.filter((c) => !c.team) }]));
-export const schemaOf = (board) => (board?.owner ? PERSONAL : BOARD_SCHEMAS)[board?.module];
+export const schemaOf = (board) => (isDealTasks(board) ? DEAL_TASKS : (board?.owner ? PERSONAL : BOARD_SCHEMAS)[board?.module]);
 // What a board's rows are called ("Task", or "Client" on Work in Progress), and whether it has dates (the calendar).
 export const itemWord = (schema) => schema?.item || 'Task';
 export const hasDates = (schema) => (schema?.columns || []).some((c) => c.type === 'date');
@@ -118,20 +144,19 @@ export function withPeople(values) {
   return { ...rest, people: [...new Set([owner, ...list].filter(Boolean).map(String))] };
 }
 
-// Pipeline's open stages, the board's columns in order (0014, docs/PHASE2.md §22). Lost is a closed stage, off the board;
-// Won is Make client (the deal leaves the board for Clients).
-export const DEAL_STAGES = ['Interested', 'Meeting booked', 'Intro held', 'Demo held', 'Proposal sent', 'Contract sent'];
+// Pipeline's open stages, the board's columns in order (0008, Proposal sent §21; kept by the CRM, §22). A deal made a
+// client leaves the board (it lives in Clients): Make client sits on the last column. Lost (0018) is a closed stage, off
+// the board.
+export const DEAL_STAGES = ['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Proposal sent'];
 export const LOST = 'Lost';
 export const ALL_DEAL_STAGES = [...DEAL_STAGES, LOST];
 export const DEAL_PRIORITIES = ['P1', 'P2', 'P3'];
-// The stages before 0014, as it renamed them (an old browser tab may still write one).
-export const OLD_DEAL_STAGES = { Opportunities: 'Interested', Contacted: 'Interested', 'First meetings': 'Meeting booked', Demos: 'Demo held', Won: 'Demo held' };
-/** The stage a deal shows in: its own, an old one as 0014 renamed it, anything else Interested. */
+// Stages the board no longer has (an old browser tab may still write one): the old Won shows on the last column.
+export const OLD_DEAL_STAGES = { Won: DEAL_STAGES[DEAL_STAGES.length - 1] };
+/** The stage a deal shows in: its own, the old Won on the last column, anything else Opportunities. */
 export const dealStage = (deal) => (ALL_DEAL_STAGES.includes(deal?.stage) ? deal.stage : OLD_DEAL_STAGES[deal?.stage] || DEAL_STAGES[0]);
 /** The chance of winning at each stage, in %, when a deal doesn't set its own. */
-export const STAGE_PROBABILITY = {
-  Interested: 10, 'Meeting booked': 20, 'Intro held': 30, 'Demo held': 50, 'Proposal sent': 60, 'Contract sent': 80, Lost: 0,
-};
+export const STAGE_PROBABILITY = { Opportunities: 10, Contacted: 15, 'First meetings': 25, Demos: 50, 'Proposal sent': 70, Lost: 0 };
 /** A deal's chance of winning, in %: its own, else its stage's. */
 export const dealProbability = (deal) => (Number.isInteger(deal?.probability) ? deal.probability : STAGE_PROBABILITY[dealStage(deal)]);
 export const CURRENCIES = ['AUD', 'NZD', 'GBP', 'USD', 'EUR', 'CAD', 'AED', 'SAR'];
@@ -145,10 +170,19 @@ export function daysInStage(deal, now = Date.now()) {
   return Number.isFinite(at) ? Math.max(0, Math.floor((now - at) / 86400000)) : null;
 }
 
+// A deal's or client's Lead (0013, §21): the work came through LYCO (co-pitched) or is AssetStack's own. '' = not set.
+// `edge` colours a deal's block; the icon is src/components/LeadIcon.jsx.
+export const LEADS = {
+  lyco: { label: 'LYCO', title: 'LYCO lead · co-pitched', edge: '#22e36b' },
+  assetstack: { label: 'AssetStack', title: 'AssetStack direct', edge: '#2337ee' },
+};
+export const isLead = (v) => typeof v === 'string' && Object.hasOwn(LEADS, v);
+export const leadOf = (x) => (isLead(x?.source) ? x.source : '');
+
 /** A deal's edited fields, cleaned (Pipeline's New and Edit deal): text trimmed, a value of 0 or more, a known priority,
- *  stage, currency and waiting on, a probability from 0 to 100 ('' or null: the stage's), a close date as YYYY-MM-DD,
- *  an owner among `userIds` ('' for none), an account among `accountIds` and contacts among `contactIds` (each once).
- *  Fields that aren't valid are left out, so the deal keeps them. */
+ *  stage, Lead, currency and waiting on, a probability from 0 to 100 ('' or null: the stage's), a close date as
+ *  YYYY-MM-DD, an owner among `userIds` ('' for none), an account among `accountIds` and contacts among `contactIds` (each
+ *  once). Fields that aren't valid are left out, so the deal keeps them. */
 export function cleanDealPatch(patch = {}, userIds = [], { accountIds = null, contactIds = null } = {}) {
   const text = (v) => String(v ?? '').trim();
   const out = {};
@@ -160,6 +194,7 @@ export function cleanDealPatch(patch = {}, userIds = [], { accountIds = null, co
   }
   if ('priority' in patch && DEAL_PRIORITIES.includes(patch.priority)) out.priority = patch.priority;
   if ('stage' in patch && ALL_DEAL_STAGES.includes(patch.stage)) out.stage = patch.stage;
+  if ('source' in patch && (patch.source === '' || isLead(patch.source))) out.source = patch.source;
   if ('contact' in patch) out.contact = userIds.includes(patch.contact) ? patch.contact : '';
   if ('currency' in patch && CURRENCIES.includes(patch.currency)) out.currency = patch.currency;
   if ('waitingOn' in patch && (patch.waitingOn === '' || patch.waitingOn in WAITING_ON)) out.waitingOn = patch.waitingOn;

@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useStore } from '@/data/store';
-import { PRIORITY, PRIORITY_HINTS } from '@/data/boards';
+import { PRIORITY, PRIORITY_HINTS, STATUS, isDealTasks } from '@/data/boards';
 import { canEditBoard, useAccess } from '@/lib/access';
-import { BOARD_MODULES, DEPARTMENTS, MODULE_LABELS, boardTitle, departmentOf, departmentValue } from '@/lib/boards';
+import { BOARD_MODULES, DEPARTMENTS, MODULE_LABELS, areaOf, boardTitle, departmentOf, departmentValue } from '@/lib/boards';
 import { hasAlso, hasClient, hasDeal, hasDepartment, hasOwner, taggable } from '@/lib/work';
 import { ClientPicker, DealPicker, LabelPicker, Modal, OwnerPicker, PeoplePicker } from '@/components/ui';
 
@@ -11,18 +11,22 @@ import { ClientPicker, DealPicker, LabelPicker, Modal, OwnerPicker, PeoplePicker
  * and your own notes, not Work in Progress), its client (Clients boards), owner, priority and due date, and on a team
  * board who else is on it and its department (§20: the board's unless picked). A task made for someone else waits on
  * them to accept it. `owner` / `clientId` / `dealId` preset those (a Team page, a client, a deal's
- * next step); `modules` narrows where it can go (a client: Clients boards; a deal: Outreach boards). `title`: the
+ * next step); `modules` narrows where it can go (a client: Clients boards; a deal: Pipeline › Demos, §25/§26, or without
+ * it the Operations and Outreach boards with a Deal column). Pipeline › Demos takes only a deal's tasks. `title`: the
  * dialog's. Closes when it's added.
  */
 export default function NewTaskModal({ onClose, owner: forOwner = '', clientId = '', dealId = '', modules = null, title = 'New task' }) {
   const { state, actions } = useStore();
   const access = useAccess();
-  const targets = state.boards.filter((b) => hasOwner(b) && access.canEditBoard(b) && (!b.owner || b.owner === state.me)
-    && (!modules || modules.includes(b.module)));
+  const fits = state.boards.filter((b) => hasOwner(b) && access.canEditBoard(b) && (!b.owner || b.owner === state.me)
+    && (!modules || modules.includes(b.module)) && (dealId ? hasDeal(b) : !isDealTasks(b))); // a deal's next step: only where it's kept
+  const dealHome = dealId && fits.find(isDealTasks);
+  const targets = dealHome ? [dealHome] : fits; // a deal's tasks live on Pipeline › Demos (§25, §26), once it's there
   // To start with: a team board the preset owner can take on, else the first team board, else your notes.
   const first = targets.find((b) => !b.owner && (!forOwner || canEditBoard(state, b, forOwner))) || targets.find((b) => !b.owner) || targets[0];
   const [f, setF] = useState({
     name: '', board: first?.id || '', owner: forOwner || state.me, priority: 'Medium', due: '', client: clientId, deal: dealId, also: [], department: '',
+    status: 'Not started', update: '',
   });
   const [err, setErr] = useState('');
   const board = targets.find((b) => b.id === f.board) || null;
@@ -38,11 +42,13 @@ export default function NewTaskModal({ onClose, owner: forOwner = '', clientId =
     if (!board) { setErr('Pick where it goes'); return; }
     if (f.owner && !canEditBoard(state, board, f.owner)) { setErr(`${ownerName} can’t edit ${boardTitle(state, board)}: pick another owner or board`); return; }
     const values = {
-      owner: f.owner, priority: f.priority, due: f.due, ...(hasClient(board) ? { client: f.client } : {}), ...(hasDeal(board) ? { deal: f.deal } : {}),
+      owner: f.owner, priority: f.priority, due: f.due, status: f.status, ...(hasClient(board) ? { client: f.client } : {}), ...(hasDeal(board) ? { deal: f.deal } : {}),
       ...(hasAlso(board) ? { also } : {}),
       ...(hasDepartment(board) ? { department: departmentValue(board, f.department) } : {}),
     };
-    if (!actions.addItem(board.id, null, f.name, values)) { setErr('Couldn’t add this task'); return; }
+    const id = actions.addItem(board.id, null, f.name, values);
+    if (!id) { setErr('Couldn’t add this task'); return; }
+    if (f.update.trim()) actions.addUpdate(board.id, id, f.update.trim()); // its first update
     onClose();
   };
 
@@ -53,9 +59,9 @@ export default function NewTaskModal({ onClose, owner: forOwner = '', clientId =
           <input className="field" placeholder="Task" aria-label="Task" value={f.name} onChange={(e) => set('name', e.target.value)} maxLength={300} autoFocus />
           <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Where</span>
             <select className="field" value={f.board} onChange={(e) => set('board', e.target.value)}>
-              {BOARD_MODULES.map((m) => targets.some((b) => b.module === m && !b.owner) && (
+              {BOARD_MODULES.map((m) => targets.some((b) => areaOf(b) === m && !b.owner) && (
                 <optgroup key={m} label={MODULE_LABELS[m]}>
-                  {targets.filter((b) => b.module === m && !b.owner).map((b) => <option key={b.id} value={b.id}>{boardTitle(state, b)}</option>)}
+                  {targets.filter((b) => areaOf(b) === m && !b.owner).map((b) => <option key={b.id} value={b.id}>{boardTitle(state, b)}</option>)}
                 </optgroup>
               ))}
               {targets.filter((b) => b.owner).map((b) => <option key={b.id} value={b.id}>My notes</option>)}
@@ -82,24 +88,28 @@ export default function NewTaskModal({ onClose, owner: forOwner = '', clientId =
               <input type="date" className="field" aria-label="Due" value={f.due} onChange={(e) => set('due', e.target.value)} />
             </label>
           </div>
-          {board && (hasAlso(board) || hasDepartment(board)) && (
-            <div className="grid grid-cols-[auto_minmax(0,1fr)] items-end gap-3">
-              {hasAlso(board) && (
-                <div className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Also on</span>
-                  <div className="flex h-[42px] items-center">
-                    <PeoplePicker value={also} allow={tag} label="Also on" empty="Nobody" size={32} max={4} onChange={(v) => set('also', v)} />
-                  </div>
+          <div className="grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] items-end gap-3">
+            {board && hasAlso(board) ? (
+              <div className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Also on</span>
+                <div className="flex h-[42px] items-center">
+                  <PeoplePicker value={also} allow={tag} label="Also on" empty="Nobody" size={32} max={4} onChange={(v) => set('also', v)} />
                 </div>
-              )}
-              {hasDepartment(board) && (
-                <div className="col-start-2 flex flex-col gap-1.5"><span className="text-[12px] dimmer">Department</span>
-                  <LabelPicker label="Department" value={departmentOf(board, { values: { department: f.department } })} options={DEPARTMENTS} labels={MODULE_LABELS}
-                    muted={!departmentValue(board, f.department)} allowEmpty={false} className="!h-[42px]"
-                    onChange={(v) => set('department', departmentValue(board, v))} />
-                </div>
-              )}
+              </div>
+            ) : <span />}
+            <div className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Status</span>
+              <LabelPicker label="Status" value={f.status} options={STATUS} allowEmpty={false} onChange={(v) => set('status', v)} className="!h-[42px]" />
             </div>
-          )}
+            {board && hasDepartment(board) ? (
+              <div className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Department</span>
+                <LabelPicker label="Department" value={departmentOf(board, { values: { department: f.department } })} options={DEPARTMENTS} labels={MODULE_LABELS}
+                  muted={!departmentValue(board, f.department)} allowEmpty={false} className="!h-[42px]"
+                  onChange={(v) => set('department', departmentValue(board, v))} />
+              </div>
+            ) : <span />}
+          </div>
+          <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Update</span>
+            <textarea className="field min-h-[72px]" aria-label="Update" placeholder="Optional" value={f.update} onChange={(e) => set('update', e.target.value)} maxLength={4000} />
+          </label>
           {err && <div role="alert" className="text-[12.5px] text-rose-200">{err}</div>}
           <button type="submit" className="btn-primary rounded-full h-11 font-semibold">
             {f.owner && f.owner !== state.me ? `Add for ${ownerName}` : 'Add task'}

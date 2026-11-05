@@ -1,4 +1,4 @@
-// Pipeline → Reports (docs/PHASE2.md §22): the forecast by close month, the funnel (deals, value, time in each stage and
+// Pipeline → Reports (docs/PHASE2.md §28): the forecast by close month, the funnel (deals, value, time in each stage and
 // how many go on), won and lost with the lost reasons, and deals by sector or country. Values stay in each deal's
 // currency. Each table's bars show counts (one series, one colour; the number is always written next to it).
 import { useState } from 'react';

@@ -1,4 +1,4 @@
-// Pipeline → Contacts (docs/PHASE2.md §22): the people at every account, with search and filters by role and status; a
+// Pipeline → Contacts (docs/PHASE2.md §28): the people at every account, with search and filters by role and status; a
 // contact's profile (details, the time where they are, their deals and their own timeline) and the contact form.
 import { useState } from 'react';
 import { ExternalLink, Mail, Pencil, Phone } from 'lucide-react';

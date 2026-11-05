@@ -37,7 +37,7 @@ function Page({ route, sub }) {
 // each task on it keeps its board's access rule (src/lib/work.js).
 function allowed(route, access) {
   if (route === 'settings') return access.isAdmin;
-  if (route === 'leads') return access.canView('outreach'); // Leads (0016) follows Outreach
+  if (route === 'leads') return access.canView('outreach'); // Leads (0020) follows Outreach
   return !MODULES.includes(route) || access.canView(route);
 }
 

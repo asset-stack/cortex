@@ -1,4 +1,4 @@
--- Cortex 0013: task emails (docs/PHASE2.md §21). Run in the Supabase SQL editor after 0012. Safe to re-run, also
+-- Cortex 0017: task emails (docs/PHASE2.md §27). Run in the Supabase SQL editor after 0016. Safe to re-run, also
 -- statement by statement (the SQL editor may run it that way). The app opens and works without it (Settings → Business
 -- shows which file to run); the google function's task-mail route needs it.
 --
@@ -286,4 +286,4 @@ end $$;
 
 commit;
 
-select 'Cortex 0013 applied' as done;
+select 'Cortex 0017 applied' as done;

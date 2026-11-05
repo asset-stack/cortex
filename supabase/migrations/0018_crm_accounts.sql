@@ -1,7 +1,7 @@
--- Cortex 0014: the CRM: accounts, their contacts, and opportunities with HubSpot-style stages (docs/PHASE2.md §22). Run
--- in the Supabase SQL editor after 0013, BEFORE the app version that uses it goes live (it writes the new deal columns;
--- the app now live keeps working with it). Safe to re-run, also statement by statement (the SQL editor may run it that
--- way): no statement relies on another having run in the same transaction or session.
+-- Cortex 0018: the CRM: accounts, their contacts, and more on each deal (docs/PHASE2.md §28). Run in the Supabase SQL
+-- editor after 0017, BEFORE the app version that uses it goes live (it writes the new
+-- deal columns; the app now live keeps working with it). Safe to re-run, also statement by statement (the SQL editor may
+-- run it that way): no statement relies on another having run in the same transaction or session.
 --
 -- - accounts: one row per organisation (a prospect, customer, partner or supplier): sector, country, region and time
 --   zone, domain and website, size, its lifecycle (new → contacted → engaged → meeting → opportunity → customer, or
@@ -11,11 +11,10 @@
 --   maker, champion …) and whether they're still there. Deleting an account deletes its contacts.
 -- - deals: an account (account_id), the contacts on it (contact_ids), a currency, an expected close date, a probability
 --   (null: the stage's default), who it waits on (us / them), a lost reason, and when it reached its stage (stage_at, the
---   database's: set when the stage changes). Stages are now Interested → Meeting booked → Intro held → Demo held →
---   Proposal sent → Contract sent, plus Lost; Won is still Make client. The old ones are renamed once (Opportunities and
---   Contacted → Interested, First meetings → Meeting booked, Demos and Won → Demo held).
+--   database's: set when the stage changes). The stages stay as they are (Opportunities → Contacted → First meetings →
+--   Demos → Proposal sent), plus Lost; Won is still Make client. Nothing is renamed.
 -- - The outreach automation (contact_pipeline) also files the contact's organisation as an account and the person as its
---   contact, and uses the new stages.
+--   contact (the stages and the deal it adds are as 0008).
 -- - crm_entries can be on an account or a contact too (Pipeline's rules), never moved by an edit.
 -- - Existing data, once: every client gets a customer account; every deal its account (its client's, else the account
 --   with its name, else a new one); a deal that came from an outreach contact gets that person as its contact.
@@ -93,14 +92,6 @@ create index if not exists deals_account_idx on public.deals (account_id);
 update public.deals set stage_at = coalesce(updated_at, now()) where stage_at is null;
 alter table public.deals alter column stage_at set default now();
 alter table public.deals alter column stage_at set not null;
-
--- The new stages (once: only the old names match). A Contacted deal was waiting on them. Before the trigger below, so
--- a rename keeps the deal's time in its stage (a re-run after the trigger exists finds nothing to rename).
-update public.deals set
-  waiting_on = case when stage = 'Contacted' and waiting_on = '' then 'them' else waiting_on end,
-  stage = case stage when 'Opportunities' then 'Interested' when 'Contacted' then 'Interested'
-                     when 'First meetings' then 'Meeting booked' else 'Demo held' end
-where stage in ('Opportunities', 'Contacted', 'First meetings', 'Demos', 'Won');
 
 -- When a deal reached its stage: now, whenever the stage changes; kept otherwise, whatever the writer sends.
 create or replace function public.deal_stage_at() returns trigger
@@ -228,12 +219,12 @@ create policy crm_select on public.crm_entries for select to authenticated
     (client_id is not null and public.can_view('clients'))
     or ((deal_id is not null or account_id is not null or contact_id is not null) and public.can_view('pipeline'))));
 
--- 6. The outreach automation: the account and the person too, and the new stages ------------------------------------
+-- 6. The outreach automation: the account and the person too ------------------------------------
 
 -- As 0008, plus: the contact's organisation is found (by name) or added as an account (a prospect, engaged or meeting),
 -- an earlier lifecycle moves on (never back, never over customer, nurture, an RFP, not now or suppressed), and the person
--- is found (by email, else by name) or added as its contact and put on the deal. A reply makes an Interested deal waiting
--- on us; a booking moves Interested on to Meeting booked (never back from later on).
+-- is found (by email, else by name) or added as its contact and put on the deal. A reply makes an Opportunities deal waiting
+-- on us; a booking moves Opportunities or Contacted on to First meetings (never back from later on), as 0008.
 create or replace function public.contact_pipeline() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare
@@ -283,13 +274,13 @@ begin
     insert into public.deals (name, stage, owner_id, priority, next_step, contact_id, account_id, contact_ids, waiting_on, position)
     values (
       v_org,
-      case when v_booked then 'Meeting booked' else 'Interested' end,
+      case when v_booked then 'First meetings' else 'Opportunities' end,
       v_owner, 'P2',
       case when v_booked then 'Prepare meeting with ' else 'Reply to ' end || v_name,
       new.id, v_account, case when v_person is null then '{}'::uuid[] else array[v_person] end, 'us',
       (select coalesce(max(position) + 1, 0) from public.deals));
-  elsif v_booked and v_stage in ('Interested', 'Opportunities', 'Contacted') then
-    update public.deals set stage = 'Meeting booked' where id = v_deal;
+  elsif v_booked and v_stage in ('Opportunities', 'Contacted') then
+    update public.deals set stage = 'First meetings' where id = v_deal;
   end if;
 
   if v_owner is not null then
@@ -366,4 +357,4 @@ end $$;
 
 commit;
 
-select 'Cortex 0014 applied' as done;
+select 'Cortex 0018 applied' as done;

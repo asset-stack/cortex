@@ -1,4 +1,4 @@
--- Cortex 0015: every deal's stage history (docs/PHASE2.md §22). Run in the Supabase SQL editor after 0014. Safe to re-run,
+-- Cortex 0019: every deal's stage history (docs/PHASE2.md §28). Run in the Supabase SQL editor after 0018. Safe to re-run,
 -- also statement by statement (the SQL editor may run it that way). The app opens and works without it (the history and
 -- the reports that need it stay empty until it has run).
 --
@@ -76,4 +76,4 @@ where not exists (select 1 from public.deal_stage_history h where h.deal_id = d.
 
 commit;
 
-select 'Cortex 0015 applied' as done;
+select 'Cortex 0019 applied' as done;

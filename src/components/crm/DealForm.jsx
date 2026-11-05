@@ -1,4 +1,4 @@
-// New deal and Edit deal (docs/PHASE2.md §14, §22): the account (one there is, or a new one by its name), the deal's
+// New deal and Edit deal (docs/PHASE2.md §14, §28): the account (one there is, or a new one by its name), the deal's
 // name (its account's unless it has its own), the people at that account on it, value and currency, close date,
 // probability (the stage's unless set), owner, priority, who it waits on, next step, stage (Lost with a reason), and on
 // editing Delete and Make client. Editing saves only what changed, so a change someone else (or the booking automation)
@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowRight } from 'lucide-react';
 import { useStore } from '@/data/store';
 import {
-  ALL_DEAL_STAGES, CURRENCIES, DEAL_PRIORITIES, DEAL_STAGES, LOST, LOST_REASONS, STAGE_PROBABILITY, WAITING_ON, dealStage,
+  ALL_DEAL_STAGES, CURRENCIES, DEAL_PRIORITIES, DEAL_STAGES, LEADS, LOST, LOST_REASONS, STAGE_PROBABILITY, WAITING_ON, dealStage, leadOf,
 } from '@/data/boards';
 import { CONTACT_ROLES, accountById, accountNamed, peopleOf } from '@/lib/accounts';
 import { ConfirmModal, Modal, PersonPicker } from '@/components/ui';
@@ -22,12 +22,12 @@ export function parseValue(s) {
   return Math.round(Number(m[1]) * (m[2] === 'm' ? 1e6 : m[2] === 'k' ? 1e3 : 1));
 }
 
-const FIELDS = ['name', 'sector', 'priority', 'contact', 'next', 'stage', 'currency', 'closeOn', 'waitingOn', 'lostReason'];
+const FIELDS = ['name', 'sector', 'priority', 'contact', 'next', 'stage', 'source', 'currency', 'closeOn', 'waitingOn', 'lostReason'];
 const formOf = (deal, state) => {
   const account = accountById(state, deal.accountId);
   return {
     account: account?.name || '', name: deal.name, sector: deal.sector || '', value: deal.value ? String(deal.value) : '',
-    priority: deal.priority || 'P2', contact: deal.contact || '', next: deal.next || '', stage: dealStage(deal),
+    priority: deal.priority || 'P2', contact: deal.contact || '', next: deal.next || '', stage: dealStage(deal), source: leadOf(deal),
     currency: deal.currency || 'AUD', closeOn: deal.closeOn || '', probability: Number.isInteger(deal.probability) ? String(deal.probability) : '',
     waitingOn: deal.waitingOn || '', lostReason: deal.lostReason || '', contactIds: [...(deal.contactIds || [])],
   };
@@ -48,7 +48,7 @@ export default function DealForm({ deal: opened, onClose, onDone, canConvert, pr
   const editing = Boolean(opened);
   const deal = editing ? state.deals.find((x) => x.id === opened.id) : null;
   const start = useRef(editing ? formOf(opened, state) : {
-    account: accountById(state, presetAccount)?.name || '', name: '', sector: '', value: '', priority: 'P2', contact: state.me, next: '',
+    account: accountById(state, presetAccount)?.name || '', name: '', sector: '', value: '', priority: 'P2', contact: state.me, next: '', source: '',
     stage: DEAL_STAGES[0], currency: 'AUD', closeOn: '', probability: '', waitingOn: '', lostReason: '', contactIds: [],
   });
   const [f, setF] = useState(start.current);
@@ -166,6 +166,10 @@ export default function DealForm({ deal: opened, onClose, onDone, canConvert, pr
             </select>
             <input className="field" placeholder="Sector" aria-label="Sector" value={f.sector} onChange={set('sector')} />
           </div>
+          <select className="field" aria-label="Lead" value={f.source} onChange={set('source')}>
+            <option value="">Lead not set</option>
+            {Object.entries(LEADS).map(([id, l]) => <option key={id} value={id}>{l.title}</option>)}
+          </select>
           {stage === LOST && (
             <select className="field" aria-label="Lost reason" value={f.lostReason} onChange={set('lostReason')}>
               <option value="">Lost reason</option>

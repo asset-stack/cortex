@@ -1,17 +1,18 @@
 import { Pencil } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
-import { LOST, dealProbability, dealStage } from '@/data/boards';
+import { LEADS, LOST, dealProbability, dealStage, leadOf } from '@/data/boards';
 import { Avatar, Drawer } from '@/components/ui';
 import { useAccess } from '@/lib/access';
 import { CONTACT_ROLES, accountOf, dealPeople } from '@/lib/accounts';
 import { compactIn, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import LeadIcon from '@/components/LeadIcon';
 import { Links, NextSteps, Timeline } from './Profile';
 import { DaysInStage, Detail, Guardrails, OpenLink, PRIORITY_BG, TheirTime, WaitingPill } from './bits';
 
-/** A deal's profile (docs/PHASE2.md §19, §22): its stage, owner, value and priority (Edit for Pipeline editors), its
- *  account (with its guardrails) and the people on it, close date, probability, who it waits on and for how long, then its
- *  next steps, timeline and links. Pipeline view reads it; Pipeline edit adds to it. Made a client, it all carries to the
+/** A deal's profile (docs/PHASE2.md §19, §28): its stage, Lead (§21), owner, value and priority (Edit for Pipeline editors),
+ *  its account (with its guardrails) and the people on it, close date, probability, who it waits on and for how long, then
+ *  its tasks, timeline and links. Pipeline view reads it; Pipeline edit adds to it. Made a client, it all carries to the
  *  client. */
 export default function DealProfile({ dealId, onClose, onEdit, onOpen }) {
   const { state } = useStore();
@@ -28,6 +29,11 @@ export default function DealProfile({ dealId, onClose, onEdit, onOpen }) {
         <div className="flex flex-col gap-7">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <span className="rounded-full chip px-3 py-1 text-[13px] font-semibold">{stage}</span>
+            {leadOf(deal) && (
+              <span className="flex items-center gap-1.5 text-[13px] font-semibold">
+                <LeadIcon lead={leadOf(deal)} size={18} decorative />{LEADS[leadOf(deal)].title}
+              </span>
+            )}
             <span className={cn('rounded-full px-2 text-[12px] font-bold', PRIORITY_BG[deal.priority])}>{deal.priority}</span>
             <span className="font-extrabold tnum text-[17px]">{compactIn(deal.value, deal.currency)}</span>
             {deal.contact && <span className="flex items-center gap-1.5 text-[13px] dim"><Avatar userId={deal.contact} size={24} ring={false} />{users[deal.contact]?.name}</span>}

@@ -1,17 +1,18 @@
-// Pipeline → Opportunities (docs/PHASE2.md §22): open deals on a board by stage (drag, or the stage select, to move one)
-// or as a table, with search, owner and quick filters (needs me, waiting on us, stalled, lost), and the numbers: open deals, the
-// pipeline and its weighted value per currency, and deals made clients.
+// Pipeline → Opportunities (docs/PHASE2.md §28): open deals on a board by stage (drag, or the stage select, to move one)
+// or as a table, with search, owner, the Lead (LYCO or AssetStack, §21) and quick filters (needs me, waiting on us, stalled, lost),
+// and the numbers: open deals, the pipeline and its weighted value per currency, and deals made clients.
 import { useState } from 'react';
 import { ArrowRight, Columns3, Pencil, Rows3 } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
-import { DEAL_STAGES, LOST, STALE_DAYS, dealProbability, dealStage, daysInStage } from '@/data/boards';
+import { DEAL_STAGES, LEADS, LOST, STALE_DAYS, dealProbability, dealStage, daysInStage, leadOf } from '@/data/boards';
 import { accountOf, dealPeople, isOpenDeal, needsYou } from '@/lib/accounts';
 import { Avatar, KpiRow, SearchField, Segmented } from '@/components/ui';
 import { compactIn, localYmd, shortDate, totalsIn, totalsList } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import LeadIcon from '@/components/LeadIcon';
 import { DaysInStage, OpenLink, PRIORITY_BG, Pill, WaitingPill } from './bits';
 
-const LAST_STAGE = DEAL_STAGES[DEAL_STAGES.length - 1]; // Contract sent: Make client on its cards
+const LAST_STAGE = DEAL_STAGES[DEAL_STAGES.length - 1]; // Proposal sent: Make client on its cards
 const VIEWS = [{ id: 'board', label: 'Board', icon: Columns3 }, { id: 'table', label: 'Table', icon: Rows3 }];
 const QUICK = [
   { id: '', label: 'All open' },
@@ -20,6 +21,14 @@ const QUICK = [
   { id: 'stalled', label: `Stalled ${STALE_DAYS}d+` },
   { id: 'lost', label: 'Lost' },
 ];
+
+// The Lead filter (§21): everything, or one Lead's deals.
+const LEAD_FILTER = [
+  { id: '', label: 'All' },
+  ...Object.entries(LEADS).map(([id, l]) => ({ id, label: l.label, icon: (p) => <LeadIcon lead={id} decorative {...p} /> })),
+];
+// A deal's Lead colours its card's left edge (on top of the chip's own inset highlight).
+const edgeOf = (deal) => (leadOf(deal) ? { boxShadow: `inset 4px 0 0 ${LEADS[leadOf(deal)].edge}, inset 0 1px 0 rgba(255,255,255,.3)` } : undefined);
 
 const dealText = (state, d) => [d.name, accountOf(state, d)?.name, d.sector, d.next, ...dealPeople(state, d).map((p) => p.name)].join(' ').toLowerCase();
 
@@ -31,8 +40,12 @@ export default function Opportunities({ editable, canConvert, onOpen, onEdit, on
   const [quick, setQuick] = useState('');
   const [view, setView] = useState('board');
   const [over, setOver] = useState(null);
+  const [lead, setLead] = useState(''); // '' (all) | 'lyco' | 'assetstack'
 
-  const matches = (d) => (!q.trim() || dealText(state, d).includes(q.trim().toLowerCase())) && (!owner || d.contact === owner);
+  const ofLead = (d) => !lead || leadOf(d) === lead;
+  // A deal made a client goes by its client's Lead (set in Clients).
+  const madeOfLead = (d) => !lead || leadOf(state.clients.find((c) => c.id === d.clientId) || d) === lead;
+  const matches = (d) => (!q.trim() || dealText(state, d).includes(q.trim().toLowerCase())) && (!owner || d.contact === owner) && ofLead(d);
   const open = state.deals.filter((d) => isOpenDeal(d) && matches(d));
   const lost = state.deals.filter((d) => !d.clientId && dealStage(d) === LOST && matches(d));
   const mine = new Set(needsYou(state, state.me, { today: localYmd() }).deals.map((r) => r.deal.id));
@@ -56,11 +69,14 @@ export default function Opportunities({ editable, canConvert, onOpen, onEdit, on
     const account = accountOf(state, d);
     return (
       <div key={d.id} data-deal={d.id} draggable={editable} onDragStart={editable ? (e) => e.dataTransfer.setData('text/plain', d.id) : undefined}
-        className={cn('float rounded-[18px] chip p-3.5', editable && 'cursor-grab active:cursor-grabbing')}>
+        className={cn('float rounded-[18px] chip p-3.5', editable && 'cursor-grab active:cursor-grabbing')} style={edgeOf(d)}>
         <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-1 items-start gap-1.5">
+            <LeadIcon lead={leadOf(d)} className="mt-0.5 shrink-0" />
+            <div className="min-w-0 flex-1">
             <OpenLink onClick={() => onOpen('deal', d.id)} label={`Open ${d.name}`} className="block w-full whitespace-normal font-bold [overflow-wrap:anywhere] hyphens-auto" {...stop}>{d.name}</OpenLink>
             {account && account.name !== d.name && <div className="truncate text-[12px] dimmer">{account.name}</div>}
+            </div>
           </div>
           {editable && (
             <button type="button" data-edit onClick={() => onEdit(d)} aria-label={`Edit ${d.name}`} title="Edit" {...stop}
@@ -97,7 +113,7 @@ export default function Opportunities({ editable, canConvert, onOpen, onEdit, on
   };
 
   const weighted = (list) => list.map((d) => ({ currency: d.currency, value: ((d.value || 0) * dealProbability(d)) / 100 }));
-  const allOpen = state.deals.filter(isOpenDeal);
+  const allOpen = state.deals.filter((d) => isOpenDeal(d) && ofLead(d)); // the numbers follow the Lead filter
   // The first currency large, any others under it (currencies aren't converted into each other).
   const kpi = (label, items) => { const [first, ...more] = totalsList(items); return { value: first, label: [label, ...more].join(' · ') }; };
   return (
@@ -106,7 +122,7 @@ export default function Opportunities({ editable, canConvert, onOpen, onEdit, on
         { value: allOpen.length, label: 'Open deals', tint: '#334155' },
         { ...kpi('Pipeline', allOpen), tint: '#7c3aed' },
         { ...kpi('Weighted', weighted(allOpen)), tint: '#0f9f8f' },
-        { value: state.deals.filter((d) => d.clientId).length, label: 'Made clients', tint: '#f59e0b' },
+        { value: state.deals.filter((d) => d.clientId && madeOfLead(d)).length, label: 'Made clients', tint: '#f59e0b' },
       ]} />
       <div className="mt-6 flex flex-wrap items-center gap-2">
         <SearchField value={q} onChange={setQ} placeholder="Search deals" />
@@ -114,6 +130,7 @@ export default function Opportunities({ editable, canConvert, onOpen, onEdit, on
           <option value="">Everyone</option>
           {owners.map((id) => <option key={id} value={id}>{id === state.me ? 'Mine' : users[id]?.name || 'Someone'}</option>)}
         </select>
+        <Segmented label="Lead" options={LEAD_FILTER} value={lead} onChange={setLead} />
         <Segmented label="View" value={quick === 'lost' ? 'table' : view} onChange={(v) => { setView(v); if (quick === 'lost') setQuick(''); }} options={VIEWS} />
       </div>
       <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Show">
@@ -178,7 +195,7 @@ function DealTable({ deals, lost, onOpen }) {
               return (
                 <tr key={d.id} className="border-t rowline align-middle hover:bg-white/5">
                   <td className="max-w-[240px] px-3 py-2.5 pl-5">
-                    <OpenLink onClick={() => onOpen('deal', d.id)} className="block">{d.name}</OpenLink>
+                    <span className="flex items-center gap-1.5"><LeadIcon lead={leadOf(d)} className="shrink-0" /><OpenLink onClick={() => onOpen('deal', d.id)} className="block min-w-0">{d.name}</OpenLink></span>
                     {account && account.name !== d.name && <div className="truncate text-[12px] dimmer">{account.name}</div>}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 dim">{dealStage(d)}</td>

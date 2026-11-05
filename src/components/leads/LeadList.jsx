@@ -1,4 +1,4 @@
-// Leads → Lists (docs/PHASE2.md §23): one list (or all) with search and filters, flags on each lead (suppressed, already
+// Leads → Lists (docs/PHASE2.md §29): one list (or all) with search and filters, flags on each lead (suppressed, already
 // in the CRM, a repeat), a bulk status change, and Export for agent: the leads ready to send as the agent's CSV, marked
 // Sent to agent.
 import { useMemo, useState } from 'react';

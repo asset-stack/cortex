@@ -1,4 +1,4 @@
-// Small pieces the CRM screens share (docs/PHASE2.md §22): pills for a deal's stage, an account's lifecycle and who a
+// Small pieces the CRM screens share (docs/PHASE2.md §28): pills for a deal's stage, an account's lifecycle and who a
 // deal waits on, days in stage, the local time where someone is, and the pickers for time zones and accounts.
 import { Clock } from 'lucide-react';
 import { STALE_DAYS, WAITING_ON, daysInStage } from '@/data/boards';

@@ -123,7 +123,7 @@ function GoogleAccount() {
   );
 }
 
-/** Task emails (0013): a task's owner hears by email when someone else hands them the task or posts an update on it,
+/** Task emails (0017): a task's owner hears by email when someone else hands them the task or posts an update on it,
  *  sent from one admin's connected Google account. Admins choose theirs (Send from my Google) or stop them. */
 function TaskEmails() {
   const { state, actions, google } = useStore();
@@ -149,7 +149,7 @@ function TaskEmails() {
   let body;
   if (!status) body = <span className="dimmer">Checking…</span>;
   else if (status.demo) body = <span className="dim">Live mode only</span>;
-  else if (status.missing) body = <span className="text-amber-200">Run <code className="font-semibold">0013_task_emails.sql</code> in the Supabase SQL editor first</span>;
+  else if (status.missing) body = <span className="text-amber-200">Run <code className="font-semibold">0017_task_emails.sql</code> in the Supabase SQL editor first</span>;
   else if (!s) body = <span className="text-amber-200">Couldn’t check task emails: {status.error}</span>;
   else {
     const from = s.sender_email || s.sender_name;

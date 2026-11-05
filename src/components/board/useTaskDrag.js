@@ -6,9 +6,9 @@ import { dropPlace } from '@/lib/boards';
 export const DRAG_TYPE = 'application/x-cortex-task';
 
 /**
- * Dragging a board's tasks up or down, or into another of its groups (desktop; a board's Table view and a person's task
- * cards on the Dashboard). Each call is its own drop scope: a drop only lands where its drag started, so two boards
- * (two cards, a card and an embedded board) never take each other's tasks. A drop is placed against the board's full
+ * Dragging a board's tasks up or down, or into another of its groups (desktop; a board's Table view, not the person views'
+ * `view` mode). Each call is its own drop scope: a drop only lands where its drag started, so two boards on one page (a
+ * board and an embedded one) never take each other's tasks. A drop is placed against the board's full
  * order (`groups`: the board's own, not the filtered ones shown), by dropPlace() in src/lib/boards.js.
  * → {
  *   drag (the task being dragged), over ({ group, row, place } on a row, { group, top } on the top, { group } the end),
@@ -43,7 +43,7 @@ export default function useTaskDrag({ boardId, groups, readOnly = false }) {
     onDragStart: (e) => {
       e.dataTransfer.setData(DRAG_TYPE, itemId);
       e.dataTransfer.effectAllowed = 'move';
-      const row = e.currentTarget.closest('tr, li');
+      const row = e.currentTarget.closest('tr');
       if (row) e.dataTransfer.setDragImage(row, 24, row.offsetHeight / 2);
       // React misses dragend when the row is gone by then (moved or hidden by someone else mid-drag); the handle
       // itself still gets it.

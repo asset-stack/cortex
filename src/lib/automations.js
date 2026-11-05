@@ -196,15 +196,18 @@ export function clientCreatedLocal(state, clientId, { me = state.me, uid: newId 
 // ── Outreach → Pipeline ────────────────────────────────────────────────────────────────────────────────────
 
 export const PIPELINE_STATUSES = ['Replied', 'Meeting booked'];
-// The stages a booking moves a deal on from (0014's contact_pipeline(); the last two are the names before 0014).
-const EARLY_STAGES = ['Interested', 'Opportunities', 'Contacted'];
+// No automatic row for a deal reaching Demos any more (§26: 0016 drops 0014's deal_demo_row); a deal's tasks are added
+// on it (Add task) and live on Pipeline › Demos.
+
+// The stages a booking moves a deal on from (0008's contact_pipeline(), kept by 0018's).
+const EARLY_STAGES = ['Opportunities', 'Contacted'];
 const norm = (s) => String(s ?? '').trim().toLowerCase();
 
-/** A deal's fields from 0014 on, as a new deal starts (the database's defaults; reached its stage `at`). */
+/** A deal's fields from 0018 on, as a new deal starts (the database's defaults; reached its stage `at`). */
 export const dealDefaults = (at = new Date().toISOString()) => ({
   accountId: '', contactIds: [], currency: 'AUD', closeOn: '', probability: null, waitingOn: '', lostReason: '', stageAt: at,
 });
-/** An account's fields as a new one starts (0014's defaults). */
+/** An account's fields as a new one starts (0018's defaults). */
 export const accountDefaults = (at = new Date().toISOString()) => ({
   kind: 'prospect', lifecycle: 'new', lifecycleNote: '', revisitOn: '', sector: '', country: '', region: '', timezone: '', domain: '',
   website: '', size: '', guardrails: '', prepUrl: '', referredBy: '', owner: '', clientId: '', createdAt: at,
@@ -237,10 +240,10 @@ function personFor(state, account, { name = '', email = '', owner = '' }, newId)
   return c;
 }
 
-// The contact_pipeline trigger (0014), for a contact whose status was `prevStatus` ('' for a new contact). When it
+// The contact_pipeline trigger (0018), for a contact whose status was `prevStatus` ('' for a new contact). When it
 // becomes Replied or Meeting booked: its organisation's account (found by name, or a new prospect; its lifecycle moves
 // on as lifecycleAfter() says) and the person as its contact; a deal for it (named after the organisation, owned by the
-// contact's owner or `me`, waiting on us, with the person on it), or its deal moves from Interested to Meeting booked on
+// contact's owner or `me`, waiting on us, with the person on it), or its deal moves from Opportunities or Contacted to First meetings on
 // a booking (never back from later on); and the owner gets a follow-up to-do for `day`, by default the owner's own today
 // (user_today()), once per contact and day. → { deal, todo } (todo null when it already existed), or null when nothing
 // applies.
@@ -263,15 +266,15 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day, m
   if (!deal) {
     deal = {
       id: newId(), name: org.slice(0, 200), sector: '', value: 0, priority: 'P2',
-      stage: booked ? 'Meeting booked' : 'Interested', contact: owner,
-      next: booked ? `Prepare meeting with ${name}` : `Reply to ${name}`, contactId: c.id,
+      stage: booked ? 'First meetings' : 'Opportunities', contact: owner,
+      next: booked ? `Prepare meeting with ${name}` : `Reply to ${name}`, contactId: c.id, source: '', // no Lead yet (0013's default)
       ...dealDefaults(), accountId: account.id, contactIds: person ? [person.id] : [], waitingOn: 'us',
     };
     state.deals.push(deal);
     logStageLocal(state, deal, '', deal.stage, { by: me, uid: newId });
   } else if (booked && EARLY_STAGES.includes(deal.stage)) {
-    logStageLocal(state, deal, deal.stage, 'Meeting booked', { by: me, uid: newId });
-    deal.stage = 'Meeting booked';
+    logStageLocal(state, deal, deal.stage, 'First meetings', { by: me, uid: newId });
+    deal.stage = 'First meetings';
     deal.stageAt = new Date().toISOString();
   }
 
@@ -287,7 +290,7 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day, m
   return { deal, todo };
 }
 
-// ── Deal stage history (0015) ───────────────────────────────────────────────────────────────────────────────────
+// ── Deal stage history (0019) ───────────────────────────────────────────────────────────────────────────────────
 
 /** Demo mode's log_deal_stage trigger: a row when a deal is added (from ''), moves stage, or is made a client (to 'Won').
  *  → the row, or null when nothing moved. */
@@ -298,7 +301,7 @@ export function logStageLocal(state, deal, from, to, { by = state.me || '', at =
   return h;
 }
 
-/** 0015's one-off step: a starting row for each deal with none (its stage, or Won once made a client, when it reached it). */
+/** 0019's one-off step: a starting row for each deal with none (its stage, or Won once made a client, when it reached it). */
 export function historyBackfillLocal(state, { uid: newId = uid } = {}) {
   state.dealHistory ||= [];
   const has = new Set(state.dealHistory.map((h) => h.dealId));
@@ -309,20 +312,13 @@ export function historyBackfillLocal(state, { uid: newId = uid } = {}) {
   return state;
 }
 
-const OLD_STAGES = { Opportunities: 'Interested', Contacted: 'Interested', 'First meetings': 'Meeting booked', Demos: 'Demo held', Won: 'Demo held' };
-
-/** 0014's one-off steps for demo data saved before it: the old stages renamed (a Contacted deal waits on them), every
- *  client a customer account, every deal its account (its client's, else the one with its name, else a new one), and
+/** 0018's one-off steps for demo data saved before it: every client a customer account, every deal its account (its client's, else the one with its name, else a new one), and
  *  a deal from an outreach contact that person as its contact. Safe to run again (nothing is left to do). */
 export function crmBackfillLocal(state, { uid: newId = uid } = {}) {
   state.accounts ||= [];
   state.crmContacts ||= [];
   (state.deals || []).forEach((d) => {
     Object.entries(dealDefaults(d.stageAt || new Date().toISOString())).forEach(([k, v]) => { if (d[k] === undefined) d[k] = v; });
-    if (OLD_STAGES[d.stage]) {
-      if (d.stage === 'Contacted' && !d.waitingOn) d.waitingOn = 'them';
-      d.stage = OLD_STAGES[d.stage];
-    }
   });
   (state.clients || []).forEach((cl) => {
     if (state.accounts.some((a) => a.clientId === cl.id)) return;

@@ -1,4 +1,4 @@
--- Cortex 0016: the Leads page (docs/PHASE2.md §23). Run in the Supabase SQL editor after 0015. Safe to re-run, also
+-- Cortex 0020: the Leads page (docs/PHASE2.md §29). Run in the Supabase SQL editor after 0019. Safe to re-run, also
 -- statement by statement (the SQL editor may run it that way). The app opens and works without it (Leads shows which file
 -- to run until it has).
 --
@@ -118,4 +118,4 @@ create trigger protect_created before insert or update on public.suppressions
 
 commit;
 
-select 'Cortex 0016 applied' as done;
+select 'Cortex 0020 applied' as done;

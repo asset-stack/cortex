@@ -4,7 +4,7 @@ import { useStore } from '@/data/store';
 import { PRIORITY } from '@/data/boards';
 import { Avatar, PageHeader } from '@/components/ui';
 import NewTaskModal from '@/components/board/NewTaskModal';
-import MyTasks from '@/components/work/MyTasks';
+import PersonTasks from '@/components/work/PersonTasks';
 import { boardHref } from '@/lib/boards';
 import { localClock, localYmd } from '@/lib/format';
 import { prioritiesFor, topTasks, workload } from '@/lib/work';
@@ -18,7 +18,8 @@ const COUNTS = [
   { key: 'open', label: 'Open', tint: '' },
 ];
 
-// Someone's tasks on the team boards (never their notes), as the viewer may see them.
+// The tasks someone owns on the team boards (never their notes; not what they're only Also on: §25), as the viewer may
+// see them.
 const useRows = (personId) => {
   const { state } = useStore();
   const today = localYmd();
@@ -30,7 +31,7 @@ function PersonCard({ user }) {
   const rows = useRows(user.id);
   const load = workload(rows);
   const href = `#/team/${encodeURIComponent(user.id)}`;
-  // Top three by stage: what's stuck, what they're on, what's next (theirs: never Also on, nor the backlog with no priority).
+  // Top three by stage: what's stuck, what they're on, what's next (not the backlog with no priority).
   const top = topTasks(rows);
   return (
     <section aria-label={user.name} className="glass glass-rim flex flex-col rounded-[24px] p-5">
@@ -58,14 +59,14 @@ function PersonCard({ user }) {
             </a>
           </li>
         ))}
-        {top.length === 0 && <li className="dimmer">{rows.some((r) => !r.also) ? 'Nothing prioritised yet.' : 'Nothing assigned.'}</li>}
+        {top.length === 0 && <li className="dimmer">{rows.length ? 'Nothing prioritised yet.' : 'Nothing assigned.'}</li>}
       </ol>
       {rows.length > top.length && <a href={href} className="mt-2 self-start text-[13px] font-semibold underline underline-offset-2">See all</a>}
     </section>
   );
 }
 
-/** One person's page: what waits on them and their tasks, and New task for them. */
+/** One person's page: every task they own, as their boards show them, and New task for them. */
 function Person({ user }) {
   const { state } = useStore();
   const rows = useRows(user.id);
@@ -88,9 +89,9 @@ function Person({ user }) {
           <Plus className="h-4 w-4" /><span className="hidden sm:inline">{self ? 'New task' : `New task for ${user.name.split(' ')[0]}`}</span>
         </button>
       </div>
-      <div className="mt-6 flex flex-col gap-6">
-        {load.waiting > 0 && <MyTasks rows={rows.filter((r) => r.waiting)} personId={user.id} waiting act={self} title={self ? 'Waiting on you' : `Waiting on ${user.name}`} />}
-        <MyTasks rows={rows.filter((r) => !r.waiting)} personId={user.id} act={self} load={load} title={self ? 'My tasks' : 'Tasks'} />
+      <div className="mt-6">
+        {/* Waiting ones too: their Owner shows the amber ring until they're accepted (starting one accepts it). */}
+        <PersonTasks rows={rows} personId={user.id} act={self} load={load} title={self ? 'My tasks' : 'Tasks'} />
       </div>
       {adding && <NewTaskModal onClose={() => setAdding(false)} owner={user.id} />}
     </div>

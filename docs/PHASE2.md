@@ -83,6 +83,7 @@ boards: [{ id, module, name, owner, groups }],          // 0006 (§11); was { pr
 //   item.values.people: [userId]   replaces values.owner (string)
 //   item.values.also: [userId]      the other people on a task (Also on, §20); never the owner
 //   item.values.department: ''|module  a task's department where it isn't its board's (§20; '' = the board's)
+//   item.values.startedAt: iso      when its status first left Not started (§24; only nextValues() sets it)
 todos: [{ id, assignee, createdBy, title, notes, day /* 'YYYY-MM-DD' */, start /* 'HH:MM'|'' */,
           minutes, category, source /* 'manual'|'routine'|'automation' */, routineId /* ''|id */,
           ref /* e.g. 'contact:<id>' | 'deal:<id>' | 'item:<id>' | 'bank:<YYYY-MM-DD>' | '' */,
@@ -108,10 +109,10 @@ mailboxes:      [{ id, name, addresses /* [lower-case address] */, owner /* user
 outreachNotes:  [{ id, mailbox /* '' = all mailboxes */, pinned, body, author, createdAt }],         // newest first
 outreachSheet:  '<the sheet link>',                     // undefined in live mode without Outreach access
 outreachEmails: [{ id, mailbox, sender, sentOn, … }],   // demo only (emailFromRow() shape, §12)
-// 0012 (§19): a deal's or client's CRM profile. Newest first. 0014 (§22): or an account's or a contact's.
+// 0012 (§19): a deal's or client's CRM profile. Newest first. 0018 (§28): or an account's or a contact's.
 crmEntries:     [{ id, dealId, clientId, accountId, contactId, kind /* 'note'|'meeting'|'link' */, title, body, url, label,
                    happenedOn, attendees, user, createdAt }],
-// 0014 (§22): the CRM. Accounts in order, then the people at them.
+// 0018 (§28): the CRM. Accounts in order, then the people at them.
 accounts:       [{ id, name, kind /* 'prospect'|'customer'|'partner'|'supplier' */, lifecycle /* LIFECYCLES */,
                    lifecycleNote, revisitOn, sector, country, region, timezone, domain, website, size, guardrails, prepUrl,
                    referredBy /* '' | account id */, owner, clientId /* '' | the customer's client */, createdAt }],
@@ -119,9 +120,9 @@ crmContacts:    [{ id, accountId, name, title, email, phone, linkedin, timezone,
                    status /* 'active'|'left'|'do_not_contact' */, owner, createdAt }],
 //   deal: { ..., accountId, contactIds: [crm contact id], currency, closeOn, probability /* null = the stage's */,
 //           waitingOn /* ''|'us'|'them' */, lostReason, stageAt /* iso: when it reached its stage */ }
-// 0015 (§22): each deal's stage history, oldest first. Written only by the database (read only in the app).
+// 0019 (§28): each deal's stage history, oldest first. Written only by the database (read only in the app).
 dealHistory:    [{ id, dealId, from /* '' when added */, to /* a stage, or 'Won' */, at, by }],
-// 0016 (§23): Leads. Lists in order; leads in the order they were added; suppressions by kind, then value.
+// 0020 (§29): Leads. Lists in order; leads in the order they were added; suppressions by kind, then value.
 leadLists:      [{ id, name, source /* 'csv'|'apollo'|'manual' */, notes, createdBy, createdAt }],
 leads:          [{ id, listId, name, title, email, phone, linkedin, company, domain, sector, country, region, timezone, size,
                    status /* LEAD_STATUSES */, accountId, personId /* the CRM record it became or is */, owner, note, createdAt }],
@@ -704,6 +705,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 
 ## 14. 0008: Pipeline — Opportunities → Contacted → First meetings → Demos; editable deals; Work in Progress
 
+(§21 adds **Proposal sent** after Demos, and Make client moves there.)
+
 - **Owner's ask**: deals editable; Won replaced by **Contacted**, between Opportunities and First meetings.
 - **Owner's decisions**: **Make client** is on the **Demos** column (the last); a deal made a client leaves the board (it
   lives in Clients) and counts in the **Made clients** KPI (was Won). Existing Won deals: those made clients stay off the
@@ -1129,14 +1132,14 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   never the owner (`nextValues()` drops them, and the key when it's empty). Picking the owner of a task that still has
   several people puts the others on Also on (they used to drop off it). The store adds only people who can see the
   board, and keeps those already on a task when they lose access for a while (deactivated, or set to None): they're
-  back on it when restored, and the lists hide it from them meanwhile. `prioritiesFor()` includes the tasks someone is
-  also on (`also: true`, `owner`), `workload()` and `topTasks()` (Team cards) leave them out, and Waiting on you is the
-  owner's only. The board's person filter (`itemMatches()`) and the Calendar's people include Also on.
+  back on it when restored, and the lists hide it from them meanwhile. `prioritiesFor()` included the tasks someone is
+  also on (`also: true`, `owner`; until §25: lists are what you own, `ownedBy()`), `workload()` and `topTasks()` (Team cards) leave them out, and Waiting on you is the
+  owner's only. The board's person filter (`itemMatches()`) and the Calendar's people included Also on (superseded by §25: the owner only).
 - **Department**: the board's own shows muted; picking another stores it, picking the board's own (or Clear) stores ''.
   The board's filter has a Department section. A Kanban card and a My tasks row show it when it isn't the board's. Do
   today's to-do and a timesheet's suggestions go under the task's department (`categoryOf()` in `src/lib/timesheet.js`:
   a marketing task on an Operations board counts as Marketing). New task shows the chosen board's and can change it.
-- **My tasks** (`src/components/work/MyTasks.jsx`; Dashboard and Team › person): a card per board (`byBoard()`:
+- **My tasks** (superseded by §22's tables; was `src/components/work/MyTasks.jsx`; Dashboard and Team › person): a card per board (`byBoard()`:
   Operations, Marketing, Outreach, Clients, Pipeline, team boards first), titled by where it lives and linked to the
   board, its rows in the board's own order and under their group's name when a card spans several groups. Each row:
   priority, name (renamed in place), whose it is when you're Also on, its department when it isn't the board's, its
@@ -1154,7 +1157,200 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Later, not built**: Move up/down from the keyboard on the board page itself (it has drag and group moves), a
   personal order separate from the board's, and Also on from an `@Name`.
 
-## 21. 0013: task emails — the owner hears when a task is handed to them or updated
+## 21. 0013: Proposal sent, and a Lead (LYCO or AssetStack) on deals and clients
+
+- **Owner's decisions (2026-10-29)**: Pipeline's columns are Opportunities → Contacted → First meetings → Demos →
+  **Proposal sent**. Every deal and client says whether the work came through **LYCO** (co-pitched) or is
+  **AssetStack direct**, as a small icon (the owner's two marks) and a coloured edge on a deal's block. The live pipeline was
+  then reloaded from the owner's list (a one-off SQL script run in the SQL editor, never in this repo).
+- **Stages**: `DEAL_STAGES` gains `'Proposal sent'` (sentence case, like *First meetings* and the clients' *Proposal sent*
+  status). `deals.stage` is free text, so the stage needs no SQL. **Make client** sits on the last column, now Proposal
+  sent (card and Edit deal); `dealStage()` shows a stray Won there. The booking rule (0008's `contact_pipeline()`,
+  `contactPipelineLocal()`) only moves Opportunities and Contacted, so it never touches Demos or Proposal sent. The
+  Pipeline KPI *Demos* became *Proposals sent*. Imports: proposal, quote, tender or contract wording → Proposal sent; won,
+  signed or client wording → the last column; demo, pilot or trial → Demos (`dealStage()` in `src/lib/importers.js`
+  names its stages, so adding one can't shift them).
+- **Lead** (`0013_lead.sql`): `deals.source` and `clients.source`, `text not null default ''`, checked to
+  `'' | 'lyco' | 'assetstack'`; the existing module policies cover them (Pipeline edit sets a deal's, Clients edit a
+  client's), and both tables were already in realtime. In the app: `LEADS`, `isLead()`, `leadOf()` (`src/data/boards.js`);
+  `cleanDealPatch()` and `updateClient` take only a known Lead or none; `convertDeal` (Make client) gives a new client
+  the deal's Lead, and an existing client without one the deal's. Deals made by the outreach automation start with none.
+  Imports read a *Lead* / *Lead source* / *Source* / *Partner* column (LYCO, co-pitched or partner wording → LYCO;
+  AssetStack or direct → AssetStack).
+- **Screens**: the marks are `src/components/LeadIcon.jsx` (inline SVG, traced from the owner's icons; it names itself,
+  e.g. "LYCO lead · co-pitched", unless the words are beside it). A deal's block shows the mark before its name and a
+  4px left edge in the Lead's colour; Edit / New deal has a Lead select; the deal's profile shows it in its header.
+  Clients show the mark by the name (cards and list) and a Lead select in the drawer (read-only at view). Pipeline and
+  Clients each have an **All · LYCO · AssetStack** filter (component state): on Pipeline the columns and KPIs follow it;
+  on Clients the clients and their counts do, while money (Owed, Invoices) stays the whole business.
+- **Release order**: 0013 adds columns that the app sends with every deal and client save, so it **must run before the
+  release is published** (no `since` fallback for a column): the owner runs it and the information_schema check in
+  `DEPLOY.md` §2 returns two rows, then main is updated.
+- **Tests**: `scripts/test-sync.mjs` (the stages and `dealStage()`, `LEADS` / `isLead` / `leadOf`, `cleanDealPatch`'s Lead,
+  the import stage and Lead mapping, the deal and client round trip with `source`, a seed deal in every column and both
+  Leads); `scripts/test-db.mjs` (0013: re-runs, the check, who may set it, and the sync writing it).
+
+## 22. One task, one look: Team › Name and My tasks in the boards' own tables; AS Team; deal next steps on Operations
+
+- **Why** (owner, 2026-10-31): the same job showed on the board (a table you edit), Team › Name (a compact list, editable
+  only on your own page), the Dashboard (the same list) and My notes; it read as duplicates and confused the team.
+- **Team › Name** (`src/pages/Team.jsx`) is "just a view of all the allocated work": every open task the person owns
+  (since §24 not the ones they're only Also on; since §25 their Dashboard doesn't list those either), on the team boards both of you
+  can see (`prioritiesFor(…, { teamOnly: true })`, which since §25 returns only what they own), as
+  `src/components/work/PersonTasks.jsx`: a card per board (`byBoard()`), titled where it lives and linked to the board,
+  holding that board's own `TableView` with just their tasks, in the board's groups and order. Same columns and cells as
+  the board (Operations: Task, Updates, Owner, Also on, Status, Priority, Due, Department), edited by whoever can edit the
+  board (`canEditBoard`), and a task opens in the same `ItemDrawer`. Waiting tasks are in the tables (the Owner's amber
+  ring; starting one accepts it).
+- **`TableView`'s `view` mode**: no group options, Add task, Add group, rename/delete or dragging (the board's own
+  controls: order, groups and adding stay on the board); `rowAction(item)` fills the last cell (**Today**, i.e. Do
+  today, for the person themself or an admin).
+- **Dashboard**: Waiting on you (`src/components/work/WaitingTasks.jsx`, with Accept), Carried over and Today stay
+  beside Needs attention, Mentions and Tools; **My tasks** (the same `PersonTasks`) and My notes go full width below.
+  My tasks' Move up/down and drag went with the compact list (`stepPlace()` removed); order is set on the board.
+- **Deal next steps on Operations**: Operations' team boards have a **Deal** column (`values.deal`, after Department,
+  `sparse`: a table shows it only once a task on the board has one; the drawer always does). A deal's **Add next step**
+  offers Operations boards first (Team Tasks), then Outreach's, only boards with a Deal column (`NewTaskModal`).
+  `dealTasks()` / `clientTasks()` find them on either; they show in Team › Name for the Owner (since §24) and on the
+  Dashboard for the Owner (and Also on, until §25). Older next steps on Sales Tasks stay there (tasks don't move across modules).
+- **Data (SQL in the editor, not in this repo)**: the shared profile *Asset Stack* became **AS Team** (Edit on Operations,
+  Marketing, Outreach and Clients, so it can own a task on any team board); Operations' *Clients* and *Projects* boards
+  were folded into Team Tasks (their groups kept, prefixed with the old board's name) and deleted.
+- **Also**: Pipeline's *Made clients* under the Lead filter goes by the client's Lead; imports map a *Lead Status* column
+  to the stage and no longer read *Indirect* as AssetStack direct.
+- **Tests**: `scripts/test-sync.mjs` (§22 deal next steps on Operations, the Operations columns, the import fixes);
+  Playwright (Team › Name and Dashboard tables, view mode, the drawer, Do today, 390px).
+
+## 23. 0014: one Clients › Demos row per Pipeline deal in Demos or Proposal sent (superseded by §26: no automatic row; Clients › Demos moved under Pipeline)
+
+- **Why** (owner, 2026-10-31): Pipeline's Demos and Proposal sent deals and the rows on Clients › Demos were kept apart and
+  doubled up. Every deal there (the CRM) should have exactly one row on Clients › Demos, linked to it.
+- **The link**: Clients boards have a **Deal** column (`values.deal`, sparse like Operations': a table shows it once a
+  task uses it), right after Client, so a row can point at a prospect before it's a client. `dealTasks()` /
+  `clientTasks()` follow `hasDeal`, so the row shows on the deal's profile, and on the client's page once it's made one.
+- **Automatic** (`0014_deal_demo_rows.sql`, trigger `deal_demo_row`; demo mode `dealDemoRowLocal()` in
+  `src/lib/automations.js`, called by the store's `addDeal` / `moveDeal` / `updateDeal` / imports): a deal **entering**
+  Demos or Proposal sent (added there, or moved there from another stage) with no linked row on any Clients team board
+  gets one on the **first** Clients team board (by position: Demos), at the end of its first group: named after the
+  deal, owned by its owner, Not started, `values.deal` (and `values.client` once it has one), not a hand-over. Moving
+  between Demos and Proposal sent never makes one again, so a row someone deleted stays deleted. Only a `values.deal` link
+  counts: a row added by hand earlier needs its Deal set, or the deal gets a second row. Security definer, like
+  `contact_pipeline`: whoever moves the deal may have only Clients view. Deals already there when it ran got theirs
+  from the one-off match below.
+- **First match** (data; SQL in the editor, not in this repo): a read-only preview, then an apply with the same rules,
+  linked each Demos / Proposal sent deal to its row when it was clear (already linked; the same name; or one name
+  starting with the other, the shorter two words or more, or one word of five letters or more), added a row for each deal
+  with none, and left the ambiguous ones (more than one possible row, or a row fitting more than one deal) and the "check
+  by hand" ones (only the same first word) for the owner to link in the Deal column, so nothing doubled up.
+- **Also in this release**: a task handed over and not yet accepted shows an **amber ring** on its Owner (boards, Team ›
+  Name, My tasks, the drawer; "waiting to accept" for screen readers); the person tables keep focus on the card's heading
+  when a task leaves them; the sparse Deal column ignores deleted deals.
+- **Tests**: `scripts/test-sync.mjs` (§23: `dealDemoRowLocal`, the Clients columns, the seed's Demos rows);
+  `scripts/test-db.mjs` checks 110–116 (0014: re-runs, entering only, no double-ups, the client, security definer, nowhere
+  to put it).
+
+## 24. Passing a task on: whoever had it stays on it, as Also on; Done takes two clicks (no migration)
+
+- **Why** (owner, 2026-10-31): work goes back and forth. Shem does the designs and Transurban goes to David to review;
+  Shem posts updates on Alltel, then it's with David to upload some info. The Owner is whoever has the next step, and
+  changing it used to drop the person who had it off the task. (Since §25 Also on shows on the task only, not in
+  anyone's lists: the one who had it stays on the task, and their lists show what they own.)
+- **Team › Name lists only what the person owns** (owner, 2026-10-31: Team › David showed Josh's tasks David was Also on).
+  `src/pages/Team.jsx` keeps the rows of `prioritiesFor()` they own (`owner`; not `also`, nor second on a task that still
+  has several people; Work in Progress, which has no Owner, by its Contact), on the person page and their card. Until §25
+  the Dashboard's My tasks kept them all (superseded: `prioritiesFor()` itself keeps only what the person owns, for the
+  Dashboard too, and Team.jsx filters nothing).
+- **The rule** (`nextValues()`, `src/lib/work.js`): when the Owner changes from one person to another, the one who had it
+  goes on **Also on**. That's whether they hand it on themselves, the new owner takes it back, or an admin moves it.
+  Handing it back swaps them (the new owner comes off Also on, as before). It still waits on the new owner to accept it
+  when someone else made the change, as before. The exception: giving away your own task that has never been started
+  only says who it's for, so you aren't kept on it. "Started" is `values.startedAt`, set by `nextValues()` the first time
+  its status is anything but Not started (In progress, Stuck, Done) and kept for good, so a task ticked Done and unticked
+  (Not started again) still counts as started; an older task without it counts as started unless it's Not started. The
+  exception covers a new task too: its maker is its first owner, whether it's made with New task (`newTaskValues()`) or
+  added on the board and given its owner after.
+  Nothing goes on Also on when the Owner is cleared or was empty, on a people list (Work in Progress' Contact), or on a
+  board without Also on (personal pages, Work in Progress: `boardValues()`).
+- **AS Team** (removed in §25): while it was there, a task taken from AS Team kept AS Team on Also on.
+- **Done takes two clicks** (owner, 2026-10-31: a single tick looked like it deleted the task, because Team › Name and
+  My tasks list open tasks only). A table's Done box (`DoneBox` in `src/components/board/TableView.jsx`) turns into an
+  amber "click again" check on the first click; the second marks the task Done (status Done). It settles back after 4
+  seconds, on Escape (focus back on the box) or when focus moves away. Unticking takes one click. A Done task stays on its
+  board, crossed out.
+- **Data**: `values.also` only (jsonb), synced as before; nothing to run in Supabase.
+- **Tests**: `scripts/test-sync.mjs` (§24, and the hand-over expectations in the owners, accept and §20 checks);
+  Playwright (handing on and back, taking it back, a new task; the Done box at 1440 and 390px).
+
+## 25. A person's lists are what they own; Pipeline › Deal tasks; AS Team removed (0015)
+
+- **Why** (owner, 2026-11-01): Team › David showed tasks David was only Also on (Shem's G2 reviews, a supplier task),
+  and a task added on the Oman deal for Josh showed in four places (Team Tasks, Clients › Demos, AS Team's page, Team ›
+  David). It should be on the deal (the CRM) and in Josh's lists, and nowhere else that reads as a copy.
+- **Lists are what you own** (`ownedBy()`, `src/lib/work.js`): a person's Dashboard (My tasks, Waiting on you), Team page
+  and Team card, a board's person filter (`itemMatches()`) and the Calendar's people (`collectEntries()`) take the tasks
+  they own: the owner (the first of `values.people`) on a board with an Owner column; on Work in Progress (no Owner) one
+  of its Contacts. Also on, and being second on a task that still has several people, shows on the task only. Workload,
+  Waiting and Needs attention were the owner's already.
+- **Pipeline › Deal tasks** (`DEAL_TASKS_BOARD` in `src/data/boards.js`, made by `0015_deal_tasks_board.sql`; demo mode: the
+  seed, and `migrate()` once for older demo data): the one board a deal's next steps live on.
+  - Underneath it is an Operations ('projects') team board with a fixed id: Operations' access and policies (staff edit,
+    as when next steps were on Team Tasks), and its tasks move to and from Operations' boards (the drawer's Board list).
+  - On screen it is Pipeline's (`areaOf()`: breadcrumbs, card titles "Pipeline › Deal tasks", the New task list, card
+    order with Pipeline's) and its department is Pipeline (`departmentOf()`). It is in no menu and never a module's
+    default board (`resolveBoard()`); its own address opens it.
+  - Its columns (`schemaOf()`): Owner, Also on, Status, Priority, Due, Deal. No Department.
+  - A deal's **Add next step** puts the task there (`NewTaskModal`: with a deal preset, Deal tasks is the only place once it
+    exists; before 0015, Operations' and Outreach's boards with a Deal column, as in §22). A plain New task never offers it.
+  - Older next steps stay where they are (Team Tasks, Sales Tasks); one on an Operations board can be moved to Deal tasks in
+    its drawer (Board). Tasks can't move between modules, so one on Outreach stays there.
+- **A deal's Next steps are its tasks, not its Clients › Demos row** (`dealTasks()` leaves Clients boards out). The Demos
+  row (§23) stays its owner's task (owner's choice, 2026-11-01).
+- **AS Team removed** (data; SQL in the editor, not in this repo): the tasks AS Team owned were deleted, AS Team came off
+  every Also on and people list, its deals and clients lost it as owner (to be reassigned in the app), its to-dos and
+  routines went, and the profile was switched off. Work for the whole team: one main Owner, the others on Also on.
+- **Release**: 0015 adds no table or column, so the app opens either way (without it, Add next step uses Operations'
+  boards). Run it **after** the release is live: the app before it shows Deal tasks as an ordinary Operations board (in the
+  menu and in New task). Board options (Move up/down, rename, delete) leave it out (`Board.jsx`, the store's `moveBoard`),
+  and the nav marks Pipeline on its page. Check it with `select name from public.boards where id = 'dea15000-0000-4000-8000-000000000001';` (one row,
+  `Deal tasks`).
+- **Tests**: `scripts/test-sync.mjs` (§25: `ownedBy()`, the lists, filters and Calendar; Deal tasks' schema, area,
+  department, breadcrumb, card order, `resolveBoard()`, the seed and `migrate()`; `dealTasks()` without the Demos row);
+  `scripts/test-db.mjs` checks 117–118 (0015: re-runs, one board and group after Operations' team boards; Operations'
+  access to it).
+
+## 26. Pipeline › Demos: the deals' tasks; Add task on a deal; no automatic row (0016)
+
+- **Why** (owner, 2026-11-01): Clients › Demos should sit under Pipeline and be the tasks for every deal in the pipeline.
+  A deal's profile says **Add task** (not "next steps"), with every task field, and the task it makes is saved on the
+  deal (the CRM) and lives on Pipeline › Demos as a task to do. Nothing is added by itself next to it (owner's choice).
+- **The board**: 0015's fixed-id board (`DEAL_TASKS_BOARD`) is named **Demos** (0016; the seed, and `migrate()` for older
+  demo data under `seededBoards` `'pipelineDemos'`). Still an Operations board underneath (Operations' access, staff edit).
+  Its columns: Owner, Also on, Status, Priority, Due, **Department** (its own is Pipeline: `departmentOf()` /
+  `departmentValue()` go by `areaOf()`), Deal.
+- **Where**: Pipeline has a sidebar sub-menu (and a chip row on a phone), like Clients: **Pipeline** (the deals:
+  `#/pipeline`), then **Demos** (`#/projects/<id>`, marked as Pipeline's). No New board there; Work in Progress stays on the
+  Pipeline page under the deals.
+- **Clients › Demos moves** (0016 in the database, `migrate()` in the demo): Clients' team board(s) named Demos give their
+  groups, in order, with their tasks (owners, updates, subtasks, status, Deal), to Pipeline › Demos after its own group,
+  then go. Those tasks now follow Operations' access, not Clients'. Clients boards lose their Deal column.
+- **A deal's Tasks** (`Profile.jsx`, was Next steps): its open tasks on Pipeline › Demos (the ones that came from Clients ›
+  Demos included) and older ones on Operations or Outreach (`dealTasks()`); **Add task** opens New task with the deal
+  preset and Pipeline › Demos the only place, and every field: name, Deal, Owner, Priority, Due, Also on, **Status**,
+  Department and a first **Update** (posted as the task's first update). New task has Status and Update everywhere. A
+  client's profile says Tasks / Add task too.
+- **No automatic row**: 0016 drops 0014's `deal_demo_row` trigger and function (if 0014 ever ran); demo mode no longer
+  adds one (`dealDemoRowLocal()` removed from `src/lib/automations.js` and the store). Production never ran 0014, and
+  skips it.
+- **Release**: 0016 adds no table or column; the app opens without it (the board shows as Deal tasks until it runs, and
+  Clients › Demos stays). Run it after the release is live. Check: `select name from public.boards where id =
+  'dea15000-0000-4000-8000-000000000001';` gives `Demos`, and `select count(*) from public.boards where module =
+  'clients' and name = 'Demos';` gives 0.
+- **Tests**: `scripts/test-sync.mjs` (§25/§26: the board's columns, department, breadcrumb, `dealTasks()`, the seed and
+  `migrate()` moving Clients › Demos; no automatic row); `scripts/test-db.mjs` checks 119–120 (0016: re-runs, the trigger
+  gone, the move with updates and subtasks, same_audience back on; no row after; Operations' access; cross-module moves
+  refused again).
+
+## 27. 0017: task emails — the owner hears when a task is handed to them or updated
 
 - **Owner's ask**: a task's owner gets an email when they are assigned a task or an update is made on it.
 - **Decisions** (made in the build, the owner can change them): "an update" is a post in the task's **Updates** (not
@@ -1163,7 +1359,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   from **one admin's Google account** (their existing Gmail and Drive connection, Settings → Business: no new Google
   permission, vendor or key), named *Cortex*; it isn't each actor's own Gmail, since staff can't use Google for anything
   but their calendar.
-- **Database** (`0013_task_emails.sql`): `private.task_mail` (the queue: kind `assigned | update`, task, update,
+- **Database** (`0017_task_emails.sql`): `private.task_mail` (the queue: kind `assigned | update`, task, update,
   recipient, actor, claimed / sent / attempts / error) and `private.task_mail_settings` (the sender, the last send and
   error), neither readable from the app. Triggers queue in the save's transaction: `queue_task_assigned` (after insert or
   update of `values` / `done` on `items`: a new owner who isn't `auth.uid()`; never a done task, Work in Progress or a
@@ -1182,7 +1378,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **App**: `mailsOwner()` (`src/lib/work.js`) says when a save may have queued one (`addItem`, `updateItem`, `addUpdate`);
   live mode then asks `task-mail` once the save has landed (1.5 s after the last such save, after a flush), on opening
   Cortex and every 5 minutes while the tab is visible. Demo mode sends nothing. **Settings** → **Business** → **Task
-  emails** (admins): *Sent from …* / *Off* / *needs to reconnect Google* / *Run 0013_task_emails.sql …*, **Send from my
+  emails** (admins): *Sent from …* / *Off* / *needs to reconnect Google* / *Run 0017_task_emails.sql …*, **Send from my
   Google**, **Stop**, and the last failure. No synced state changes, so the release doesn't need the migration to open.
 - **Tests**: `scripts/test-db.mjs` phase 13 (re-runs and the done row; what queues and what doesn't, sync upserts;
   privileges; the sender rule; the claim's grouping, drops and retries; access checked as the recipient; stop);
@@ -1191,42 +1387,44 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Later, not built**: a per-person switch to opt out, a daily digest instead of each change, emails for other edits
   (status, due date) or to Also on, sending with nobody's Cortex open (`pg_cron` + `pg_net` calling the function).
 
-## 22. 0014: the CRM — accounts, contacts, and opportunities with HubSpot-style stages
+## 28. 0018: the CRM — accounts, contacts, and more on each opportunity
 
 - **Owner's ask**: turn the Pipeline into a full HubSpot-style CRM with accounts, contacts, opportunities and stages,
   designed for the business (a small team selling a high-value platform to councils, housing, utilities, rail, mining
-  and renewables in six countries, with an outreach agent doing cold email). Then a Leads page (later, §23).
+  and renewables in six countries, with an outreach agent doing cold email). Then a Leads page (later, §29).
 - **Owner's decisions** (the brainstorm's recommendations, accepted): HubSpot's core objects, not all of HubSpot.
   **Accounts** (one per organisation; kind Prospect, Customer, Partner or Supplier; sector, country, region, time zone,
   domain, website, size; **guardrails**, what not to say; a **prep pack** link; who **referred** it; an owner). A
   **lifecycle**: New lead → Contacted → Engaged → Meeting booked → Opportunity → Customer, or set aside: Nurture (with a
   revisit date), Watching for RFP, Not now, Suppressed (with why). **Contacts** at an account (title, email, phone,
   LinkedIn, time zone, **role in the deal**: decision maker, champion, influencer, gatekeeper, assistant / PA, user,
-  other; Active, Left or Do not contact). **Opportunities** on an account with its contacts, stages **Interested →
-  Meeting booked → Intro held → Demo held → Proposal sent → Contract sent**, then **Won = Make client** or **Lost with
-  a reason**; value in its **currency** (AUD, NZD, GBP, USD, EUR, CAD, AED, SAR; never converted), expected close,
-  probability (each stage's default: 10, 20, 30, 50, 60, 80 %), **waiting on** us or them, **days in stage** (stalled from
+  other; Active, Left or Do not contact). **Opportunities** on an account with its contacts, on the stages the team already
+  uses (**Opportunities → Contacted → First meetings → Demos → Proposal sent**, §14, §21; the brainstorm's HubSpot-style
+  set was dropped when the CRM met main, the owner's call on 2026-11-05), then **Won = Make client** or **Lost with a
+  reason**; value in its **currency** (AUD, NZD, GBP, USD, EUR, CAD, AED, SAR; never converted), expected close,
+  probability (each stage's default: 10, 15, 25, 50, 70 %), **waiting on** us or them, **days in stage** (stalled from
   14). **One timeline** on accounts, contacts and deals. Clients stay as they are, linked to their account
   (`accounts.client_id`), not merged.
-- **Database** (`0014_crm_accounts.sql`): `accounts` and `crm_contacts` (synced, realtime; Pipeline's access level:
+- **Database** (`0018_crm_accounts.sql`): `accounts` and `crm_contacts` (synced, realtime; Pipeline's access level:
   `can_view` / `can_edit('pipeline')`; deleting an account deletes its contacts and leaves its deals without one); deals
   get `account_id`, `contact_ids uuid[]`, `currency`, `close_on`, `probability` (null = the stage's), `waiting_on`,
   `lost_reason` and `stage_at` (the database's: the `deal_stage_at` trigger stamps it when the stage changes and keeps it
-  otherwise; the rename keeps it, running before the trigger). The old stages are renamed once (Opportunities and
-  Contacted → Interested, the latter waiting on them; First meetings → Meeting booked; Demos and Won → Demo held).
+  otherwise). No stage is renamed.
   `crm_entries` gets `account_id` and `contact_id` (cascade); `crm_select` reads them with Pipeline view and
   `protect_crm_entry` keeps them on edit. `contact_pipeline()` also finds or adds the organisation's account (engaged on
   a reply, meeting on a booking: `lifecycleAfter()`, never back or over a lifecycle set aside) and the person (by email,
-  else name), puts the person on the deal and uses the new stages. Existing data, once per row: every client a customer
+  else name), puts the person on the deal (its stages as 0008: a reply adds an Opportunities deal, a booking moves it to First
+  meetings). Existing data, once per row: every client a customer
   account; every deal its account (its client's, else the one with its name, else a new one); a deal from an outreach
   contact that person.
-- **Release**: the app copes without 0014 (Accounts and Contacts hidden, the new deal columns left out of writes:
-  `later` in `TABLES` and `withoutLater()` in the sync engine; admins see the *Database update needed* notice), and 0014
-  copes with the app now live (old stage names show as their new ones: `dealStage()` / `OLD_DEAL_STAGES`).
+- **Release**: the app copes without 0018 (Accounts and Contacts hidden, the new deal columns left out of writes:
+  `later` in `TABLES` and `withoutLater()` in the sync engine; admins see the *Database update needed* notice), and 0018
+  copes with the app now live (it renames nothing; a deal's Lead (0013) keeps working beside it).
 - **App**: **Pipeline** has three sections. **Opportunities**: the numbers (open deals, the pipeline and its weighted
   value per currency, made clients), search, owner, **All open / Waiting on us / Stalled 14d+ / Lost**, a board by stage
   (drag or the stage select; each card: priority, waiting on, days in stage, close date, value in its currency, owner,
-  **Make client** on Contract sent) or a table. **New deal / Edit deal** (`DealForm`): account (one there is or a new one
+  **Make client** on Proposal sent; the Lead's icon and coloured edge, and an All · LYCO · AssetStack filter, §21) or a
+  table. **New deal / Edit deal** (`DealForm`): account (one there is or a new one
   by name), deal name (the account's unless set), its contacts, value and currency, close date, owner, priority, stage (and
   Lost with a reason when editing), probability, waiting on, sector, next step; **Won: make client**, **Delete deal**. A
   deal's profile adds its account (with its guardrails), contacts and the time where they are. **Accounts**: search, kind,
@@ -1241,13 +1439,13 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   `src/lib/format.js` (`compactIn()`, `totalsIn()`).
 - **Demo seed**: accounts for every deal and client, people with roles and time zones at Shire of Southcliff, Northside
   Diocese and Kingsford Housing Trust, a partner (Example Partners Ltd) who referred Kingsford (in GBP), an NZ council in
-  NZD, guardrails, a nurture account with a Lost deal, a suppressed one, stalled deals; `migrate()` does 0014's steps once
+  NZD, guardrails, a nurture account with a Lost deal, a suppressed one, stalled deals; `migrate()` does 0018's steps once
   (`crmBackfillLocal()`).
 - **Tests**: `scripts/test-db.mjs` phase 14 (re-runs and the done row; the backfill; Pipeline access; the checks and
   `stage_at`; entries on accounts and contacts; the outreach automation); `scripts/test-sync.mjs` (the mapping and the
   held-back columns, stages, probability and days, `cleanDealPatch()`, accounts and contacts, lifecycle, the account
   timeline, the backfill, imports, money per currency, the seed).
-- **Stage history (0015, `0015_deal_history.sql`)**: `deal_stage_history` (a row when a deal is added, from ''; each
+- **Stage history (0019, `0019_deal_history.sql`)**: `deal_stage_history` (a row when a deal is added, from ''; each
   stage move; Make client, to 'Won'; with when and who), written only by the `log_deal_stage` trigger (security definer)
   and read with Pipeline view; synced read only (`readOnly` in `TABLES`: the sync engine never sends it a write;
   `logStageLocal()` in demo mode). Existing deals get one starting row. A deal's and an account's timeline show its stage
@@ -1273,10 +1471,10 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Later, not built**: email history on the timeline (a summary of each sales email), stage exit checklists,
   merging the Outreach contact list into Contacts, saved views, and bulk edits.
 
-## 23. 0016: Leads — prospect lists, the suppress list, contact history and Convert to CRM
+## 29. 0020: Leads — prospect lists, the suppress list, contact history and Convert to CRM
 
-- **Owner's ask** (with §22): a Leads page to pull lead lists and see each lead's contact history.
-- **Database** (`0016_leads.sql`): `lead_lists` (name, source CSV / Apollo / by hand, notes, who added it), `leads` (a
+- **Owner's ask** (with §28): a Leads page to pull lead lists and see each lead's contact history.
+- **Database** (`0020_leads.sql`): `lead_lists` (name, source CSV / Apollo / by hand, notes, who added it), `leads` (a
   prospect each: name, title, email, phone, LinkedIn, company and domain, sector, country, region, time zone, size; a
   status New → Sent to agent → Contacted → Replied / Meeting booked / Not interested / Bounced, or In CRM; the CRM
   account and contact it became, set null if they go; an owner; a note; deleting a list deletes its leads; ordered by
@@ -1284,7 +1482,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   with why). All synced and on **Outreach's** access level (`can_view` / `can_edit('outreach')`, as the agent's emails are);
   `protect_created()` keeps who added a list or suppression. The app copes without it (`since` in `TABLES`: Leads is
   hidden from the menu and its actions refuse; admins see the notice).
-- **Rules** (`src/lib/leads.js`): `cleanLead()` / `cleanLeadList()` / `cleanSuppression()` (0016's limits; a lead's
+- **Rules** (`src/lib/leads.js`): `cleanLead()` / `cleanLeadList()` / `cleanSuppression()` (0020's limits; a lead's
   domain is its own, else its email's, never a personal mailbox's: `FREE_MAIL`). `suppressedBy()`: on the suppress list
   (email or domain), or an account it could be is Suppressed, or the person is Do not contact in the CRM. `crmMatch()`:
   the account and contact it became, else the contact with its email (and their account), else the account with its
@@ -1299,7 +1497,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   website, industry, employees, state, country, owner); a repeat on the same list is skipped. A lead's panel: status,
   owner, details, why it's suppressed, the lists it's also on, the CRM record (a link to it on Pipeline), **Convert to
   CRM** (Outreach and Pipeline edit: its account, by match or a new prospect from its company, and its contact there,
-  optionally an Interested deal; the lead is marked In CRM), its **contact history** (the agent's sheet rows for its
+  optionally an Opportunities deal; the lead is marked In CRM), its **contact history** (the agent's sheet rows for its
   email: sent, reply and summary, meeting, a link to the Gmail thread; and Gmail's cold threads with it), the CRM
   contact's timeline once converted, a note, **Suppress email / Suppress domain** and **Remove lead**. **Suppress list**:
   add an email or domain with a reason, remove one. **Scoreboard**: leads, contacted, replied, reply rate and meetings

@@ -6,7 +6,7 @@ import {
   Upload, UserRound,
 } from 'lucide-react';
 import { useStore } from '@/data/store';
-import { CLIENT_GROUPS, CLIENT_STATUSES, PLAN_FREQUENCIES } from '@/data/boards';
+import { CLIENT_GROUPS, CLIENT_STATUSES, LEADS, PLAN_FREQUENCIES, leadOf } from '@/data/boards';
 import { dealsOfClient, timelineOf } from '@/lib/crm';
 import { Links, NextSteps, Timeline } from '@/components/crm/Profile';
 import { useAccess } from '@/lib/access';
@@ -16,6 +16,7 @@ import { billingContacts } from '@/lib/taxInvoice';
 import { Avatar, Drawer, KpiRow, LabelPicker, Modal, PersonPicker, QuickAdd, SearchField, Segmented } from '@/components/ui';
 import { compactMoney, count, fullDate, invoiceTotals, localYmd, money, money2, monthLabel, monthStart, parseAmount, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import LeadIcon from '@/components/LeadIcon';
 import ClientContacts from './ClientContacts';
 import ContractTab from './ContractTab';
 import ImportUsage from './ImportUsage';
@@ -29,6 +30,12 @@ const TABS = [
   { id: 'contract', label: 'Contract', icon: FileSignature },
   { id: 'usage', label: 'Usage', icon: Gauge },
   { id: 'access', label: 'Access', icon: KeyRound },
+];
+
+// The Lead filter (§21): every client, or one Lead's.
+const LEAD_FILTER = [
+  { id: '', label: 'All' },
+  ...Object.entries(LEADS).map(([id, l]) => ({ id, label: l.label, icon: (p) => <LeadIcon lead={id} decorative {...p} /> })),
 ];
 
 // The person a client's card names: its (first) billing contact, else its first contact.
@@ -49,6 +56,7 @@ function ClientCard({ c, onOpen }) {
         <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl font-bold ring-1 ring-white/40" style={{ background: c.avatar }}>{c.name[0]}</div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
+            <LeadIcon lead={leadOf(c)} size={18} className="shrink-0" />
             <button type="button" onClick={() => onOpen(c.id, 'overview')} className="text-[17px] font-extrabold hover:underline text-left">{c.name}</button>
             <span className="pill !h-6 !text-[12px]" style={{ backgroundColor: CLIENT_STATUSES[c.status] }}>{c.status}</span>
           </div>
@@ -147,6 +155,18 @@ function Overview({ c, editable }) {
         <div className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Owner</span>
           <div><PersonPicker value={c.contact} readOnly={!editable} onChange={(v) => actions.updateClient(c.id, { contact: v, team: Array.from(new Set([v, ...c.team].filter(Boolean))) })} /></div>
         </div>
+        <label className="flex flex-col gap-1.5"><span className="text-[12px] dimmer">Lead</span>
+          {editable ? (
+            <select className="field" value={leadOf(c)} onChange={(e) => actions.updateClient(c.id, { source: e.target.value })}>
+              <option value="">Not set</option>
+              {Object.entries(LEADS).map(([id, l]) => <option key={id} value={id}>{l.title}</option>)}
+            </select>
+          ) : (
+            <span className="flex h-10 items-center gap-2 font-semibold">
+              {leadOf(c) ? <><LeadIcon lead={leadOf(c)} size={18} decorative />{LEADS[leadOf(c)].title}</> : <span className="dimmer">Not set</span>}
+            </span>
+          )}
+        </label>
       </div>
       <div className="grid gap-3">
         {[['next', 'Next step'], ['sector', 'Sector'], ['demo', 'Demo']].map(([k, l]) => (
@@ -420,8 +440,11 @@ export default function ClientsTab({ adding, onCloseAdd }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(null); // { id, tab }
   const [newName, setNewName] = useState('');
+  const [lead, setLead] = useState(''); // the Lead filter: '' (all) | 'lyco' | 'assetstack'
 
-  const clients = useMemo(() => state.clients.filter((c) => !q || searchText(c).includes(q.trim().toLowerCase())), [state.clients, q]);
+  // The Lead filter narrows the clients and their counts; money (Owed, Invoices) stays the whole business.
+  const pool = useMemo(() => state.clients.filter((c) => !lead || leadOf(c) === lead), [state.clients, lead]);
+  const clients = useMemo(() => pool.filter((c) => !q || searchText(c).includes(q.trim().toLowerCase())), [pool, q]);
   const totals = owedTotals(state.clients, access.isAdmin ? state.payments : []); // staff never see money in
   const recent = state.clients.flatMap((c) => c.invoices.map((i) => ({ ...i, client: c })))
     .sort((a, b) => b.issued.localeCompare(a.issued)).slice(0, 6);
@@ -430,13 +453,14 @@ export default function ClientsTab({ adding, onCloseAdd }) {
   return (
     <div>
       <KpiRow items={[
-        { value: state.clients.length, label: 'Clients', tint: '#475569' },
-        { value: state.clients.filter((c) => c.group === 'Onboarding').length, label: 'Onboarding', tint: '#7c3aed' },
-        { value: state.clients.filter((c) => c.group === 'Active').length, label: 'Active', tint: '#0f9f6f' },
+        { value: pool.length, label: 'Clients', tint: '#475569' },
+        { value: pool.filter((c) => c.group === 'Onboarding').length, label: 'Onboarding', tint: '#7c3aed' },
+        { value: pool.filter((c) => c.group === 'Active').length, label: 'Active', tint: '#0f9f6f' },
         { value: compactMoney(totals.outstanding), label: 'Owed', tint: '#f59e0b' },
       ]} />
       <div className="mt-6 flex flex-wrap items-center gap-2">
         <Segmented label="Layout" value={view} onChange={setView} options={[{ id: 'board', label: 'Board', icon: LayoutGrid }, { id: 'list', label: 'List', icon: List }]} />
+        <Segmented label="Lead" value={lead} onChange={setLead} options={LEAD_FILTER} />
         <SearchField value={q} onChange={setQ} placeholder="Search clients" />
       </div>
 
@@ -461,6 +485,7 @@ export default function ClientsTab({ adding, onCloseAdd }) {
                     <tr key={c.id} className="border-t rowline hover:bg-white/5 cursor-pointer" onClick={() => setOpen({ id: c.id, tab: 'overview' })}>
                       <td className="p-3 font-semibold">
                         <span className="inline-flex items-center gap-2">
+                          <LeadIcon lead={leadOf(c)} className="shrink-0" />
                           <button type="button" onClick={(e) => { e.stopPropagation(); setOpen({ id: c.id, tab: 'overview' }); }} className="text-left hover:underline">{c.name}</button>
                           {safeUrl(c.platformUrl) && (
                             <a href={safeUrl(c.platformUrl)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} aria-label={`${c.name} platform`} title="Platform"

@@ -15,7 +15,7 @@ export const compactMoney = (n) => {
   return money(n);
 };
 
-// In a deal's currency (0014), as compactMoney: $250k (AUD), £40k, NZ$1.2M.
+// In a deal's currency (0018), as compactMoney: $250k (AUD), £40k, NZ$1.2M.
 const SYMBOLS = { AUD: '$', NZD: 'NZ$', GBP: '£', USD: 'US$', EUR: '€', CAD: 'C$', AED: 'AED ', SAR: 'SAR ' };
 export const compactIn = (n, currency = 'AUD') => compactMoney(n || 0).replace(/^\$/, SYMBOLS[currency] ?? `${currency} `);
 /** Totals per currency, AUD first then the largest: "$1.2M · £40k" ("$0" when there's nothing). `items`: [{ currency,

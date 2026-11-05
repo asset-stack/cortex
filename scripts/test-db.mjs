@@ -13,8 +13,12 @@
 // the Gmail sync's RPCs, cold threads and their messages, the forgetting, and the dashboard RPCs, which must give the same
 // numbers and lists as src/lib/outreach.js); then 0011_team_access_read.sql (every active teammate reads everyone's module
 // access levels, for the Team pages); then 0012_crm_profile.sql (deals' and clients' notes, meetings and links, who reads
-// and writes them, and how they follow a deal to its client). Last, the sync engine's writes of every synced table (flatten() rows as
-// PostgREST upserts), personal pages, Outreach and calendar events included.
+// and writes them, and how they follow a deal to its client); then 0013_lead.sql (the Lead on deals and clients, LYCO or
+// AssetStack direct: its values, and who reads and sets it); then 0014_deal_demo_rows.sql (a deal entering Demos or Proposal sent
+// gets one row on Clients › Demos, added by the database whoever moves it, never twice); then 0015_deal_tasks_board.sql (the
+// Deal tasks board, with Operations' access); then 0016_pipeline_demos.sql (no automatic Demos row; the board called Demos,
+// with Clients › Demos' groups and tasks). Last, the sync engine's writes of every
+// synced table (flatten() rows as PostgREST upserts), personal pages, Outreach and calendar events included.
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -22,6 +26,11 @@ import { register } from 'node:module';
 import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { TABLES, flatten, normalizeRow } from '../src/data/backend/schema.js';
+// A row as the sync engine sends it before a later migration's columns exist (TABLES `later`, e.g. deals before 0018).
+const heldBack = (table, row) => {
+  const cols = new Set((TABLES.find((t) => t.name === table)?.later || []).flatMap((l) => l.columns));
+  return Object.fromEntries(Object.entries(row).filter(([k]) => !cols.has(k)));
+};
 
 const root = new URL('../', import.meta.url);
 const migration = await readFile(new URL('supabase/migrations/0001_cortex.sql', root), 'utf8');
@@ -36,10 +45,14 @@ const migration9 = await readFile(new URL('supabase/migrations/0009_calendar.sql
 const migration10 = await readFile(new URL('supabase/migrations/0010_outreach_gmail.sql', root), 'utf8');
 const migration11 = await readFile(new URL('supabase/migrations/0011_team_access_read.sql', root), 'utf8');
 const migration12 = await readFile(new URL('supabase/migrations/0012_crm_profile.sql', root), 'utf8');
-const migration13 = await readFile(new URL('supabase/migrations/0013_task_emails.sql', root), 'utf8');
-const migration14 = await readFile(new URL('supabase/migrations/0014_crm_accounts.sql', root), 'utf8');
-const migration15 = await readFile(new URL('supabase/migrations/0015_deal_history.sql', root), 'utf8');
-const migration16 = await readFile(new URL('supabase/migrations/0016_leads.sql', root), 'utf8');
+const migration13 = await readFile(new URL('supabase/migrations/0013_lead.sql', root), 'utf8');
+const migration14 = await readFile(new URL('supabase/migrations/0014_deal_demo_rows.sql', root), 'utf8');
+const migration15 = await readFile(new URL('supabase/migrations/0015_deal_tasks_board.sql', root), 'utf8');
+const migration16 = await readFile(new URL('supabase/migrations/0016_pipeline_demos.sql', root), 'utf8');
+const migration17 = await readFile(new URL('supabase/migrations/0017_task_emails.sql', root), 'utf8');
+const migration18 = await readFile(new URL('supabase/migrations/0018_crm_accounts.sql', root), 'utf8');
+const migration19 = await readFile(new URL('supabase/migrations/0019_deal_history.sql', root), 'utf8');
+const migration20 = await readFile(new URL('supabase/migrations/0020_leads.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -5224,7 +5237,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
     clients: [{
       id: cli, name: 'Example Client', group: 'Active', status: 'Active', priority: 'P1', next: 'Call', sector: 'Utilities',
       contact: david, team: [david, alice], lastContact: '2026-10-01', demo: '', demoUrl: '', platformUrl: 'https://example-client.example.com',
-      avatar: '#3b82f6', abn: '', billingAddress: '1 Example St',
+      avatar: '#3b82f6', abn: '', billingAddress: '1 Example St', source: 'lyco',
       contacts: [{ id: uid(), name: 'Pat', role: 'Finance', email: 'pat@example.com', phone: '0400 000 000', billing: true }],
       contracts: [{
         id: uid(), status: 'Signed', title: 'Software Subscription Agreement', docId: 'doc', docUrl: 'https://docs.google.com/document/d/doc/edit',
@@ -5243,10 +5256,10 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
     }],
     deals: [{
       id: dl, name: 'Example Client', sector: 'Utilities', value: '1,500.50', priority: 'P1', stage: 'Won', contact: alice, next: '',
-      clientId: cli, contactId: con, accountId: acct, contactIds: [ppl], currency: 'GBP', closeOn: '2026-12-01', probability: 70, waitingOn: 'them',
+      clientId: cli, contactId: con, source: 'lyco', accountId: acct, contactIds: [ppl], currency: 'GBP', closeOn: '2026-12-01', probability: 70, waitingOn: 'them',
       lostReason: '', stageAt: '2026-10-01T00:00:00.000Z',
     }],
-    // The CRM (0014): the deal's account (its client's) and a person there.
+    // The CRM (0018): the deal's account (its client's) and a person there.
     accounts: [{
       id: acct, name: 'Example Client', kind: 'customer', lifecycle: 'customer', lifecycleNote: '', revisitOn: '2027-01-15', sector: 'Utilities',
       country: 'Australia', region: 'QLD', timezone: 'Australia/Brisbane', domain: 'client.example.com', website: 'https://client.example.com/',
@@ -5258,7 +5271,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
       linkedin: 'https://www.linkedin.com/in/example/', timezone: 'Australia/Brisbane', role: 'champion', status: 'active', owner: alice,
       createdAt: '2026-10-02T00:00:00.000Z',
     }],
-    // Leads (0016): a list, a lead converted into the account and person above, a suppression.
+    // Leads (0020): a list, a lead converted into the account and person above, a suppression.
     leadLists: [{ id: lls, name: 'Councils', source: 'apollo', notes: 'Apollo search', createdBy: david, createdAt: '2026-10-02T00:00:00.000Z' }],
     leads: [{
       id: uid(), listId: lls, name: 'Pat', title: 'Asset Manager', email: 'pat@example.com', phone: '+61 7 0000 0000',
@@ -5700,23 +5713,574 @@ async function phase12(ctx) {
   return ctx;
 }
 
-// ── 0013: task emails (the queue, claim and settings) ─────────────────────────────────────────────────────────────
+// ── 0013: the Lead (deals.source, clients.source) ─────────────────────────────────────────────────────────────────
 
 async function phase13(ctx) {
-  const { alice, boss, david, hello } = ctx;
+  const { alice, boss, david, hello, carol, newcomer } = ctx;
 
-  // 104. Runs on top of 0012, whole, again, and statement by statement; ends with its done row.
+  // A deal and a client from before 0013: the Lead comes to rows that already exist.
+  await as(boss);
+  const deal = (await one("insert into deals (name, stage) values ('Example Ridge', 'Demos') returning id")).id;
+  const client = (await one("insert into clients (name) values ('Example Ridge') returning id")).id;
+
+  // 105. Runs on top of 0012, whole, again, and statement by statement, and ends (after commit) with its done row.
   await as(null);
-  const run = async () => db.exec(migration13).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const run = async () => db.exec(migration13).then(
+    (r) => ({ error: null, done: r.at(-1)?.rows?.[0]?.done ?? null }),
+    async (e) => { await db.exec('rollback').catch(() => {}); return { error: e.message, done: null }; });
   const first = await run();
   const second = await run();
   await as(null);
   const splitErrors = await runSplit(db, migration13, { continueOnError: true });
   const body = migration13.replace(/--.*$/gm, '').trim();
+  const named = (await rows(`select conname from pg_constraint where contype = 'c' and pg_get_constraintdef(oid) ~ '\\msource\\M'
+    and conrelid in ('public.deals'::regclass, 'public.clients'::regclass) order by conname`)).map((r) => r.conname);
+  const published = (await one(`select count(*)::int as n from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename in ('deals', 'clients')`)).n;
+  check('105. 0013 runs on top of 0012, re-runs whole and statement by statement (one named check per table, never two), never '
+    + 'mentions module_level, and its last statement, after commit, is its done row; deals and clients are already in realtime',
+    first.error === null && second.error === null && !splitErrors.length && first.done === 'Cortex 0013 applied'
+      && second.done === 'Cortex 0013 applied' && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0013 applied' as done;$/i.test(body)
+      && !migration13.includes('module_level') && stable(named) === stable(['clients_source_check', 'deals_source_check']) && published === 2,
+    { first, second, splitErrors, named, published });
+  if (first.error) return null;
+
+  // 106. Existing deals and clients start at '' (not set), as does one added without a Lead; it is never null.
+  const before = await one(`select (select count(*)::int from deals) as deals, (select count(*)::int from deals where source <> '') as deals_set,
+    (select count(*)::int from clients) as clients, (select count(*)::int from clients where source <> '') as clients_set,
+    (select source from deals where id = $1) as deal, (select source from clients where id = $2) as client`, [deal, client]);
+  const columns = (await rows(`select table_name, data_type, is_nullable, column_default from information_schema.columns
+    where table_schema = 'public' and table_name in ('deals', 'clients') and column_name = 'source' order by table_name`))
+    .map((r) => [r.table_name, r.data_type, r.is_nullable, r.column_default]);
+  await as(boss);
+  const added = {
+    deal: await one("insert into deals (name, stage) values ('Example Heights', 'Opportunities') returning id, source"),
+    client: await one("insert into clients (name) values ('Example Heights') returning id, source"),
+  };
+  const nulls = {
+    deal: await error('update deals set source = null where id = $1', [deal]),
+    client: await error('update clients set source = null where id = $1', [client]),
+  };
+  check('106. existing deals and clients get the Lead \'\' (not set); its default is \'\', as a new deal or client added without one shows; null is refused',
+    before.deals > 0 && before.deals_set === 0 && before.clients > 0 && before.clients_set === 0 && before.deal === '' && before.client === ''
+      && stable(columns) === stable([['clients', 'text', 'NO', "''::text"], ['deals', 'text', 'NO', "''::text"]])
+      && added.deal.source === '' && added.client.source === '' && nulls.deal !== null && nulls.client !== null,
+    { before, columns, added, nulls });
+
+  // 107. Only '', lyco and assetstack, on both tables, whether saved or added (the check, not RLS: an admin is writing).
+  const values = {};
+  for (const [table, id] of [['deals', deal], ['clients', client]]) {
+    const set = (v) => error(`update ${table} set source = $2 where id = $1`, [id, v]);
+    values[table] = {
+      lyco: await set('lyco'), assetstack: await set('assetstack'), none: await set(''),
+      partner: await set('partner'), upper: await set('LYCO'), spaced: await set('lyco '),
+      added: await error(`insert into ${table} (name, source) values ('Example Nope', 'partner')`),
+    };
+  }
+  const refusedBy = (table, e) => typeof e === 'string' && e.includes(`${table}_source_check`);
+  check('107. the Lead takes \'\', lyco or assetstack on deals and clients; any other value (partner, LYCO, a stray space) is refused by the check, saved or added',
+    Object.entries(values).every(([table, v]) => v.lyco === null && v.assetstack === null && v.none === null
+      && refusedBy(table, v.partner) && refusedBy(table, v.upper) && refusedBy(table, v.spaced) && refusedBy(table, v.added)),
+    values);
+
+  // 108. Who reads and sets it: 0002's module policies, as for every other column of deals and clients. Alice (staff):
+  // Pipeline edit, Clients view; Hello (staff): Pipeline view, Clients edit; Newcomer (staff): neither, for now; Carol is
+  // inactive.
+  await as(david);
+  const newcomerHad = await rows("select module, level from module_access where user_id = $1 and module in ('pipeline', 'clients')", [newcomer]);
+  await db.query("delete from module_access where user_id = any($1) and module in ('pipeline', 'clients')", [[alice, hello, newcomer]]);
+  await db.query(`insert into module_access (user_id, module, level) values ($1, 'pipeline', 'edit'), ($1, 'clients', 'view'),
+    ($2, 'pipeline', 'view'), ($2, 'clients', 'edit'), ($3, 'pipeline', 'none'), ($3, 'clients', 'none')`, [alice, hello, newcomer]);
+  await as(boss);
+  const adminSets = {
+    deal: await affected("update deals set source = 'lyco' where id = $1", [deal]),
+    client: await affected("update clients set source = 'lyco' where id = $1", [client]),
+  };
+  const lead = async (who) => {
+    await as(who);
+    return [(await one('select source from deals where id = $1', [deal]))?.source ?? null,
+      (await one('select source from clients where id = $1', [client]))?.source ?? null];
+  };
+  const reads = { alice: await lead(alice), hello: await lead(hello), newcomer: await lead(newcomer), carol: await lead(carol) };
+  await as(hello);
+  const viewDeal = await affected("update deals set source = 'assetstack' where id = $1", [deal]);
+  await as(alice);
+  const viewClient = await affected("update clients set source = 'assetstack' where id = $1", [client]);
+  await as(newcomer);
+  const noneSets = [await affected("update deals set source = 'assetstack' where id = $1", [deal]),
+    await affected("update clients set source = 'assetstack' where id = $1", [client])];
+  const unchanged = await lead(null);
+  await as(alice);
+  const editDeal = await affected("update deals set source = 'assetstack' where id = $1", [deal]);
+  await as(hello);
+  const editClient = await affected("update clients set source = 'assetstack' where id = $1", [client]);
+  const edited = await lead(null);
+  check('108. Pipeline view reads a deal’s Lead but can’t change it, Pipeline edit can; the same for a client’s with Clients view and edit; '
+    + 'admins set both; without access (or inactive) neither is read',
+    adminSets.deal === 1 && adminSets.client === 1 && stable(reads) === stable({
+      alice: ['lyco', 'lyco'], hello: ['lyco', 'lyco'], newcomer: [null, null], carol: [null, null],
+    }) && viewDeal === 0 && viewClient === 0 && stable(noneSets) === stable([0, 0]) && stable(unchanged) === stable(['lyco', 'lyco'])
+      && editDeal === 1 && editClient === 1 && stable(edited) === stable(['assetstack', 'assetstack']),
+    { adminSets, reads, viewDeal, viewClient, noneSets, unchanged, editDeal, editClient, edited });
+
+  // 109. The sync engine's saves (flatten() rows, as PostgREST upserts) carry the Lead for whoever may write the row:
+  // a deal's with Pipeline edit, a client's with Clients edit (Make client: the deal's Lead on its client). View-only
+  // saves are refused and change nothing.
+  const syncRows = (table, st) => [...flatten({ users: [], org: {}, ...st })[table].values()].map((r) => heldBack(table, r));
+  const dealRow = syncRows('deals', { deals: [{
+    id: deal, name: 'Example Ridge', sector: 'Councils', value: '24,000', priority: 'P1', stage: 'Demos', contact: alice, next: 'Send the proposal',
+    contactId: '', source: 'lyco',
+  }] });
+  const clientRow = syncRows('clients', { clients: [{
+    id: client, name: 'Example Ridge', group: 'Councils', status: 'Onboarding', priority: 'P1', next: 'Kick-off', sector: 'Councils',
+    contact: '', team: [hello], lastContact: '', demo: '', demoUrl: '', platformUrl: '', avatar: '#3b82f6', abn: '', billingAddress: '',
+    source: 'assetstack',
+  }] });
+  const saveRows = async (user, table, list) => { await as(user); const e = await postgrestUpsert(table, list); await as(null); return e; };
+  const back = async (table, id) => normalizeRow(table, (await one(`select row_to_json(x) as r from public.${table} x where id = $1`, [id])).r);
+  const synced = {
+    viewDeal: await saveRows(hello, 'deals', [{ ...dealRow[0], source: 'assetstack' }]),
+    viewClient: await saveRows(alice, 'clients', [{ ...clientRow[0], source: 'lyco' }]),
+    editDeal: await saveRows(alice, 'deals', dealRow),
+    editClient: await saveRows(hello, 'clients', clientRow),
+  };
+  const dealBack = heldBack('deals', await back('deals', deal));
+  const clientBack = await back('clients', client);
+  check('109. sync: a deal’s and a client’s Lead (lyco, assetstack) save from flatten() as PostgREST sends them, for Pipeline / Clients edit, '
+    + 'and read back unchanged; view-only saves are refused',
+    dealRow.length === 1 && dealRow[0].source === 'lyco' && clientRow.length === 1 && clientRow[0].source === 'assetstack'
+      && typeof synced.viewDeal === 'string' && typeof synced.viewClient === 'string' && synced.editDeal === null && synced.editClient === null
+      && stable(dealBack) === stable(dealRow[0]) && stable(clientBack) === stable(clientRow[0]),
+    { synced, dealRow, dealBack, clientRow, clientBack });
+
+  // Tidy up: the rows added here, and Newcomer's levels as they were.
+  await as(boss);
+  await db.query('delete from deals where id = any($1)', [[deal, added.deal.id]]);
+  await db.query('delete from clients where id = any($1)', [[client, added.client.id]]);
+  await as(david);
+  await db.query("delete from module_access where user_id = $1 and module in ('pipeline', 'clients')", [newcomer]);
+  for (const r of newcomerHad) {
+    await db.query('insert into module_access (user_id, module, level) values ($1, $2, $3)', [newcomer, r.module, r.level]);
+  }
+  await as(null);
+  return ctx;
+}
+
+// ── 0014: a deal entering Demos or Proposal sent gets its row on Clients › Demos ──────────────────────────────────
+
+async function phase14(ctx) {
+  const { alice, boss, david, hello } = ctx;
+  // Every task that links a deal (values.deal), on any board, as the database holds it.
+  const linked = async (deal) => {
+    await as(null);
+    return rows(`select board_id, group_id, board_key, position, name, "values", done from items
+      where "values" ->> 'deal' = $1 order by position, id`, [deal]);
+  };
+
+  // A deal already in Demos before 0014: the migration adds nothing for it (it acts as a deal enters the two stages).
+  await as(boss);
+  const hollow = (await one("insert into deals (name, stage) values ('Example Hollow', 'Demos') returning id")).id;
+  await as(null);
+  const itemsBefore = (await one('select count(*)::int as n from items')).n;
+
+  // 110. Runs on top of 0013, whole, again, and statement by statement, and ends (after commit) with its done row.
+  const run = async () => db.exec(migration14).then(
+    (r) => ({ error: null, done: r.at(-1)?.rows?.[0]?.done ?? null }),
+    async (e) => { await db.exec('rollback').catch(() => {}); return { error: e.message, done: null }; });
+  const first = await run();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration14, { continueOnError: true });
+  const body = migration14.replace(/--.*$/gm, '').trim();
+  const fn = await one(`select p.prosecdef as definer, array_to_string(p.proconfig, ',') as config,
+      has_function_privilege('anon', p.oid, 'execute') as anon, has_function_privilege('authenticated', p.oid, 'execute') as signed_in
+    from pg_proc p where p.proname = 'deal_demo_row' and p.pronamespace = 'public'::regnamespace`);
+  const triggers = (await rows(`select pg_get_triggerdef(oid) as def from pg_trigger
+    where tgrelid = 'public.deals'::regclass and tgname = 'deal_demo_row'`)).map((r) => r.def);
+  const itemsAfter = (await one('select count(*)::int as n from items')).n;
+  const hollowRows = await linked(hollow);
+  check('110. 0014 runs on top of 0013, re-runs whole and statement by statement, never mentions module_level, and its last statement, '
+    + 'after commit, is its done row; deal_demo_row() is security definer (search_path public), not executable by anon or signed-in '
+    + 'users, and fires once after a deal is added or its stage saved; deals already in Demos get nothing from the migration itself',
+    first.error === null && second.error === null && !splitErrors.length && first.done === 'Cortex 0014 applied'
+      && second.done === 'Cortex 0014 applied' && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0014 applied' as done;$/i.test(body)
+      && !migration14.includes('module_level') && fn?.definer === true && /search_path=public/.test(fn?.config) && fn?.anon === false
+      && fn?.signed_in === false && triggers.length === 1
+      && /AFTER INSERT OR UPDATE OF stage ON public\.deals FOR EACH ROW EXECUTE FUNCTION (public\.)?deal_demo_row\(\)/.test(triggers[0])
+      && itemsAfter === itemsBefore && hollowRows.length === 0,
+    { first, second, splitErrors, fn, triggers, itemsBefore, itemsAfter, hollowRows });
+  if (first.error) return null;
+
+  // Access as in 108: Alice (staff) Pipeline edit, Clients view; Hello (staff) Pipeline view, Clients edit.
+  await as(david);
+  await db.query("delete from module_access where user_id = any($1) and module in ('pipeline', 'clients')", [[alice, hello]]);
+  await db.query(`insert into module_access (user_id, module, level) values ($1, 'pipeline', 'edit'), ($1, 'clients', 'view'),
+    ($2, 'pipeline', 'view'), ($2, 'clients', 'edit')`, [alice, hello]);
+
+  // The Clients team boards as 58. left them (Demos, with its To do group), plus a later group on Demos and a second
+  // board after it (an admin adds them, as in the app).
+  await as(null);
+  const firstBoard = await one("select id, name from boards where module = 'clients' and owner_id is null order by position, id limit 1");
+  const firstGroup = await one('select id, name, position from board_groups where board_id = $1 order by position, id limit 1', [firstBoard.id]);
+  const lastBoardPos = (await one("select max(position)::int as n from boards where module = 'clients' and owner_id is null")).n;
+  await as(boss);
+  await db.query("insert into board_groups (board_key, board_id, name, color, position) values ('clients', $1, 'Example later', '#bfe9ff', $2)",
+    [firstBoard.id, firstGroup.position + 1]);
+  const second2 = (await one("insert into boards (module, name, position) values ('clients', 'Example Previews', $1) returning id", [lastBoardPos + 1])).id;
+  const secondGroup = (await one(`insert into board_groups (board_key, board_id, name, color, position)
+    values ('clients', $1, 'To do', '#c9ffe6', 0) returning id`, [second2])).id;
+  const made = [hollow];
+  const addDeal = async (who, name, stage, extra = {}) => {
+    await as(who);
+    const id = (await one('insert into deals (name, stage, owner_id, client_id) values ($1, $2, $3, $4) returning id',
+      [name, stage, extra.owner ?? null, extra.client ?? null])).id;
+    made.push(id);
+    return id;
+  };
+
+  // 111. Added at Demos (an admin, through RLS, as the app does): one row on the first Clients team board's first group,
+  // at its end. Added at Opportunities: none. No name or owner: "Deal", with no Owner.
+  await as(null);
+  const nextPos = (await one('select coalesce(max(position) + 1, 0)::int as n from items where group_id = $1', [firstGroup.id])).n;
+  const downs = await addDeal(boss, '  Example Downs ', 'Demos', { owner: alice });
+  const flats = await addDeal(boss, 'Example Flats', 'Opportunities', { owner: alice });
+  const blank = await addDeal(boss, '   ', 'Proposal sent');
+  const added = { downs: await linked(downs), flats: await linked(flats), blank: await linked(blank) };
+  check('111. a deal added at Demos (an admin, through RLS) gets one row on the first Clients team board, in its first group, at the end: '
+    + 'named after the deal (trimmed), its owner the Owner, Not started, linked to the deal, no client, not a hand-over (no assignedBy / '
+    + 'assignedAt); one added at Opportunities gets none; one with no name or owner (added at Proposal sent) is "Deal", with no Owner',
+    firstBoard.name === 'Demos' && firstGroup.name === 'To do' && added.downs.length === 1 && stable(added.downs[0]) === stable({
+      board_id: firstBoard.id, group_id: firstGroup.id, board_key: 'clients', position: nextPos, name: 'Example Downs',
+      values: { people: [alice], status: 'Not started', deal: downs }, done: false,
+    }) && added.flats.length === 0 && added.blank.length === 1 && stable(added.blank[0]) === stable({
+      board_id: firstBoard.id, group_id: firstGroup.id, board_key: 'clients', position: nextPos + 1, name: 'Deal',
+      values: { people: [], status: 'Not started', deal: blank }, done: false,
+    }),
+    { firstBoard, firstGroup, nextPos, added });
+
+  // 112. Moving a deal: into Demos or Proposal sent adds its row, once; between the two never (not even after its row was
+  // deleted); out and back in again does. Saved as the app saves a deal too (a flatten() row as a PostgREST upsert).
+  const mesa = await addDeal(boss, 'Example Mesa', 'Contacted', { owner: hello });
+  const mesaRow = (stage) => [...flatten({ users: [], org: {}, deals: [{
+    id: mesa, name: 'Example Mesa', sector: '', value: 0, priority: '', stage, contact: hello, next: '', clientId: '', contactId: '', source: '',
+  }] }).deals.values()].map((r) => heldBack('deals', r));
+  const saveMesa = async (stage) => { await as(boss); const e = await postgrestUpsert('deals', mesaRow(stage)); await as(null); return e; };
+  const move = async (stage) => { await as(boss); await db.query('update deals set stage = $2 where id = $1', [mesa, stage]); return (await linked(mesa)).length; };
+  const moves = { contacted: (await linked(mesa)).length };
+  moves.syncProposal = await saveMesa('Proposal sent');
+  const mesaRows = await linked(mesa);
+  moves.proposal = mesaRows.length;
+  moves.syncAgain = await saveMesa('Proposal sent');
+  moves.savedAgain = (await linked(mesa)).length;
+  moves.demos = await move('Demos');
+  await as(boss);
+  await db.query("update deals set name = 'Example Mesa Shire', next_step = 'Book the demo', owner_id = $2 where id = $1", [mesa, alice]);
+  moves.edited = (await linked(mesa)).length;
+  await as(boss);
+  moves.deleted = await affected(`delete from items where "values" ->> 'deal' = $1`, [mesa]);
+  moves.backToProposal = await move('Proposal sent');
+  moves.backToDemos = await move('Demos');
+  moves.firstMeetings = await move('First meetings');
+  moves.demosAgain = await move('Demos');
+  const mesaAgain = await linked(mesa);
+  check('112. a deal moved into Proposal sent (saved as the app does) gets its row; saving it again, moving it to Demos or editing it adds '
+    + 'none; once its row is deleted, moving between Demos and Proposal sent never adds it back; out (First meetings) and into Demos again does',
+    stable(moves) === stable({
+      contacted: 0, syncProposal: null, proposal: 1, syncAgain: null, savedAgain: 1, demos: 1, edited: 1, deleted: 1,
+      backToProposal: 0, backToDemos: 0, firstMeetings: 0, demosAgain: 1,
+    }) && stable(mesaRows[0]?.values) === stable({ people: [hello], status: 'Not started', deal: mesa })
+      && mesaRows[0]?.group_id === firstGroup.id && mesaAgain[0]?.name === 'Example Mesa Shire'
+      && stable(mesaAgain[0]?.values) === stable({ people: [alice], status: 'Not started', deal: mesa }),
+    { moves, mesaRows, mesaAgain });
+
+  // 113. Already linked on a Clients team board (here the second one): no second row. A next step on another module's
+  // board (Outreach) is not its Clients row, so that deal still gets one.
+  await as(null);
+  const outreach = await one(`select g.id, g.board_id from board_groups g join boards b on b.id = g.board_id
+    where b.module = 'outreach' and b.owner_id is null order by b.position, b.id, g.position, g.id limit 1`);
+  const vale = await addDeal(boss, 'Example Vale', 'First meetings');
+  const cove = await addDeal(boss, 'Example Cove', 'Contacted');
+  await as(boss);
+  await db.query(`insert into items (board_key, board_id, group_id, name, "values") values ('clients', $1, $2, 'Example Vale preview', $3)`,
+    [second2, secondGroup, { people: [], deal: vale }]);
+  await db.query(`insert into items (board_key, board_id, group_id, name, "values") values ('outreach', $1, $2, 'Send the deck', $3)`,
+    [outreach.board_id, outreach.id, { people: [boss], deal: cove }]);
+  await db.query("update deals set stage = 'Demos' where id = any($1)", [[vale, cove]]);
+  const valeRows = await linked(vale);
+  const coveRows = await linked(cove);
+  check('113. a deal already linked on a Clients team board (the second board) gets no second row as it enters Demos; one whose only '
+    + 'task is a next step on Outreach gets its row on Clients › Demos',
+    valeRows.length === 1 && valeRows[0].board_id === second2 && valeRows[0].name === 'Example Vale preview'
+      && stable(coveRows.map((r) => [r.board_key, r.board_id, r.name]).sort())
+        === stable([['clients', firstBoard.id, 'Example Cove'], ['outreach', outreach.board_id, 'Send the deck']].sort()),
+    { valeRows, coveRows });
+
+  // 114. A deal with a client: its row says which (values.client), added or moved in.
+  await as(boss);
+  const client = (await one("insert into clients (name) values ('Example Glen') returning id")).id;
+  const glen = await addDeal(boss, 'Example Glen', 'Opportunities', { owner: boss, client });
+  const ford = await addDeal(boss, 'Example Ford', 'Demos', { client });
+  await as(boss);
+  await db.query("update deals set stage = 'Proposal sent' where id = $1", [glen]);
+  const glenRows = await linked(glen);
+  const fordRows = await linked(ford);
+  check('114. a deal with a client gets its row with the client set (values.client), moved in or added there',
+    glenRows.length === 1 && stable(glenRows[0].values) === stable({ people: [boss], status: 'Not started', deal: glen, client })
+      && fordRows.length === 1 && stable(fordRows[0].values) === stable({ people: [], status: 'Not started', deal: ford, client }),
+    { glenRows, fordRows });
+
+  // 115. Staff with Pipeline edit and Clients view (Alice) moves a deal into Demos: the row is added all the same (security
+  // definer). She reads it (Clients view) but still can't add, change or delete tasks on the Clients boards herself, and
+  // Pipeline view (Hello) can't move a deal, so adds nothing.
+  const knoll = await addDeal(alice, 'Example Knoll', 'First meetings', { owner: alice });
+  const ridge = await addDeal(boss, 'Example Ridge', 'Contacted');
+  await as(alice);
+  const staff = { moved: await affected("update deals set stage = 'Demos' where id = $1", [knoll]) };
+  staff.rows = await linked(knoll);
+  await as(alice);
+  staff.reads = (await rows(`select id from items where "values" ->> 'deal' = $1`, [knoll])).length;
+  staff.insert = await error("insert into items (board_key, board_id, group_id, name) values ('clients', $1, $2, 'Not mine to add')",
+    [firstBoard.id, firstGroup.id]);
+  staff.change = await affected(`update items set name = 'Mine now' where "values" ->> 'deal' = $1`, [knoll]);
+  staff.remove = await affected(`delete from items where "values" ->> 'deal' = $1`, [knoll]);
+  await as(hello);
+  staff.viewMove = await affected("update deals set stage = 'Demos' where id = $1", [ridge]);
+  staff.viewRows = (await linked(ridge)).length;
+  check('115. staff with Pipeline edit and Clients view move a deal into Demos and its row is added (security definer); they read it but '
+    + 'still can’t add, change or delete Clients tasks themselves; Pipeline view can’t move a deal, so adds no row',
+    staff.moved === 1 && staff.rows.length === 1 && staff.rows[0].board_id === firstBoard.id
+      && stable(staff.rows[0].values) === stable({ people: [alice], status: 'Not started', deal: knoll })
+      && staff.reads === 1 && staff.insert !== null && staff.change === 0 && staff.remove === 0 && staff.viewMove === 0 && staff.viewRows === 0,
+    staff);
+
+  // 116. Nowhere to put it: a first Clients team board with no group (added before Demos) gets nothing, and the row doesn't
+  // go to a later board either; with no Clients team board at all (in a transaction, rolled back), nothing either. The deal
+  // saves both times.
+  await as(null);
+  const firstPos = (await one("select min(position)::int as n from boards where module = 'clients' and owner_id is null")).n;
+  await as(boss);
+  const empty = (await one("insert into boards (module, name, position) values ('clients', 'Example Empty', $1) returning id", [firstPos - 1])).id;
+  const pass = uid();
+  const nowhere = { noGroup: await error("insert into deals (id, name, stage) values ($1, 'Example Pass', 'Demos')", [pass]) };
+  made.push(pass);
+  nowhere.noGroupRows = (await linked(pass)).length;
+  await as(boss);
+  await db.query('delete from boards where id = $1', [empty]);
+  await as(null);
+  const clientBoards = async () => (await one("select count(*)::int as n from boards where module = 'clients' and owner_id is null")).n;
+  const boardsBefore = await clientBoards();
+  const bay = uid();
+  await db.exec('begin');
+  try {
+    await db.query("delete from boards where module = 'clients' and owner_id is null");
+    nowhere.left = await clientBoards();
+    await as(boss);
+    nowhere.noBoard = await error("insert into deals (id, name, stage) values ($1, 'Example Bay', 'Proposal sent')", [bay]);
+    nowhere.noBoardMove = await affected("update deals set stage = 'Demos' where id = $1", [flats]);
+    await as(null);
+    nowhere.noBoardRows = (await one(`select count(*)::int as n from items where "values" ->> 'deal' = any($1)`, [[bay, flats]])).n;
+  } finally {
+    await db.exec('rollback');
+  }
+  await as(null);
+  nowhere.restored = (await clientBoards()) === boardsBefore;
+  check('116. with a first Clients team board that has no group, or no Clients team board at all, a deal entering Demos or Proposal sent '
+    + 'saves and adds no row anywhere',
+    stable(nowhere) === stable({ noGroup: null, noGroupRows: 0, left: 0, noBoard: null, noBoardMove: 1, noBoardRows: 0, restored: true }),
+    nowhere);
+
+  // Tidy up: the deals, their rows, the client and the boards and group added here.
+  await as(null);
+  await db.query(`delete from items where "values" ->> 'deal' = any($1)`, [made]);
+  await db.query('delete from deals where id = any($1)', [made]);
+  await db.query('delete from clients where id = $1', [client]);
+  await db.query('delete from boards where id = $1', [second2]);
+  await db.query("delete from board_groups where board_id = $1 and name = 'Example later'", [firstBoard.id]);
+  return ctx;
+}
+
+// ── 0015: Pipeline › Deal tasks, the board a deal's next steps live on (an Operations board underneath) ─────────────
+
+async function phase15(ctx) {
+  const { alice, boss, hello } = ctx;
+  const ID = 'dea15000-0000-4000-8000-000000000001';
+  await as(null);
+  const opsBefore = await rows("select position from boards where module = 'projects' and owner_id is null");
+  const maxBefore = Math.max(-1, ...opsBefore.map((r) => r.position));
+
+  // 117. Runs on top of 0014, whole, again, and statement by statement: one board, after Operations' team boards, with one
+  // group; its done row last.
+  const run = async () => db.exec(migration15).then(
+    (r) => ({ error: null, done: r.at(-1)?.rows?.[0]?.done ?? null }),
+    async (e) => { await db.exec('rollback').catch(() => {}); return { error: e.message, done: null }; });
+  const first = await run();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration15, { continueOnError: true });
+  const body = migration15.replace(/--.*$/gm, '').trim();
+  const boards15 = await rows('select module, name, owner_id, position from boards where id = $1', [ID]);
+  const groups15 = await rows('select id, board_key, name, position from board_groups where board_id = $1', [ID]);
+  check('117. 0015 runs on top of 0014, re-runs whole and statement by statement, never mentions module_level, and ends (after commit) '
+    + 'with its done row; it makes one Deal tasks board (Operations underneath, no owner, after Operations\' team boards) with one group',
+    first.error === null && second.error === null && !splitErrors.length && first.done === 'Cortex 0015 applied'
+      && second.done === 'Cortex 0015 applied' && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0015 applied' as done;$/i.test(body)
+      && !migration15.includes('module_level') && boards15.length === 1 && boards15[0].module === 'projects'
+      && boards15[0].name === 'Deal tasks' && boards15[0].owner_id === null && boards15[0].position === maxBefore + 1
+      && groups15.length === 1 && groups15[0].board_key === 'projects' && groups15[0].name === 'Next steps',
+    { first, second, splitErrors, boards15, groups15, maxBefore });
+  if (first.error || groups15.length !== 1) return null;
+  const group = groups15[0].id;
+
+  // 118. Operations' access, as any Operations team board: whoever can edit Operations adds a deal's next step there and
+  // moves a task in from another Operations board; whoever can only view can't; only admins delete the board.
+  await as(null);
+  const accessBefore = await rows("select user_id, module, level from module_access where user_id = any($1) and module = 'projects'", [[alice, hello]]);
+  await db.query("delete from module_access where user_id = any($1) and module = 'projects'", [[alice, hello]]);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', 'edit'), ($2, 'projects', 'view')", [alice, hello]);
+  const other = await one("select b.id as board, g.id as grp from boards b join board_groups g on g.board_id = b.id where b.module = 'projects' and b.owner_id is null and b.id <> $1 order by b.position, g.position limit 1", [ID]);
+  const res = {};
+  const tryAdd = async (who) => {
+    await as(who);
+    try {
+      const r = await db.query(`insert into items (board_key, board_id, group_id, name, "values") values ('projects', $1, $2, 'Example next step',
+        '{"deal": "example", "people": []}'::jsonb) returning id`, [ID, group]);
+      return r.rows.length === 1;
+    } catch { return false; }
+  };
+  res.aliceAdds = await tryAdd(alice);
+  res.helloAdds = await tryAdd(hello);
+  await as(null);
+  const moving = (await one(`insert into items (board_key, board_id, group_id, name, "values") values ('projects', $1, $2, 'Example moved', '{}'::jsonb)
+    returning id`, [other.board, other.grp])).id;
+  await as(hello);
+  res.helloMoves = (await db.query('update items set board_id = $1, group_id = $2 where id = $3', [ID, group, moving]).catch(() => ({ affectedRows: 0 }))).affectedRows || 0;
+  await as(alice);
+  res.aliceMoves = (await db.query('update items set board_id = $1, group_id = $2 where id = $3', [ID, group, moving]).catch(() => ({ affectedRows: 0 }))).affectedRows || 0;
+  await as(alice);
+  res.aliceDeletes = (await db.query('delete from boards where id = $1', [ID]).catch(() => ({ affectedRows: 0 }))).affectedRows || 0;
+  await db.exec('begin');
+  try {
+    await as(boss);
+    res.bossDeletes = (await db.query('delete from boards where id = $1', [ID])).affectedRows || 0;
+  } finally {
+    await db.exec('rollback');
+  }
+  await as(null);
+  res.stillThere = (await one('select count(*)::int as n from boards where id = $1', [ID])).n;
+  res.onIt = (await one('select count(*)::int as n from items where board_id = $1', [ID])).n;
+  check('118. Deal tasks has Operations\' access: Operations edit adds a next step and moves a task in from another Operations board; '
+    + 'Operations view does neither; staff can\'t delete the board (an admin can)',
+    stable(res) === stable({ aliceAdds: true, helloAdds: false, helloMoves: 0, aliceMoves: 1, aliceDeletes: 0, bossDeletes: 1, stillThere: 1, onIt: 2 }), res);
+
+  // Tidy up: the tasks added here, and the access rows back as they were.
+  await as(null);
+  await db.query('delete from items where board_id = $1', [ID]);
+  await db.query("delete from module_access where user_id = any($1) and module = 'projects'", [[alice, hello]]);
+  for (const a of accessBefore) {
+    await db.query('insert into module_access (user_id, module, level) values ($1, $2, $3)', [a.user_id, a.module, a.level]);
+  }
+  return ctx;
+}
+
+// ── 0016: Pipeline › Demos — no automatic row; Clients › Demos' groups and tasks move onto the board ─────────────
+
+async function phase16(ctx) {
+  const { alice, boss } = ctx;
+  const ID = 'dea15000-0000-4000-8000-000000000001';
+  await as(null);
+  // Clients › Demos as it may be live: its To do group with a task (an update, a subtask, a Client and a Deal), and a
+  // second group with a task.
+  const demos = await one("select id from boards where module = 'clients' and owner_id is null and name = 'Demos' order by position, id limit 1");
+  const g1 = (await one('select id from board_groups where board_id = $1 order by position, id limit 1', [demos.id])).id;
+  const g2 = (await one(`insert into board_groups (board_key, board_id, name, color, position) values ('clients', $1, 'Example MVP', '#bfe9ff', 5) returning id`, [demos.id])).id;
+  const deal = (await one("insert into deals (name, stage) values ('Example Gulf', 'First meetings') returning id")).id;
+  const t1 = (await one(`insert into items (board_key, board_id, group_id, name, "values") values ('clients', $1, $2, 'Example Gulf demo',
+    jsonb_build_object('deal', $3::text, 'client', 'c', 'people', '[]'::jsonb, 'status', 'In progress')) returning id`, [demos.id, g1, deal])).id;
+  const t2 = (await one(`insert into items (board_key, board_id, group_id, name, "values") values ('clients', $1, $2, 'Example MVP task', '{}'::jsonb) returning id`, [demos.id, g2])).id;
+  await db.query("insert into item_updates (item_id, user_id, text) values ($1, $2, 'Example update')", [t1, boss]);
+  await db.query("insert into subtasks (item_id, text) values ($1, 'Example subtask')", [t1]);
+  const ownGroups = (await one('select count(*)::int as n from board_groups where board_id = $1', [ID])).n;
+
+  // 119. Runs on top of 0015, whole, again, and statement by statement; its done row last.
+  const run = async () => db.exec(migration16).then(
+    (r) => ({ error: null, done: r.at(-1)?.rows?.[0]?.done ?? null }),
+    async (e) => { await db.exec('rollback').catch(() => {}); return { error: e.message, done: null }; });
+  const first = await run();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration16, { continueOnError: true });
+  const body = migration16.replace(/--.*$/gm, '').trim();
+  const state16 = {
+    trigger: (await one("select count(*)::int as n from pg_trigger where tgname = 'deal_demo_row'")).n,
+    fn: (await one("select count(*)::int as n from pg_proc where proname = 'deal_demo_row' and pronamespace = 'public'::regnamespace")).n,
+    name: (await one('select name from boards where id = $1', [ID])).name,
+    clientsDemos: (await one("select count(*)::int as n from boards where module = 'clients' and owner_id is null and name = 'Demos'")).n,
+    groups: (await rows('select name, board_key from board_groups where board_id = $1 order by position, id', [ID])).map((g) => `${g.name}:${g.board_key}`),
+    moved: (await rows('select name, board_key, "values" ->> \'deal\' as deal from items where id = any($1) and board_id = $2 order by name', [[t1, t2], ID]))
+      .map((i) => `${i.name}:${i.board_key}:${i.deal ? 'deal' : '-'}`),
+    kept: (await one('select (select count(*) from item_updates where item_id = $1)::int as u, (select count(*) from subtasks where item_id = $1)::int as s', [t1])),
+    checksOn: (await rows("select tgrelid::regclass::text as t, tgenabled from pg_trigger where tgname = 'same_audience' order by 1")).map((r) => `${r.t}:${r.tgenabled}`),
+  };
+  check('119. 0016 runs on top of 0015, re-runs whole and statement by statement, never mentions module_level, and ends (after commit) with its '
+    + 'done row: no deal_demo_row trigger or function; the board is called Demos; Clients › Demos\' groups (in order) and tasks (with their updates, '
+    + 'subtasks and Deal) are on it after its own group, as Operations rows, and the empty Clients board is gone; same_audience is on again',
+    first.error === null && second.error === null && !splitErrors.length && first.done === 'Cortex 0016 applied' && second.done === 'Cortex 0016 applied'
+      && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0016 applied' as done;$/i.test(body) && !migration16.includes('module_level')
+      && state16.trigger === 0 && state16.fn === 0 && state16.name === 'Demos' && state16.clientsDemos === 0
+      && state16.groups.length === ownGroups + 2 && state16.groups.slice(-2).join('|') === 'To do:projects|Example MVP:projects'
+      && state16.moved.join('|') === 'Example Gulf demo:projects:deal|Example MVP task:projects:-'
+      && state16.kept.u === 1 && state16.kept.s === 1 && state16.checksOn.join('|') === 'board_groups:O|items:O',
+    { first, second, splitErrors, state16, ownGroups });
+  if (first.error) return null;
+
+  // 120. After it: a deal reaching Demos or Proposal sent gets no row anywhere; the moved tasks follow Operations' access
+  // (staff with Operations edit change them); moves between modules are refused again.
+  await as(boss);
+  await db.query("update deals set stage = 'Demos' where id = $1", [deal]);
+  const fresh = (await one("insert into deals (name, stage) values ('Example Fresh', 'Proposal sent') returning id")).id;
+  await as(null);
+  const after = {
+    rows: (await one(`select count(*)::int as n from items where "values" ->> 'deal' = any($1)`, [[deal, fresh]])).n,
+  };
+  const accessBefore = await rows("select user_id, module, level from module_access where user_id = $1 and module = 'projects'", [alice]);
+  await db.query("delete from module_access where user_id = $1 and module = 'projects'", [alice]);
+  await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', 'edit')", [alice]);
+  await as(alice);
+  after.aliceEdits = (await db.query(`update items set "values" = "values" || '{"priority": "High"}'::jsonb where id = $1`, [t1])).affectedRows || 0;
+  await as(null);
+  await db.query("delete from module_access where user_id = $1 and module = 'projects'", [alice]);
+  for (const a of accessBefore) await db.query('insert into module_access (user_id, module, level) values ($1, $2, $3)', [a.user_id, a.module, a.level]);
+  const prev = await one("select id, (select id from board_groups where board_id = boards.id limit 1) as grp from boards where module = 'clients' and owner_id is null order by position limit 1");
+  after.crossRefused = prev ? await db.query('update items set board_id = $1, group_id = $2 where id = $3', [prev.id, prev.grp, t2]).then(() => false, () => true) : true;
+  check('120. after 0016 a deal reaching Demos or Proposal sent gets no row; the moved tasks have Operations\' access (Operations edit changes them); '
+    + 'a move to a Clients board is refused again',
+    stable(after) === stable({ rows: 1, aliceEdits: 1, crossRefused: true }), after);
+
+  // Tidy up: the deals and tasks added here (the board and its groups stay, as 0016 leaves them).
+  await as(null);
+  await db.query('delete from items where id = any($1)', [[t1, t2]]);
+  await db.query('delete from board_groups where id = $1', [g2]);
+  await db.query('delete from deals where id = any($1)', [[deal, fresh]]);
+  return ctx;
+}
+
+// ── 0017: task emails (the queue, claim and settings) ─────────────────────────────────────────────────────────────
+
+async function phase17(ctx) {
+  const { alice, boss, david, hello } = ctx;
+
+  // 121. Runs on top of 0012, whole, again, and statement by statement; ends with its done row.
+  await as(null);
+  const run = async () => db.exec(migration17).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const first = await run();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration17, { continueOnError: true });
+  const body = migration17.replace(/--.*$/gm, '').trim();
   const doneRow = Array.isArray(first) ? first.at(-1)?.rows?.[0]?.done : null;
-  check('104. 0013 runs on top of 0012, re-runs whole and statement by statement, never mentions module_level, and ends with its done row',
-    doneRow === 'Cortex 0013 applied' && Array.isArray(second) && !splitErrors.length && /^begin;/i.test(body)
-      && /commit;\s*select 'Cortex 0013 applied' as done;$/i.test(body) && !migration13.includes('module_level'),
+  check('121. 0017 runs on top of 0012, re-runs whole and statement by statement, never mentions module_level, and ends with its done row',
+    doneRow === 'Cortex 0017 applied' && Array.isArray(second) && !splitErrors.length && /^begin;/i.test(body)
+      && /commit;\s*select 'Cortex 0017 applied' as done;$/i.test(body) && !migration17.includes('module_level'),
     { first: Array.isArray(first) ? 'ok' : first, second: Array.isArray(second) ? 'ok' : second, splitErrors });
   if (!Array.isArray(first)) return null;
 
@@ -5736,7 +6300,7 @@ async function phase13(ctx) {
   await as(null);
   await db.query('delete from private.task_mail');
 
-  // 105. Queued: a task made for someone else, a task handed to someone else, an update on someone else's task. Not: your
+  // 122. Queued: a task made for someone else, a task handed to someone else, an update on someone else's task. Not: your
   // own task, an edit that keeps the owner, your own update, rows written with no signed-in user, Work in Progress rows.
   await as(boss);
   const forAlice = await task('Council landing page', alice);
@@ -5755,10 +6319,10 @@ async function phase13(ctx) {
   await task('Example Shire', alice, { on: wip.board, grp: wip.grp, key: 'pipeline' });
   const q1 = await queue();
   const shape = q1.map((r) => `${r.kind}:${r.item_id === forAlice ? 'forAlice' : r.item_id === handed ? 'handed' : r.item_id}:${r.recipient === alice ? 'alice' : r.recipient === hello ? 'hello' : r.recipient}:${r.actor === boss ? 'boss' : r.actor === hello ? 'hello' : r.actor}`);
-  check('105. the queue gets a task made for someone else, one handed to someone else and an update on someone else’s task; not your own work, a kept owner, imports from the SQL editor or Work in Progress',
+  check('122. the queue gets a task made for someone else, one handed to someone else and an update on someone else’s task; not your own work, a kept owner, imports from the SQL editor or Work in Progress',
     shape.join() === 'assigned:forAlice:alice:boss,assigned:handed:hello:boss,update:forAlice:alice:hello' && q1[2].update_id === update, shape);
 
-  // 106. A sync write (PostgREST upsert) that keeps the owner queues nothing; one that hands the task over queues once.
+  // 123. A sync write (PostgREST upsert) that keeps the owner queues nothing; one that hands the task over queues once.
   await as(alice);
   const row = await one('select id, board_key, group_id, board_id, position, name, "values", done from items where id = $1', [forAlice]);
   const same = await postgrestUpsert('items', [{ ...row, values: row.values }]);
@@ -5766,13 +6330,13 @@ async function phase13(ctx) {
   await as(alice);
   const moved = await postgrestUpsert('items', [{ ...row, values: { ...row.values, people: [david] } }]);
   const afterMove = await queue();
-  check('106. a sync upsert that keeps the owner queues nothing; one handing the task to someone else queues one email for them',
+  check('123. a sync upsert that keeps the owner queues nothing; one handing the task to someone else queues one email for them',
     same === null && moved === null && afterSame === 3 && afterMove.length === 4 && afterMove[3].recipient === david && afterMove[3].actor === alice,
     { same, moved, afterSame, last: afterMove[3] });
   await as(alice);
   await postgrestUpsert('items', [{ ...row, values: { ...row.values, people: [alice] } }]); // she takes it back: nothing queued
 
-  // 107. Only the database and the function touch the queue: staff and admins can't read it or claim; the status and
+  // 124. Only the database and the function touch the queue: staff and admins can't read it or claim; the status and
   // sender settings are admins'.
   await as(alice);
   const staffRead = await error('select * from private.task_mail');
@@ -5783,12 +6347,12 @@ async function phase13(ctx) {
   const adminClaim = await error('select task_mail_claim()');
   const adminDone = await error("select task_mail_done('{1}', '')");
   const adminStatus = await one('select task_mail_status() as s');
-  check('107. nobody signed in reads the queue or claims it; only admins read the status or change the sender',
+  check('124. nobody signed in reads the queue or claims it; only admins read the status or change the sender',
     staffRead !== null && staffClaim !== null && staffStatus !== null && staffUse !== null && adminClaim !== null && adminDone !== null
       && adminStatus.s.sender_id === null && adminStatus.s.ready === false && adminStatus.s.waiting === 4,
     { staffRead, staffClaim, staffStatus, staffUse, adminClaim, adminDone, adminStatus });
 
-  // 108. No sender: nothing is claimed. An admin without Gmail send can't be the sender; with it they can.
+  // 125. No sender: nothing is claimed. An admin without Gmail send can't be the sender; with it they can.
   await svc();
   const idle = await one('select task_mail_claim() as c');
   await as(null);
@@ -5804,12 +6368,12 @@ async function phase13(ctx) {
   const ready = (await one('select task_mail_status() as s')).s;
   await as(null);
   const unclaimed = (await one('select count(*)::int as n from private.task_mail where claimed_at is not null')).n;
-  check('108. without a sender nothing is claimed; an admin needs Gmail send to become the sender, then the status shows it ready',
+  check('125. without a sender nothing is claimed; an admin needs Gmail send to become the sender, then the status shows it ready',
     idle.c.sender === null && idle.c.mails.length === 0 && unclaimed === 0 && noGoogle !== null && chosen.ok === true
       && ready.ready === true && ready.sender_id === boss && ready.sender_email === 'boss@example.com',
     { idle: idle.c, noGoogle, ready });
 
-  // 109. A claim: one entry per person with what each email needs; what's no longer theirs (Council landing page went to
+  // 126. A claim: one entry per person with what each email needs; what's no longer theirs (Council landing page went to
   // David, then Alice took it back) is dropped unsent; a second claim straight after gets nothing.
   await svc();
   const claim = (await one('select task_mail_claim() as c')).c;
@@ -5820,7 +6384,7 @@ async function phase13(ctx) {
   const aliceMail = byTo['alice@assetstackai.com'] || claim.mails.find((m) => m.events.some((e) => e.item === 'Council landing page'));
   const helloMail = claim.mails.find((m) => m.events.some((e) => e.item === 'Tender pack'));
   const kinds = (m) => (m?.events || []).map((e) => `${e.kind}:${e.item}`).join();
-  check('109. a claim groups by person (Alice: assigned and an update; Hello: Tender pack), with board, values, author and update text; David’s, no longer his, is dropped; a second claim gets nothing',
+  check('126. a claim groups by person (Alice: assigned and an update; Hello: Tender pack), with board, values, author and update text; David’s, no longer his, is dropped; a second claim gets nothing',
     claim.sender === boss && claim.mails.length === 2
       && kinds(aliceMail) === 'assigned:Council landing page,update:Council landing page'
       && kinds(helloMail) === 'assigned:Tender pack'
@@ -5829,7 +6393,7 @@ async function phase13(ctx) {
       && dropped.length === 1 && dropped[0] === david && again.mails.length === 0,
     { mails: claim.mails.map((m) => ({ to: m.to, kinds: kinds(m) })), dropped, again: again.mails.length });
 
-  // 110. Done: sent rows are kept as sent; a failure frees them for a later claim (five tries at most) and shows in the status.
+  // 127. Done: sent rows are kept as sent; a failure frees them for a later claim (five tries at most) and shows in the status.
   await svc();
   await db.query("select task_mail_done($1, '')", [aliceMail.ids]);
   await db.query("select task_mail_done($1, 'Gmail said no')", [helloMail.ids]);
@@ -5845,12 +6409,12 @@ async function phase13(ctx) {
   const exhausted = (await one('select task_mail_claim() as c')).c;
   await as(null);
   const sent = (await one('select count(*)::int as n from private.task_mail where id = any($1) and sent_at is not null', [aliceMail.ids])).n;
-  check('110. done marks rows sent (and the status’s last send); a failure is claimed again later, five tries at most, and shows as the last error',
+  check('127. done marks rows sent (and the status’s last send); a failure is claimed again later, five tries at most, and shows as the last error',
     sent === aliceMail.ids.length && afterDone.error === 'Gmail said no' && Boolean(afterDone.sent_at) && afterDone.waiting === 1
       && retry.mails.length === 1 && retry.mails[0].ids.join() === helloMail.ids.join() && exhausted.mails.length === 0,
     { sent, afterDone, retry: retry.mails.length, exhausted: exhausted.mails.length });
 
-  // 111. Checked as the person when sent: someone who can no longer see the board, or who isn't active, gets nothing;
+  // 128. Checked as the person when sent: someone who can no longer see the board, or who isn't active, gets nothing;
   // a deleted update takes its email with it; the claim leaves the caller's identity as it was.
   await as(null);
   await db.query('delete from private.task_mail');
@@ -5869,12 +6433,12 @@ async function phase13(ctx) {
   const helloRow = await one('select sent_at, error from private.task_mail where item_id = $1', [forHello]);
   await as(david);
   await db.query("delete from module_access where user_id = $1 and module = 'projects'", [hello]);
-  check('111. someone who can no longer see the board gets nothing (closed unsent); a deleted update’s email goes with it; the claim leaves the caller as it was',
+  check('128. someone who can no longer see the board gets nothing (closed unsent); a deleted update’s email goes with it; the claim leaves the caller as it was',
     blocked.mails.length === 1 && blocked.mails[0].events.every((e) => e.item === 'Short lived' && e.kind === 'assigned')
       && Boolean(helloRow?.sent_at) && helloRow.error === 'not sent: no longer theirs' && who === '',
     { mails: blocked.mails.map((m) => kinds(m)), helloRow, who });
 
-  // 112. Stop: admins only; then nothing is claimed.
+  // 129. Stop: admins only; then nothing is claimed.
   await as(alice);
   const staffOff = await error('select task_mail_off()');
   await as(boss);
@@ -5883,7 +6447,7 @@ async function phase13(ctx) {
   const afterOff = (await one('select task_mail_claim() as c')).c;
   await as(null);
   await db.query('delete from private.task_mail');
-  check('112. only admins stop task emails; stopped, nothing is claimed',
+  check('129. only admins stop task emails; stopped, nothing is claimed',
     staffOff !== null && off.ok === true && afterOff.sender === null && afterOff.mails.length === 0, { staffOff, afterOff });
   for (const a of access) {
     await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', $2) on conflict (user_id, module) do update set level = excluded.level", [a.user_id, a.level]);
@@ -5891,12 +6455,12 @@ async function phase13(ctx) {
   return ctx;
 }
 
-// ── 0014: the CRM (accounts, crm_contacts, the new deal columns and stages) ───────────────────────────────────────
+// ── 0018: the CRM (accounts, crm_contacts, the new deal columns and stages) ───────────────────────────────────────
 
-async function phase14(ctx) {
+async function phase18(ctx) {
   const { alice, boss, david, hello, carol } = ctx;
 
-  // Data from before 0014: a client and its deal, deals on the old stages (two with one name), one from an outreach contact.
+  // Data from before 0018: a client and its deal, deals on the old stages (two with one name), one from an outreach contact.
   await as(boss);
   const client = (await one("insert into clients (name, sector, contact_id) values ('Example Fourteen', 'Government', $1) returning id", [boss])).id;
   const old = {};
@@ -5913,28 +6477,28 @@ async function phase14(ctx) {
   const outreach = (await one("insert into contacts (name, org, email, status, owner_id) values ('Pat Example', 'Example Harbour', 'Pat@Example.com', 'Sent', $1) returning id", [boss])).id;
   old.fromContact = (await one("insert into deals (name, stage, contact_id) values ('Example Harbour', 'Contacted', $1) returning id", [outreach])).id;
 
-  // 113. Runs on top of 0013, whole, again, and statement by statement; ends with its done row; both tables RLS and realtime.
+  // 130. Runs on top of 0017, whole, again, and statement by statement; ends with its done row; both tables RLS and realtime.
   await as(null);
-  const run = async () => db.exec(migration14).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const run = async () => db.exec(migration18).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
   const first = await run();
   const counts = async () => one(`select (select count(*)::int from accounts) as accounts, (select count(*)::int from crm_contacts) as people,
     (select count(*)::int from deals where account_id is null) as unlinked`);
   const afterFirst = await counts();
   const second = await run();
   await as(null);
-  const splitErrors = await runSplit(db, migration14, { continueOnError: true });
+  const splitErrors = await runSplit(db, migration18, { continueOnError: true });
   const afterAgain = await counts();
-  const body = migration14.replace(/--.*$/gm, '').trim();
+  const body = migration18.replace(/--.*$/gm, '').trim();
   const published = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime' and tablename in ('accounts', 'crm_contacts')")).n;
   const rls = (await rows("select relrowsecurity as on from pg_class where oid in ('public.accounts'::regclass, 'public.crm_contacts'::regclass)")).every((r) => r.on);
-  check('113. 0014 runs on top of 0013, re-runs whole and statement by statement (adding nothing), never mentions module_level, ends with its done row; accounts and crm_contacts have RLS and realtime',
-    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0014 applied' && Array.isArray(second) && !splitErrors.length
-      && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0014 applied' as done;$/i.test(body) && !migration14.includes('module_level')
+  check('130. 0018 runs on top of 0017, re-runs whole and statement by statement (adding nothing), never mentions module_level, ends with its done row; accounts and crm_contacts have RLS and realtime',
+    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0018 applied' && Array.isArray(second) && !splitErrors.length
+      && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0018 applied' as done;$/i.test(body) && !migration18.includes('module_level')
       && published === 2 && rls && JSON.stringify(afterFirst) === JSON.stringify(afterAgain) && afterFirst.unlinked === 0,
     { first: Array.isArray(first) ? 'ok' : first, second: Array.isArray(second) ? 'ok' : second, splitErrors, published, rls, afterFirst, afterAgain });
   if (!Array.isArray(first)) return null;
 
-  // 114. The existing data: stages renamed (Contacted waits on them), every client a customer account, every deal its
+  // 131. The existing data: stages kept, every client a customer account, every deal its
   // account (its client's; one account for one name), the outreach contact's person on its deal.
   const deal = async (id) => one('select stage, waiting_on, account_id, contact_ids, currency, probability, stage_at from deals where id = $1', [id]);
   const d = Object.fromEntries(await Promise.all(Object.entries(old).map(async ([k, id]) => [k, await deal(id)])));
@@ -5943,15 +6507,15 @@ async function phase14(ctx) {
   const basin = await acc(d.opp.account_id);
   const person = await one('select name, email, account_id from crm_contacts where id = $1', [d.fromContact.contact_ids[0]]);
   const everyClient = (await one('select count(*)::int as n from clients c where not exists (select 1 from accounts a where a.client_id = c.id)')).n;
-  check('114. existing deals: old stages renamed (Contacted waits on them), each on its account (a client’s is its customer account; one name, one account); every client has an account; an outreach contact’s person is on its deal',
-    d.opp.stage === 'Interested' && d.contacted.stage === 'Interested' && d.contacted.waiting_on === 'them' && d.opp.waiting_on === ''
-      && d.meeting.stage === 'Meeting booked' && d.won.stage === 'Demo held' && d.opp.currency === 'AUD' && d.opp.probability === null
+  check('131. existing deals: stages kept, each on its account (a client’s is its customer account; one name, one account); every client has an account; an outreach contact’s person is on its deal',
+    d.opp.stage === 'Opportunities' && d.contacted.stage === 'Contacted' && d.contacted.waiting_on === '' && d.opp.waiting_on === ''
+      && d.meeting.stage === 'First meetings' && d.won.stage === 'Demos' && d.opp.currency === 'AUD' && d.opp.probability === null
       && clientAccount.kind === 'customer' && clientAccount.lifecycle === 'customer' && clientAccount.client_id === client && clientAccount.owner_id === boss
       && d.contacted.account_id === d.opp.account_id && basin.lifecycle === 'opportunity' && everyClient === 0
       && person?.name === 'Pat Example' && person.email === 'pat@example.com' && person.account_id === d.fromContact.account_id,
     { d, clientAccount, basin, person, everyClient });
 
-  // 115. Pipeline access: staff at the default (View) read accounts and people and change none; with Edit they add,
+  // 132. Pipeline access: staff at the default (View) read accounts and people and change none; with Edit they add,
   // change and delete; inactive or with Pipeline none, nothing.
   await as(david);
   await db.query("delete from module_access where user_id = any($1) and module = 'pipeline'", [[alice, hello]]);
@@ -5973,11 +6537,11 @@ async function phase14(ctx) {
   const none = (await rows('select id from accounts')).length;
   await as(david);
   await db.query("delete from module_access where user_id = $1 and module = 'pipeline'", [alice]);
-  check('115. Pipeline View reads accounts and contacts but changes none; Pipeline Edit adds and changes them; inactive or Pipeline None sees none',
+  check('132. Pipeline View reads accounts and contacts but changes none; Pipeline Edit adds and changes them; inactive or Pipeline None sees none',
     viewReads > 0 && viewAdd !== null && viewEdit === 0 && viewPerson !== null && Boolean(account) && Boolean(jo) && editUpdate === 1
       && inactive === 0 && none === 0, { viewReads, viewAdd, viewEdit, viewPerson, editUpdate, inactive, none });
 
-  // 116. The new deal columns: checked values; stage_at is the database's (a stage change stamps it, nothing else does,
+  // 133. The new deal columns: checked values; stage_at is the database's (a stage change stamps it, nothing else does,
   // an insert keeps a time given); a sync upsert with the new columns.
   await as(hello);
   const badCurrency = await error("insert into deals (name, currency) values ('X', 'XYZ')");
@@ -5986,21 +6550,21 @@ async function phase14(ctx) {
   const badRole = await error("insert into crm_contacts (account_id, name, role) values ($1, 'X', 'boss')", [account]);
   const badLifecycle = await error("insert into accounts (name, lifecycle) values ('X', 'won')");
   const fresh = (await one(`insert into deals (name, stage, account_id, contact_ids, currency, probability, waiting_on, stage_at)
-    values ('Example Shire', 'Interested', $1, $2, 'NZD', 40, 'us', '2026-01-05T00:00:00Z') returning id, stage_at`, [account, [jo]]));
+    values ('Example Shire', 'Opportunities', $1, $2, 'NZD', 40, 'us', '2026-01-05T00:00:00Z') returning id, stage_at`, [account, [jo]]));
   const kept = Date.parse(fresh.stage_at) === Date.parse('2026-01-05T00:00:00Z');
   await db.query("update deals set next_step = 'Call', stage_at = '2020-01-01T00:00:00Z' where id = $1", [fresh.id]);
   const unchanged = Date.parse((await one('select stage_at from deals where id = $1', [fresh.id])).stage_at) === Date.parse('2026-01-05T00:00:00Z');
-  await db.query("update deals set stage = 'Demo held' where id = $1", [fresh.id]);
+  await db.query("update deals set stage = 'Demos' where id = $1", [fresh.id]);
   const moved = Date.now() - Date.parse((await one('select stage_at from deals where id = $1', [fresh.id])).stage_at) < 60_000;
   const row = await one('select id, name, stage, account_id, contact_ids, currency, close_on, probability, waiting_on, lost_reason, stage_at, position from deals where id = $1', [fresh.id]);
   const upsert = await postgrestUpsert('deals', [{ ...row, stage: 'Lost', lost_reason: 'Timing', probability: null }]);
   const lost = await one('select stage, lost_reason, probability from deals where id = $1', [fresh.id]);
-  check('116. deals: currency, waiting on and probability are checked (and a contact’s role, an account’s lifecycle); stage_at is kept on insert and on other edits, stamped when the stage changes; the app’s upsert writes the new columns',
+  check('133. deals: currency, waiting on and probability are checked (and a contact’s role, an account’s lifecycle); stage_at is kept on insert and on other edits, stamped when the stage changes; the app’s upsert writes the new columns',
     [badCurrency, badWaiting, badProbability, badRole, badLifecycle].every((e) => e !== null) && kept && unchanged && moved && upsert === null
       && lost.stage === 'Lost' && lost.lost_reason === 'Timing' && lost.probability === null,
     { badCurrency, badWaiting, badProbability, badRole, badLifecycle, kept, unchanged, moved, upsert, lost });
 
-  // 117. Timeline entries on an account or a contact: Pipeline Edit adds, View reads, never moved by an edit; deleting a
+  // 134. Timeline entries on an account or a contact: Pipeline Edit adds, View reads, never moved by an edit; deleting a
   // contact or an account takes theirs; an account deleted leaves its deals, without it.
   await as(hello);
   const onAccount = (await one("insert into crm_entries (account_id, kind, body) values ($1, 'note', 'Budget in Feb') returning id, user_id", [account]));
@@ -6019,13 +6583,13 @@ async function phase14(ctx) {
   await as(null);
   const afterAccount = await one(`select (select count(*)::int from crm_entries where id = $1) as entries,
     (select account_id from deals where id = $2) as account`, [onAccount.id, fresh.id]);
-  check('117. entries on an account or a contact: Pipeline Edit adds (as themselves), View reads but adds none; an edit never moves one; deleting the contact or the account takes theirs, and leaves the account’s deals without it',
+  check('134. entries on an account or a contact: Pipeline Edit adds (as themselves), View reads but adds none; an edit never moves one; deleting the contact or the account takes theirs, and leaves the account’s deals without it',
     onAccount.user_id === hello && viewerReads === 2 && viewerAdds !== null && stays.account_id === account && stays.contact_id === null
       && goneWithPerson === 1 && personEntries === 0 && afterAccount.entries === 0 && afterAccount.account === null,
     { onAccount, viewerReads, viewerAdds, stays, personEntries, afterAccount });
 
-  // 118. The outreach automation: a reply files the organisation as an (engaged) account and the person as its contact,
-  // on a new Interested deal waiting on us; a booking moves the deal to Meeting booked and the account to meeting; another
+  // 135. The outreach automation: a reply files the organisation as an (engaged) account and the person as its contact,
+  // on a new Opportunities deal waiting on us; a booking moves the deal to First meetings and the account to meeting; another
   // reply from the same person adds nobody; an account set aside keeps its lifecycle.
   await as(boss);
   const lead = (await one("insert into contacts (name, org, email, status, owner_id) values ('Lee Example', 'Example Lakes', 'lee@example.com', 'Replied', $1) returning id", [boss])).id;
@@ -6041,9 +6605,9 @@ async function phase14(ctx) {
   await as(boss);
   await db.query("insert into contacts (name, org, email, status, owner_id) values ('Kim Example', 'Example Quiet', '', 'Replied', $1)", [boss]);
   const quiet = await one("select count(*)::int as n, min(lifecycle) as lifecycle from accounts where name = 'Example Quiet'");
-  check('118. the outreach automation files the account (engaged, then meeting) and the person, on an Interested deal waiting on us that a booking moves to Meeting booked; the same person again adds nobody; a suppressed account stays so',
-    made.stage === 'Interested' && made.waiting_on === 'us' && lakes.kind === 'prospect' && lakes.lifecycle === 'engaged' && lakes.owner_id === boss
-      && lee.name === 'Lee Example' && lee.email === 'lee@example.com' && booked.stage === 'Meeting booked' && booked.lifecycle === 'meeting'
+  check('135. the outreach automation files the account (engaged, then meeting) and the person, on an Opportunities deal waiting on us that a booking moves to First meetings; the same person again adds nobody; a suppressed account stays so',
+    made.stage === 'Opportunities' && made.waiting_on === 'us' && lakes.kind === 'prospect' && lakes.lifecycle === 'engaged' && lakes.owner_id === boss
+      && lee.name === 'Lee Example' && lee.email === 'lee@example.com' && booked.stage === 'First meetings' && booked.lifecycle === 'meeting'
       && twinDeal.account_id === made.account_id && twinDeal.contact_ids[0] === made.contact_ids[0] && quiet.n === 1 && quiet.lifecycle === 'suppressed',
     { made, lakes, lee, booked, twinDeal, quiet });
   await as(david);
@@ -6052,47 +6616,47 @@ async function phase14(ctx) {
   return ctx;
 }
 
-// ── 0015: deal stage history ──────────────────────────────────────────────────────────────────────────────────────
+// ── 0019: deal stage history ──────────────────────────────────────────────────────────────────────────────────────
 
-async function phase15(ctx) {
+async function phase19(ctx) {
   const { alice, boss, david, hello, carol } = ctx;
 
-  // 119. Runs on top of 0014, whole, again, and statement by statement; ends with its done row; RLS and realtime; every
+  // 136. Runs on top of 0018, whole, again, and statement by statement; ends with its done row; RLS and realtime; every
   // existing deal gets one starting row (Won for one made a client), and a re-run adds none.
   await as(null);
-  const run = async () => db.exec(migration15).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const run = async () => db.exec(migration19).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
   const first = await run();
   const rowsNow = async () => (await one('select count(*)::int as n from deal_stage_history')).n;
   const afterFirst = await rowsNow();
   const second = await run();
   await as(null);
-  const splitErrors = await runSplit(db, migration15, { continueOnError: true });
+  const splitErrors = await runSplit(db, migration19, { continueOnError: true });
   const afterAgain = await rowsNow();
   const deals = (await one('select count(*)::int as n from deals')).n;
   const won = await one(`select h.to_stage, h.from_stage from deal_stage_history h join deals d on d.id = h.deal_id
     where d.client_id is not null limit 1`);
-  const body = migration15.replace(/--.*$/gm, '').trim();
+  const body = migration19.replace(/--.*$/gm, '').trim();
   const published = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'deal_stage_history'")).n;
-  check('119. 0015 runs on top of 0014, re-runs whole and statement by statement, never mentions module_level, ends with its done row; one starting row per existing deal (Won once made a client), none added on a re-run',
-    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0015 applied' && Array.isArray(second) && !splitErrors.length
-      && /commit;\s*select 'Cortex 0015 applied' as done;$/i.test(body) && !migration15.includes('module_level') && published === 1
+  check('136. 0019 runs on top of 0018, re-runs whole and statement by statement, never mentions module_level, ends with its done row; one starting row per existing deal (Won once made a client), none added on a re-run',
+    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0019 applied' && Array.isArray(second) && !splitErrors.length
+      && /commit;\s*select 'Cortex 0019 applied' as done;$/i.test(body) && !migration19.includes('module_level') && published === 1
       && afterFirst === deals && afterAgain === afterFirst && won?.to_stage === 'Won' && won.from_stage === '',
     { first: Array.isArray(first) ? 'ok' : first, second: Array.isArray(second) ? 'ok' : second, splitErrors, afterFirst, afterAgain, deals, won });
   if (!Array.isArray(first)) return null;
 
-  // 120. The trigger: a new deal (from ''), each stage move, Make client (Won) — with who; other edits add nothing.
+  // 137. The trigger: a new deal (from ''), each stage move, Make client (Won) — with who; other edits add nothing.
   await as(boss);
-  const id = (await one("insert into deals (name, stage) values ('Example History', 'Interested') returning id")).id;
+  const id = (await one("insert into deals (name, stage) values ('Example History', 'Opportunities') returning id")).id;
   await db.query("update deals set next_step = 'Call', value = 10 where id = $1", [id]);
-  await db.query("update deals set stage = 'Demo held' where id = $1", [id]);
+  await db.query("update deals set stage = 'Demos' where id = $1", [id]);
   const cl = (await one("insert into clients (name) values ('Example History') returning id")).id;
   await db.query('update deals set client_id = $2 where id = $1', [id, cl]);
   const history = (await rows('select from_stage, to_stage, changed_by from deal_stage_history where deal_id = $1 order by changed_at, from_stage', [id]));
-  check('120. the history: added (from nothing), moved, made a client (Won), each by who did it; other edits add nothing',
-    JSON.stringify(history.map((h) => [h.from_stage, h.to_stage])) === JSON.stringify([['', 'Interested'], ['Interested', 'Demo held'], ['Demo held', 'Won']])
+  check('137. the history: added (from nothing), moved, made a client (Won), each by who did it; other edits add nothing',
+    JSON.stringify(history.map((h) => [h.from_stage, h.to_stage])) === JSON.stringify([['', 'Opportunities'], ['Opportunities', 'Demos'], ['Demos', 'Won']])
       && history.every((h) => h.changed_by === boss), history);
 
-  // 121. Read only: Pipeline View reads it; nobody signed in writes it; inactive or Pipeline None sees none; it goes with
+  // 138. Read only: Pipeline View reads it; nobody signed in writes it; inactive or Pipeline None sees none; it goes with
   // its deal.
   await as(alice);
   const viewReads = (await rows('select id from deal_stage_history where deal_id = $1', [id])).length;
@@ -6106,32 +6670,32 @@ async function phase15(ctx) {
   await db.query('delete from deals where id = $1', [id]);
   await as(null);
   const left = (await one('select count(*)::int as n from deal_stage_history where deal_id = $1', [id])).n;
-  check('121. the history is read only (no insert, update or delete, even for admins), read with Pipeline view, none for an inactive profile; it goes with its deal',
+  check('138. the history is read only (no insert, update or delete, even for admins), read with Pipeline view, none for an inactive profile; it goes with its deal',
     viewReads === 3 && insert !== null && update !== null && adminDelete !== null && inactive === 0 && left === 0,
     { viewReads, insert, update, adminDelete, inactive, left });
   await db.query('delete from clients where id = $1', [cl]);
   return ctx;
 }
 
-async function phase16(ctx) {
+async function phase20(ctx) {
   const { alice, boss, hello, carol } = ctx;
 
-  // 122. Runs on top of 0015, whole, again, and statement by statement; ends with its done row; RLS on and realtime for
+  // 139. Runs on top of 0019, whole, again, and statement by statement; ends with its done row; RLS on and realtime for
   // all three tables.
   await as(null);
-  const run = async () => db.exec(migration16).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const run = async () => db.exec(migration20).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
   const first = await run();
   const second = await run();
   await as(null);
-  const splitErrors = await runSplit(db, migration16, { continueOnError: true });
-  const body = migration16.replace(/--.*$/gm, '').trim();
+  const splitErrors = await runSplit(db, migration20, { continueOnError: true });
+  const body = migration20.replace(/--.*$/gm, '').trim();
   const tables = ['lead_lists', 'leads', 'suppressions'];
   const published = (await one(`select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'
     and tablename = any($1::text[])`, [tables])).n;
   const rls = (await one(`select count(*)::int as n from pg_class where relrowsecurity and relname = any($1::text[])`, [tables])).n;
-  check('122. 0016 runs on top of 0015, re-runs whole and statement by statement, never mentions module_level, ends with its done row; RLS on and realtime for its three tables',
-    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0016 applied' && Array.isArray(second) && !splitErrors.length
-      && /commit;\s*select 'Cortex 0016 applied' as done;$/i.test(body) && !migration16.includes('module_level') && published === 3 && rls === 3,
+  check('139. 0020 runs on top of 0019, re-runs whole and statement by statement, never mentions module_level, ends with its done row; RLS on and realtime for its three tables',
+    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0020 applied' && Array.isArray(second) && !splitErrors.length
+      && /commit;\s*select 'Cortex 0020 applied' as done;$/i.test(body) && !migration20.includes('module_level') && published === 3 && rls === 3,
     { first: Array.isArray(first) ? 'ok' : first, second: Array.isArray(second) ? 'ok' : second, splitErrors, published, rls });
   if (!Array.isArray(first)) return null;
 
@@ -6140,7 +6704,7 @@ async function phase16(ctx) {
   await db.query(`insert into module_access (user_id, module, level) values ($1, 'outreach', 'view'), ($2, 'outreach', 'none')
     on conflict (user_id, module) do update set level = excluded.level`, [alice, hello]);
 
-  // 123. Outreach Edit writes lists, leads and suppressions (who added a list is whoever did); a lead goes with its list;
+  // 140. Outreach Edit writes lists, leads and suppressions (who added a list is whoever did); a lead goes with its list;
   // a suppression is stored trimmed and lower case once per kind; a converted lead keeps its account and contact, cleared
   // when they go.
   await as(boss);
@@ -6156,12 +6720,12 @@ async function phase16(ctx) {
   await db.query("update leads set status = 'converted', account_id = $2, person_id = $3 where id = $1", [lead, acct, person]);
   await db.query('delete from accounts where id = $1', [acct]);
   const cleared = await one('select status, account_id, person_id from leads where id = $1', [lead]);
-  check('123. Outreach Edit writes lists, leads and suppressions (a list is added by whoever added it); one suppression per value, stored lower case; a lead keeps its status but loses a deleted account and contact',
+  check('140. Outreach Edit writes lists, leads and suppressions (a list is added by whoever added it); one suppression per value, stored lower case; a lead keeps its status but loses a deleted account and contact',
     list.created_by === boss && sup === 1 && dupSup !== null && upper !== null && badStatus !== null
       && cleared.status === 'converted' && cleared.account_id === null && cleared.person_id === null,
     { list, sup, dupSup, upper, badStatus, cleared });
 
-  // 124. Outreach View reads but never writes; Outreach None and an inactive profile see nothing.
+  // 141. Outreach View reads but never writes; Outreach None and an inactive profile see nothing.
   await as(alice);
   const viewLists = (await rows('select id from lead_lists')).length;
   const viewLeads = (await rows('select id from leads')).length;
@@ -6173,17 +6737,17 @@ async function phase16(ctx) {
   const noneSees = (await rows('select id from leads')).length + (await rows('select id from lead_lists')).length + (await rows('select id from suppressions')).length;
   await as(carol);
   const inactiveSees = (await rows('select id from leads')).length + (await rows('select id from suppressions')).length;
-  check('124. Outreach View reads lists, leads and the suppress list but changes none; Outreach None and an inactive profile see none',
+  check('141. Outreach View reads lists, leads and the suppress list but changes none; Outreach None and an inactive profile see none',
     viewLists >= 1 && viewLeads >= 1 && viewSup >= 1 && viewInsert !== null && viewUpdate === 0 && viewSupInsert !== null
       && noneSees === 0 && inactiveSees === 0,
     { viewLists, viewLeads, viewSup, viewInsert, viewUpdate, viewSupInsert, noneSees, inactiveSees });
 
-  // 125. Deleting a list deletes its leads.
+  // 142. Deleting a list deletes its leads.
   await as(boss);
   await db.query('delete from lead_lists where id = $1', [list.id]);
   const gone = (await one('select count(*)::int as n from leads where id = $1', [lead])).n;
   await db.query("delete from suppressions where value = 'example.net'");
-  check('125. deleting a list deletes its leads', gone === 0, { gone });
+  check('142. deleting a list deletes its leads', gone === 0, { gone });
 
   await as(null);
   await db.query("delete from module_access where module = 'outreach' and user_id = any($1::uuid[])", [[alice, hello]]);
@@ -6311,7 +6875,11 @@ try {
   const ctx14 = ctx13 && await phase14(ctx13);
   const ctx15 = ctx14 && await phase15(ctx14);
   const ctx16 = ctx15 && await phase16(ctx15);
-  if (ctx16) await syncWriteCheck(ctx16);
+  const ctx17 = ctx16 && await phase17(ctx16);
+  const ctx18 = ctx17 && await phase18(ctx17);
+  const ctx19 = ctx18 && await phase19(ctx18);
+  const ctx20 = ctx19 && await phase20(ctx19);
+  if (ctx20) await syncWriteCheck(ctx20);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);

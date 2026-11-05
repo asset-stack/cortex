@@ -10,7 +10,7 @@ import { autoMap, fieldsFor, normalise, withFullName } from '@/lib/importers';
 import { compactMoney, shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
-// Accounts and CRM contacts arrive with 0014 (needs: accounts), leads with 0016 (needs: leads).
+// Accounts and CRM contacts arrive with 0018 (needs: accounts), leads with 0020 (needs: leads).
 const KINDS = [
   { id: 'clients', label: 'Clients' }, { id: 'accounts', label: 'Accounts', needs: 'accounts' }, { id: 'people', label: 'CRM contacts', needs: 'accounts' },
   { id: 'deals', label: 'Deals' }, { id: 'contacts', label: 'Outreach contacts' }, { id: 'leads', label: 'Leads', needs: 'leads' },

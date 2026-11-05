@@ -3499,7 +3499,7 @@ await check('gmail sync: no connection, a mailbox gone mid-run, a failed save or
   assert.deepEqual(pick(queued.data, ['failed', 'pending']), { failed: 1, pending: 2 });
 });
 
-// ── Task emails (0013) ──────────────────────────────────────────────────────────────────────────────────────────
+// ── Task emails (0017) ──────────────────────────────────────────────────────────────────────────────────────────
 
 const SENDER = 'c0000000-0000-4000-8000-0000000000b1';
 const BOARD = 'c0000000-0000-4000-8000-0000000000c1';

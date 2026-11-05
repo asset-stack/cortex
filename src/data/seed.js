@@ -8,7 +8,7 @@ import {
   historyBackfillLocal, isoDow, makeTodo, personDefaults, uid,
 } from '../lib/automations.js';
 import { TEAM_TIMEZONE, localYmd } from '../lib/format.js';
-import { DEAL_STAGES, OLD_DEAL_STAGES, dealStage, withPeople } from './boards.js';
+import { DEAL_STAGES, DEAL_TASKS_BOARD, dealStage, withPeople } from './boards.js';
 import { TOOL_PRESETS } from '../lib/tools.js';
 import { BOARD_MODULES, EXISTING_BOARD, FIRST_GROUP, FIRST_GROUP_COLOR, STARTING_BOARDS } from '../lib/boards.js';
 
@@ -102,6 +102,21 @@ function boards(clientId = () => '', dealId = () => '') {
         item('Outsource time logger', { people: ['david'], status: 'Done', priority: 'Low', due: '2026-10-09' }),
       ]),
     ]),
+    // Pipeline › Demos (§25, §26): the deals' tasks; an Operations board underneath, with its fixed id, under Pipeline in
+    // the sidebar. Clients › Demos' groups came here (0016).
+    { ...board('projects', 'Demos', [
+      group('Next steps', '#c9ffe6', [
+        item('Book the Northside site visit', { deal: dealId('Northside Diocese'), people: ['david'], also: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-11-04' }),
+      ]),
+      group('To do', '#c9ffe6', [
+        item('Northside Diocese: asset register walkthrough', { deal: dealId('Northside Diocese'), people: ['david'], status: 'In progress', priority: 'Urgent', due: '2026-10-27' }),
+        item('Coastal Rail: condition data demo', { deal: dealId('Coastal Rail'), people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-10-29' }),
+        item('Harbour Construction: digital twin demo', { deal: dealId('Harbour Construction'), people: ['david'], status: 'Not started', priority: 'Low', due: '' }),
+      ]),
+      group('Done', '#bfe9ff', [
+        item('Westbay Council: onboarding demo', { deal: dealId('Westbay Council'), people: ['josh'], status: 'Done', priority: 'High', due: '2026-10-14' }),
+      ]),
+    ]), id: DEAL_TASKS_BOARD },
     board('marketing', 'Daily Automation', [
       group('Every day', '#bfe9ff', [
         item('Morning LinkedIn post', { people: ['hello'], status: 'Not started', priority: 'Medium', type: 'Industry', channel: 'LinkedIn', approval: 'Yes', due: '' }),
@@ -153,16 +168,6 @@ function boards(clientId = () => '', dealId = () => '') {
       ]),
       group('Done', '#bfe9ff', [
         item('Intro call with Glenmore Shire Council', { people: ['david'], status: 'Done', priority: 'Medium', due: '2026-10-15' }),
-      ]),
-    ]),
-    board('clients', 'Demos', [
-      group('To do', '#c9ffe6', [
-        item('Northside Diocese: asset register walkthrough', { client: clientId('Northside Diocese'), people: ['david'], status: 'In progress', priority: 'Urgent', due: '2026-10-27' }),
-        item('Coastal Rail: condition data demo', { client: clientId('Coastal Rail'), people: ['josh'], status: 'Not started', priority: 'Medium', due: '2026-10-29' }),
-        item('Harbour Construction: digital twin demo', { client: clientId('Harbour Construction'), people: ['david'], status: 'Not started', priority: 'Low', due: '' }),
-      ]),
-      group('Done', '#bfe9ff', [
-        item('Westbay Council: onboarding demo', { client: clientId('Westbay Council'), people: ['josh'], status: 'Done', priority: 'High', due: '2026-10-14' }),
       ]),
     ]),
     board('clients', 'Previews', [
@@ -217,7 +222,7 @@ function crmDemo(deals, clients) {
   ];
 }
 
-// A deal; `days` in its stage so far (0014: the board flags 14 and more as stalled).
+// A deal; `days` in its stage so far (0018: the board flags 14 and more as stalled); `source` its Lead (0013).
 // The demo CRM's accounts and people (placeholders only), on the accounts crmBackfillLocal() made from the deals and
 // clients: kinds, lifecycles, time zones, guardrails, a partner who referred one, a nurture and a suppressed account.
 function crmAccountsDemo(state, today) {
@@ -282,9 +287,9 @@ function crmAccountsDemo(state, today) {
   }
 }
 
-// Where the demo deals have been (0015's history): each came in at Interested and moved a stage every week or so to
-// where it is now (reached at its stageAt); the lost ones from Intro held, the one made a client then Won.
-const LOST_FROM = { 'Lakeview Shire': 'Demo held', 'Pinecrest Council': 'Interested', 'Hillcrest Shire': 'Intro held' };
+// Where the demo deals have been (0019's history): each came in at Opportunities and moved a stage every week or so to
+// where it is now (reached at its stageAt); the lost ones from earlier stages, the one made a client then Won.
+const LOST_FROM = { 'Lakeview Shire': 'Demos', 'Pinecrest Council': 'Opportunities', 'Hillcrest Shire': 'First meetings' };
 function demoHistory(deals) {
   const rows = [];
   deals.forEach((d) => {
@@ -305,7 +310,7 @@ function demoHistory(deals) {
 }
 
 const deal = (name, sector, value, priority, stage, contact, next, contactId = '', { days = 3, ...extra } = {}) => ({
-  id: id('d'), name, sector, value, priority, stage, contact, next, contactId, ...dealDefaults(hoursAgo(days * 24)), ...extra,
+  id: id('d'), name, sector, value, priority, stage, contact, next, contactId, source: '', ...dealDefaults(hoursAgo(days * 24)), ...extra,
 });
 
 const invoice = (number, issued, due, status, desc, rate, extra = {}) => ({
@@ -332,7 +337,7 @@ function clients(today) {
   const harbourPlan = plan('Pilot licence (quarterly)', 7250, 'quarterly', addMonths(thisMonth, 2));
   return [
     {
-      id: id('c'), name: 'Westbay Council', group: 'Onboarding', status: 'Onboarding', priority: 'P1',
+      id: id('c'), name: 'Westbay Council', group: 'Onboarding', status: 'Onboarding', priority: 'P1', source: 'lyco',
       next: 'David to finalise onboarding meeting', sector: 'Government', contact: 'josh', team: ['josh', 'david'],
       lastContact: '2026-05-19', demo: 'Live site with client', demoUrl: 'https://demo.example.com',
       platformUrl: 'https://westbay.example.com', avatar: '#3b82f6', abn: '', billingAddress: '',
@@ -366,7 +371,7 @@ function clients(today) {
       ],
     },
     {
-      id: id('c'), name: 'Northside Diocese', group: 'Active', status: 'Proposal sent', priority: 'P1',
+      id: id('c'), name: 'Northside Diocese', group: 'Active', status: 'Proposal sent', priority: 'P1', source: 'assetstack',
       next: 'Josh to send scope', sector: 'Healthcare', contact: 'josh', team: ['hello', 'david', 'josh'],
       lastContact: '2026-05-17', demo: 'Demo with client', demoUrl: '', platformUrl: '', avatar: '#6366f1', abn: '', billingAddress: '',
       contacts: [clientPerson('Jordan Price', 'Facilities lead', 'jordan.price@example.com', true)], contracts: [],
@@ -376,7 +381,7 @@ function clients(today) {
       usage: [],
     },
     {
-      id: id('c'), name: 'Coastal Rail', group: 'Active', status: 'Passive', priority: 'P2',
+      id: id('c'), name: 'Coastal Rail', group: 'Active', status: 'Passive', priority: 'P2', source: 'lyco',
       next: 'Re-send demo link (blocked on their network)', sector: 'Transport', contact: 'hello', team: ['hello'],
       lastContact: '2026-08-11', demo: 'Re-send demo link', demoUrl: '', platformUrl: '', avatar: '#f59e0b', abn: '', billingAddress: '',
       contacts: [clientPerson('Casey Ng', 'Senior engineer', 'casey.ng@example.com', true)], contracts: [],
@@ -384,7 +389,7 @@ function clients(today) {
       tasks: [], invoices: [], access: [], plans: [], usage: [],
     },
     {
-      id: id('c'), name: 'Harbour Construction', group: 'Active', status: 'Active', priority: 'P2',
+      id: id('c'), name: 'Harbour Construction', group: 'Active', status: 'Active', priority: 'P2', source: '',
       next: 'Pilot running on two sites', sector: 'Construction', contact: 'david', team: ['david', 'hello'],
       lastContact: '2026-10-02', demo: 'Pilot', demoUrl: '', platformUrl: 'https://harbour.example.com', avatar: '#ef4444', abn: '', billingAddress: '',
       contacts: [clientPerson('Jamie Park', 'Project director', 'jamie.park@example.com', true)],
@@ -661,7 +666,7 @@ export function demoMeetings(today) {
   ];
 }
 
-// Leads (0016) for demo mode: a list pulled from Apollo whose first leads the agent has already emailed (their outreach
+// Leads (0020) for demo mode: a list pulled from Apollo whose first leads the agent has already emailed (their outreach
 // rows give the contact history), new ones not yet sent, one at a suppressed domain, one at an account suppressed in the
 // CRM, one already a CRM contact, and a second, smaller list with a repeat. Fictional people and organisations.
 export function leadsDemo(state, today, idf = (p) => `${p}_${uid()}`) {
@@ -741,21 +746,22 @@ export function createSeed() {
 
   // Deals that came from an outreach contact keep the link, so a later reply or booking moves them on.
   const deals = [
-    deal('City of Lakeside', 'Government', 70000, 'P2', 'Interested', 'josh', 'Intro call', '', { days: 2, waitingOn: 'us' }),
-    deal('Riverbend Water', 'Utilities', 220000, 'P1', 'Interested', 'david', 'Send digital twin brief', contactId('Riley Shaw'),
-      { days: 1, waitingOn: 'us', closeOn: addMonths(today, 4) }),
-    deal('Coastal Rail', 'Transport', 160000, 'P2', 'Interested', 'hello', 'PDF walkthrough', contactId('Casey Ng'), { days: 20, waitingOn: 'them', closeOn: addDays(today, -6) }),
-    deal('Shire of Southcliff', 'Government', 55000, 'P2', 'Meeting booked', 'josh', 'Thursday 10am walkthrough', contactId('Morgan Hale'),
-      { days: 1, closeOn: addMonths(today, 3) }),
-    deal('Eastgate University Facilities', 'Education', 90000, 'P3', 'Intro held', 'david', 'Confirm campus list', '', { days: 35, waitingOn: 'them', closeOn: addMonths(today, 2) }),
-    deal('Harbourside District Council', 'Government', 85000, 'P2', 'Intro held', 'josh', 'Send the asset plan example', '',
+    deal('City of Lakeside', 'Government', 70000, 'P2', 'Opportunities', 'josh', 'Intro call', '', { days: 2, waitingOn: 'us' }),
+    deal('Riverbend Water', 'Utilities', 220000, 'P1', 'Opportunities', 'david', 'Send digital twin brief', contactId('Riley Shaw'),
+      { days: 1, waitingOn: 'us', closeOn: addMonths(today, 4), source: 'assetstack' }),
+    deal('Coastal Rail', 'Transport', 160000, 'P2', 'Contacted', 'hello', 'PDF walkthrough', contactId('Casey Ng'),
+      { days: 20, waitingOn: 'them', closeOn: addDays(today, -6), source: 'lyco' }),
+    deal('Shire of Southcliff', 'Government', 55000, 'P2', 'First meetings', 'josh', 'Thursday 10am walkthrough', contactId('Morgan Hale'),
+      { days: 1, closeOn: addMonths(today, 3), source: 'assetstack' }),
+    deal('Eastgate University Facilities', 'Education', 90000, 'P3', 'First meetings', 'david', 'Confirm campus list', '', { days: 35, waitingOn: 'them', closeOn: addMonths(today, 2) }),
+    deal('Harbourside District Council', 'Government', 85000, 'P2', 'First meetings', 'josh', 'Send the asset plan example', '',
       { days: 6, currency: 'NZD', waitingOn: 'us', closeOn: addMonths(today, 3) }),
-    deal('Northside Diocese', 'Healthcare', 110000, 'P1', 'Demo held', 'josh', 'Scope document', contactId('Jordan Price'),
-      { days: 4, closeOn: addMonths(today, 1), waitingOn: 'us' }),
+    deal('Northside Diocese', 'Healthcare', 110000, 'P1', 'Demos', 'josh', 'Scope document', contactId('Jordan Price'),
+      { days: 4, closeOn: addMonths(today, 1), waitingOn: 'us', source: 'assetstack' }),
     deal('Kingsford Housing Trust', 'Community housing', 60000, 'P1', 'Proposal sent', 'josh', 'Non-profit pricing in the proposal', '',
       { days: 9, currency: 'GBP', closeOn: addMonths(today, 2), probability: 70, waitingOn: 'them' }),
-    deal('Harbour Construction', 'Construction', 190000, 'P1', 'Contract sent', 'david', 'Pilot review', '', { days: 5, waitingOn: 'them', closeOn: addDays(today, 10) }),
-    deal('Westbay Council', 'Government', 130000, 'P1', 'Demo held', 'david', 'Onboarding', contactId('Alex Taylor'), { days: 30 }),
+    deal('Harbour Construction', 'Construction', 190000, 'P1', 'Proposal sent', 'david', 'Pilot review', '', { days: 5, waitingOn: 'them', closeOn: addDays(today, 10), source: 'lyco' }),
+    deal('Westbay Council', 'Government', 130000, 'P1', 'Demos', 'david', 'Onboarding', contactId('Alex Taylor'), { days: 30, source: 'lyco' }),
     deal('Lakeview Shire', 'Government', 40000, 'P3', 'Lost', 'josh', '', '', { days: 12, lostReason: 'Existing system' }),
     deal('Pinecrest Council', 'Government', 65000, 'P2', 'Lost', 'hello', '', '', { days: 40, lostReason: 'Existing system' }),
     deal('Hillcrest Shire', 'Government', 50000, 'P3', 'Lost', 'josh', '', '', { days: 25, lostReason: 'Timing' }),
@@ -800,10 +806,10 @@ export function createSeed() {
     routines: routines(),
     todos: [],
     routineRuns: [], // demo only: the routine runs ensureTodosLocal has made (routine_runs in the database)
-    seededBoards: [...BOARD_MODULES], // demo only: modules whose starting boards this demo has (migrate() adds new ones once)
+    seededBoards: [...BOARD_MODULES, 'dealTasks', 'pipelineDemos'], // demo only: modules whose starting boards this demo has (migrate() adds new ones once; 'dealTasks' §25, 'pipelineDemos' §26)
     calendarSeeded: true, // demo only: Posting schedule's calendar was switched on (migrate() does it once for older data)
-    crmSeeded: true, // demo only: 0014's one-off steps are done (migrate() does them once for older data)
-    historySeeded: true, // demo only: 0015's starting rows are done (migrate() does them once for older data)
+    crmSeeded: true, // demo only: 0018's one-off steps are done (migrate() does them once for older data)
+    historySeeded: true, // demo only: 0019's starting rows are done (migrate() does them once for older data)
     calendarEvents: demoCalendarEvents(today, id),
     payments: [
       { id: id('pay'), invoiceId: invoiceNo(westbay, 'INV-1012'), clientId: westbay.id, amount: 5000, receivedOn: '2026-10-07', reference: 'Part payment INV-1012', statementId: statement.id },
@@ -832,7 +838,7 @@ export function createSeed() {
     }),
   };
 
-  // The CRM (0014): every client and deal its account, then the demo accounts' details and people.
+  // The CRM (0018): every client and deal its account, then the demo accounts' details and people.
   crmBackfillLocal(state, { uid: () => id('ac') });
   crmAccountsDemo(state, today);
   state.dealHistory = demoHistory(state.deals);
@@ -923,6 +929,24 @@ export function migrate(data) {
     }
     data.seededBoards.push(module);
   });
+  // Pipeline › Deal tasks (§25, 0015): older demo data gets the board once, after Operations' team boards.
+  if (!data.boards.some((b) => b.id === DEAL_TASKS_BOARD) && !data.seededBoards.includes('dealTasks')) {
+    const at = data.boards.findLastIndex((b) => b.module === 'projects' && !b.owner) + 1;
+    data.boards.splice(at, 0, { id: DEAL_TASKS_BOARD, module: 'projects', name: 'Deal tasks', owner: '', calendar: false,
+      groups: [{ id: uid(), name: 'Next steps', color: FIRST_GROUP_COLOR, items: [] }] });
+  }
+  if (!data.seededBoards.includes('dealTasks')) data.seededBoards.push('dealTasks');
+  // Pipeline › Demos (§26, as 0016): the board is called Demos, and Clients' Demos boards' groups and tasks move onto it.
+  if (!data.seededBoards.includes('pipelineDemos')) {
+    const demos = data.boards.find((b) => b.id === DEAL_TASKS_BOARD);
+    if (demos) {
+      if (demos.name === 'Deal tasks') demos.name = 'Demos';
+      const from = data.boards.filter((b) => b.module === 'clients' && !b.owner && b.name === 'Demos');
+      from.forEach((b) => { (demos.groups ||= []).push(...(b.groups || [])); });
+      data.boards = data.boards.filter((b) => !from.includes(b));
+    }
+    data.seededBoards.push('pipelineDemos');
+  }
   // An item's single owner becomes its people, as the 0002 migration does in the database.
   const userIds = new Set(data.users.map((u) => u.id));
   data.boards.forEach((b) => {
@@ -937,14 +961,11 @@ export function migrate(data) {
   });
 
   (data.contacts || []).forEach((c) => { c.owner ??= ''; });
-  (data.deals || []).forEach((dl) => { dl.contactId ??= ''; });
-  // The stages before 0014 (Won went in 0008), renamed as 0014 does; a Contacted deal was waiting on them.
-  (data.deals || []).forEach((dl) => {
-    if (!OLD_DEAL_STAGES[dl.stage]) return;
-    if (dl.stage === 'Contacted' && !dl.waitingOn) dl.waitingOn = 'them';
-    dl.stage = OLD_DEAL_STAGES[dl.stage];
-  });
+  (data.deals || []).forEach((dl) => { dl.contactId ??= ''; dl.source ??= ''; }); // source: the Lead (0013)
+  // Won is no longer a stage (0008): a deal there moves to Demos (one made a client has left the board anyway).
+  (data.deals || []).forEach((dl) => { if (dl.stage === 'Won') dl.stage = 'Demos'; });
   (data.clients || []).forEach((c) => {
+    c.source ??= ''; // the Lead (0013)
     c.abn ??= '';
     c.billingAddress ??= '';
     c.plans ??= [];
@@ -980,19 +1001,19 @@ export function migrate(data) {
   }
   if (!Array.isArray(data.calendarEvents)) data.calendarEvents = demoCalendarEvents(localYmd());
   if (typeof data.outreachSheet !== 'string') data.outreachSheet = '';
-  // The CRM (0014), once (as its migration does): stages renamed, every client and deal its account, a deal's outreach
+  // The CRM (0018), once (as its migration does): stages renamed, every client and deal its account, a deal's outreach
   // contact on it. Once only, so a deal taken off its account stays off.
   if (!data.crmSeeded) {
     crmBackfillLocal(data);
     data.crmSeeded = true;
   }
   (data.crmEntries || []).forEach((e) => { e.accountId ??= ''; e.contactId ??= ''; });
-  // Stage history (0015), once: where each deal stands.
+  // Stage history (0019), once: where each deal stands.
   if (!data.historySeeded) {
     historyBackfillLocal(data);
     data.historySeeded = true;
   }
-  // Leads (0016): older demo data gets the demo lists once.
+  // Leads (0020): older demo data gets the demo lists once.
   if (!data.leadsSeeded) {
     if (!(data.leadLists || []).length) Object.assign(data, leadsDemo(data, localYmd()));
     data.leadsSeeded = true;

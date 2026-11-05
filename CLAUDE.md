@@ -16,8 +16,9 @@ setup steps are in `DEPLOY.md`.
 - Keep demo mode working. Without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` the app runs on localStorage
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
-  migration that has been applied** (`0001`–`0012` are live in production; `0013`–`0016` are written, not yet run): fix
-  forward in the next file (`0017_….sql`). A migration must never mention `module_level` unless it redefines it
+  migration that has been applied** (`0001`–`0013` and `0015` are live in production; `0014` not run, and `0016` drops
+  what it adds, so production skips it; `0017`–`0020` are written, not yet run): fix forward in the next file
+  (`0021_….sql`). A migration must never mention `module_level` unless it redefines it
   (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table
   keeps row-level security on with policies that require `is_staff()` (directly or through `is_admin()` /
   `can_view()` / `can_edit()` / the board helpers), and is added to the `supabase_realtime` publication if it is synced. Extend
@@ -41,35 +42,48 @@ setup steps are in `DEPLOY.md`.
 - **Boards are records**, not code: `state.boards` is an array of team boards and personal Projects pages
   (`docs/PHASE2.md` §11, §13), and board store actions take a board id. Board modules are Projects, Marketing, Outreach,
   Clients and Pipeline (`BOARD_MODULES`); Outreach's and Clients' menus start with their own page (`MODULE_HOMES`), and
-  Pipeline's boards (Work in Progress) sit on its page under the deals, not in the menu (`PAGE_BOARD_MODULES`). Admins add
+  Pipeline's boards (Work in Progress) sit on its page under the deals, not in the menu (`PAGE_BOARD_MODULES`); Pipeline's
+  menu is its page, then Pipeline › Demos (§26: the `DEAL_TASKS_BOARD`, an Operations board underneath). Admins add
   new team boards in the app; personal pages come and go with their person.
 - **Board tasks have one home and one Owner** (`docs/PHASE2.md` §17, §18, §20): a task lives on one board (the Dashboard,
-  Team pages and a client's page are views of it, never copies; its breadcrumb is `whereOf()`). The owner column keeps
+  Team pages and a client's page are views of it, never copies, and the Dashboard and Team › Name show it in its board's
+  own `TableView` (`view` mode, `src/components/work/PersonTasks.jsx`, §22); its breadcrumb is `whereOf()`). The owner column keeps
   `values.people` as `[id]`, priority is `PRIORITY` (Urgent → Low, with `PRIORITY_HINTS`), and the rules for handing
   over and accepting, the Dashboard and Team lists, Needs attention, task mentions, a client's tasks and Do today live
-  in `src/lib/work.js` (only `nextValues()` / `acceptedValues()` set `assignedBy` / `assignedAt` / `acceptedAt`). An
+  in `src/lib/work.js` (only `nextValues()` / `acceptedValues()` set `assignedBy` / `assignedAt` / `acceptedAt` /
+  `startedAt`). An
   `@Name` in an update never changes who is on a task. The Projects module is shown as **Operations** (`MODULE_LABELS`);
   its key stays `projects`. **Also on** (`values.also`, §20) puts others on a task without making it theirs: it never
-  counts in `workload()`, never waits on them, never lists the owner. A task's **Department** is `departmentOf()` (a
+  counts in `workload()`, never waits on them, never lists the owner, and never puts a task in their lists or filters
+  (§25: a person's Dashboard, Team page and person filters show what they own, `ownedBy()`); when the Owner changes from one person to another,
+  the one who had it goes on it (`nextValues()`, §24; not when they give away their own task never started: `startedAt`). A task's **Department** is `departmentOf()` (a
   module key; '' = its board's). Both are `team` columns: render a board's columns from `schemaOf(board)`, never
   `BOARD_SCHEMAS[module]` (personal pages don't have them), and save values through `boardValues()`.
+- **Pipeline (0008, §21)**: stages are `DEAL_STAGES` (Opportunities → Contacted → First meetings → Demos → Proposal sent);
+  Make client is on the last. A deal's and a client's **Lead** is `source` (0013: `'' | 'lyco' | 'assetstack'`, LYCO
+  co-pitched or AssetStack direct; `LEADS` / `leadOf()` in `src/data/boards.js`, the marks in `src/components/LeadIcon.jsx`),
+  and Make client carries it. A deal's tasks (its profile's **Tasks**, **Add task**) have `values.deal` and live on
+  **Pipeline › Demos** (§25, §26: one board with the fixed id `DEAL_TASKS_BOARD`, made by 0015, named Demos and given Clients
+  › Demos' groups and tasks by 0016, in the demo by the seed and `migrate()`; an Operations board underneath, shown as
+  Pipeline by `areaOf()`, listed under Pipeline in the sidebar, never a module's default; older ones stay on Operations or
+  Outreach boards). Nothing is added by itself when a deal moves (0016 drops 0014's `deal_demo_row`). Real deals and clients never go in this repo: the live pipeline is loaded with SQL run in the SQL editor.
 - **CRM profile (0012)**: a deal's or client's notes, meetings and links are `crm_entries` (`state.crmEntries`; rules in
   `src/lib/crm.js` ⇄ 0012's policies and triggers). An entry on a client follows Clients access, one on a deal that isn't
   a client yet Pipeline's; its author or an admin changes it. Make client gives a deal's entries its client in the
   database (`crm_carry_to_client`; `carryDealEntriesLocal()` in demo mode, never client-side in live mode). A meeting
   keeps a link to its notes and a summary: Cortex never reads the Doc. Next steps are board tasks (`values.deal` /
   `values.client`, `dealTasks()` / `clientTasks()`), never entries.
-- **The CRM (0014)**: Pipeline is accounts (`state.accounts`), the people at them (`state.crmContacts`, table
+- **The CRM (0018)**: Pipeline is accounts (`state.accounts`), the people at them (`state.crmContacts`, table
   `crm_contacts`; not Outreach's `contacts`) and deals on them, all on the Pipeline access level. Stages are
-  `DEAL_STAGES` (the board's open ones) plus Lost; Won is Make client. Old stage names are shown through `dealStage()`
-  / `OLD_DEAL_STAGES`, never written. `stage_at` is the database's (the `deal_stage_at` trigger). Currencies are never
+  `DEAL_STAGES` (the board's open ones) plus Lost; Won is Make client. The stages are the live ones (0018 renames nothing); the old Won shows
+  on the last column through `dealStage()` / `OLD_DEAL_STAGES`, never written. `stage_at` is the database's (the `deal_stage_at` trigger). Currencies are never
   converted (`totalsIn()`). A column added to an existing table goes in that table's `later` (with its migration's new
   table) so the app saves the rest of the row before the migration runs. The outreach automation's account and person
-  rules are `contact_pipeline()` ⇄ `contactPipelineLocal()` / `lifecycleAfter()`; 0014's one-off steps ⇄
-  `crmBackfillLocal()`. Stage history (0015, `deal_stage_history`) is written only by the `log_deal_stage` trigger
+  rules are `contact_pipeline()` ⇄ `contactPipelineLocal()` / `lifecycleAfter()`; 0018's one-off steps ⇄
+  `crmBackfillLocal()`. Stage history (0019, `deal_stage_history`) is written only by the `log_deal_stage` trigger
   (`readOnly` in `TABLES`, so the app never writes it; `logStageLocal()` in demo mode). Reports are `src/lib/reports.js`;
   what needs someone is `needsYou()`; duplicates are `similarAccounts()` / `similarPeople()`.
-- **Leads (0016)**: `lead_lists`, `leads` and `suppressions` follow Outreach's access level (no module key of their own;
+- **Leads (0020)**, the prospect lists page (not a deal's Lead, `source`, above): `lead_lists`, `leads` and `suppressions` follow Outreach's access level (no module key of their own;
   the nav row has `needs: 'leads'`). The rules (suppressed, CRM match, repeats, ready for the agent, the agent's CSV) are
   `src/lib/leads.js`; Convert to CRM (`convertLead`) needs Outreach and Pipeline edit. Cortex never emails leads: Export
   for agent hands the outreach agent a CSV. Seed leads use `@example.com` addresses like everything else.
@@ -102,7 +116,7 @@ setup steps are in `DEPLOY.md`.
   Sharing a calendar is an explicit flag (`private.google_accounts.calendar`, set only after a calendar connect, cleared
   by Stop sharing), never inferred from the stored Google scopes. Staff may use Google only to connect their calendar
   (connect with purpose `calendar`); everything else stays admins only.
-- **Task emails (0013)**: the database decides who is emailed (`queue_task_assigned` / `queue_task_update` triggers into
+- **Task emails (0017)**: the database decides who is emailed (`queue_task_assigned` / `queue_task_update` triggers into
   `private.task_mail`, and `task_mail_claim()` re-checks as the recipient when sending); the `google` function's
   `task-mail` route only sends what it claims, from the sender admin's Gmail (`task_mail_use_me`). The app never reads
   or writes the queue; `mailsOwner()` (`src/lib/work.js`) only says when to ask the function to send. Change the

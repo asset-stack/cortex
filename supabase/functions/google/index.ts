@@ -35,7 +35,7 @@
 //                                                          the claim was full so others may be due); since = when the
 //                                                          chain started (pass it back on the chain's later calls)
 //   POST task-mail {}                                    → {ok, sent, failed}: the task emails due (rpc task_mail_claim:
-//                                                          a task handed to its owner, an update posted on it; 0013),
+//                                                          a task handed to its owner, an update posted on it; 0017),
 //                                                          one per person, from the Gmail of the admin chosen in
 //                                                          Settings → Business; results through rpc task_mail_done
 //
@@ -1386,7 +1386,7 @@ async function calendarSync(body, cfg, fetch) {
   return result;
 }
 
-// ── Task emails (0013) ──────────────────────────────────────────────────────────────────────────────────────────
+// ── Task emails (0017) ──────────────────────────────────────────────────────────────────────────────────────────
 // A task's owner hears by email when someone else hands them the task or posts an update on it. The database queues
 // them (triggers on items and item_updates, private.task_mail) and decides what may still go (task_mail_claim: still
 // theirs, still active, the board still theirs to see); this sends one plain-text email per person from the Gmail of the

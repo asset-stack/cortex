@@ -1,4 +1,4 @@
-// Pipeline → Accounts (docs/PHASE2.md §22): every organisation (prospects, customers, partners, suppliers) with search
+// Pipeline → Accounts (docs/PHASE2.md §28): every organisation (prospects, customers, partners, suppliers) with search
 // and filters by kind, lifecycle and owner; an account's profile (details, guardrails, prep pack, its people and deals,
 // and one timeline across them) and the account form. Pipeline view reads them; Pipeline edit changes them.
 import { useState } from 'react';

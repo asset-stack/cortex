@@ -1,4 +1,4 @@
-// The CRM (docs/PHASE2.md §22, 0014): accounts (organisations), the people at them (state.crmContacts) and the deals on
+// The CRM (docs/PHASE2.md §28, 0018): accounts (organisations), the people at them (state.crmContacts) and the deals on
 // them. Accounts and contacts follow the Pipeline access level, as deals do. Pure, with relative imports, so
 // scripts/test-sync.mjs runs it in Node.
 import { LOST, STALE_DAYS, daysInStage, dealStage } from '../data/boards.js';
@@ -24,7 +24,7 @@ export const TIMEZONES = [
   'America/Chicago', 'America/New_York', 'America/Toronto',
 ];
 
-// Longest text each field keeps (0014's checks).
+// Longest text each field keeps (0018's checks).
 const MAX = {
   name: 200, lifecycleNote: 500, sector: 100, country: 100, region: 100, timezone: 64, domain: 253, website: 2000, size: 100,
   guardrails: 5000, prepUrl: 2000, title: 200, email: 254, phone: 50, linkedin: 2000,
@@ -41,7 +41,7 @@ export function domainOf(v) {
   return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d) ? d.slice(0, MAX.domain) : '';
 }
 
-/** An account's fields as saved: text trimmed to 0014's limits, a known kind and lifecycle, links as http(s), a domain
+/** An account's fields as saved: text trimmed to 0018's limits, a known kind and lifecycle, links as http(s), a domain
  *  from what was typed, an owner among `userIds` and a referrer among `accountIds` (never itself). Only the fields given;
  *  invalid ones are left out. */
 export function cleanAccount(patch = {}, { userIds = null, accountIds = null, self = '' } = {}) {
@@ -95,7 +95,7 @@ export const dealsOfAccount = (state, accountId, { open = false } = {}) => (acco
 /** The deals a contact is on. */
 export const dealsOfPerson = (state, personId) => (personId ? (state?.deals || []).filter((d) => (d.contactIds || []).includes(personId)) : []);
 
-/** Lifecycle as the outreach automation moves it (0014's contact_pipeline): a reply makes new or contacted engaged; a
+/** Lifecycle as the outreach automation moves it (0018's contact_pipeline): a reply makes new or contacted engaged; a
  *  booking makes new, contacted or engaged a meeting. Never back, never over a lifecycle set aside. */
 export function lifecycleAfter(current, event) {
   const to = event === 'booked' ? 'meeting' : event === 'replied' ? 'engaged' : '';

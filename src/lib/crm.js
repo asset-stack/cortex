@@ -1,4 +1,4 @@
-// The CRM profile of a deal or client (docs/PHASE2.md §19), and since 0014 of an account or a contact (§22): its
+// The CRM profile of a deal or client (docs/PHASE2.md §19), and since 0018 of an account or a contact (§28): its
 // timeline (notes and meetings), links and next steps, and who may add to it. Entries are crm_entries (0012); a client's timeline also reads its older notes (client_notes) and the
 // entries of the deal it came from. Next steps are board tasks (items.values.deal / client, src/lib/work.js). Pure, with
 // relative imports, so scripts/test-sync.mjs runs it in Node; the access rules are 0012's, mirrored.
@@ -16,7 +16,7 @@ const isActive = (state, userId) => (state?.users || []).some((u) => u.id === us
 const text = (v, max) => String(v ?? '').trim().slice(0, max);
 const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v ?? '')) ? String(v) : '');
 
-/** Who reads an entry (0014 crm_select): an active teammate with Clients view for a client's, Pipeline view for a
+/** Who reads an entry (0018 crm_select): an active teammate with Clients view for a client's, Pipeline view for a
  *  deal's, an account's or a contact's. */
 export const canReadEntry = (state, e, userId = state?.me) => Boolean(e) && isActive(state, userId)
   && ((Boolean(e.clientId) && canView(state, 'clients', userId))
@@ -80,7 +80,7 @@ function entriesOf(state, { dealId = '', clientId = '', accountId = '', contactI
   const deals = new Set(dealsOfClient(state, clientId).map((d) => d.id));
   return all.filter((e) => e.clientId === clientId || deals.has(e.dealId));
 }
-// The client whose own notes and links a profile shows: the client's, or an account's client (0014).
+// The client whose own notes and links a profile shows: the client's, or an account's client (0018).
 function profileClient(state, { dealId = '', clientId = '', accountId = '', contactId = '' }) {
   const id = clientId || (accountId && !dealId && !contactId ? (state?.accounts || []).find((a) => a.id === accountId)?.clientId || '' : '');
   return (id && (state?.clients || []).find((c) => c.id === id)) || null;
@@ -103,7 +103,7 @@ export function timelineOf(state, { dealId = '', clientId = '', accountId = '', 
   return [...entries, ...legacy, ...stageMoves(state, { dealId, accountId, contactId, clientId })].sort(newestFirst);
 }
 
-// A deal's stage moves (0015's history; not the row for its being added), as read-only timeline items: on a deal's
+// A deal's stage moves (0019's history; not the row for its being added), as read-only timeline items: on a deal's
 // timeline, and on its account's.
 function stageMoves(state, { dealId = '', accountId = '', contactId = '', clientId = '' }) {
   if (contactId || clientId || !(dealId || accountId)) return [];
