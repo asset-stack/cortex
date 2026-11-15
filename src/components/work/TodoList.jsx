@@ -6,6 +6,8 @@ import { useAccess } from '@/lib/access';
 import { boardHref } from '@/lib/boards';
 import { itemOfTodo } from '@/lib/work';
 import { formatMinutes } from '@/lib/timesheet';
+import { bankWeekOf } from '@/lib/automations';
+import { shortDate } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
 const SOURCES = {
@@ -31,6 +33,7 @@ function TodoRow({ todo: t }) {
   const removable = isAdmin || t.createdBy === state.me;
   const title = t.title.trim() || 'Untitled';
   const task = itemOfTodo(state, t); // Do today: the board task it's for, while you can see it (gone or moved: none)
+  const week = bankWeekOf(t); // a bank screenshot reminder moved on from an earlier week (0017)
   return (
     <li className="flex items-start gap-3 border-t rowline px-5 py-3">
       <input type="checkbox" checked={t.done} disabled={!mine} onChange={() => actions.toggleTodo(t.id)} aria-label={`Mark ${title} done`}
@@ -39,6 +42,7 @@ function TodoRow({ todo: t }) {
         <div className="min-w-0 flex-1">
           <div className={cn('flex items-center gap-1.5 font-semibold', t.done && 'line-through opacity-60')}>
             <span className="min-w-0 break-words">{title}</span>
+            {week && <span className="whitespace-nowrap text-[12px] font-normal dimmer">week of {shortDate(week)}</span>}
             <SourceIcon source={t.source} />
             {task && (
               <a href={boardHref(task.board, task.item.id)} aria-label={`Open the task ${title}`} title="Open the task"

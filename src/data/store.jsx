@@ -1500,7 +1500,7 @@ const DEMO_GOOGLE = { ready: true, demo: true, account: false, connected: false,
 // (never throws) to { ok, … } or { ok: false, error }.
 //   meetings(from, to) → { rows }: calendar_meetings rows touching from…to, a day wider each side for time zones
 //   status() → { people: [{ userId, connected, syncedAt, error, reconnect }], earliest, syncedAt }
-//   sync({ force }) → { claimed, synced, failed } (live only)
+//   sync({ force }) → { claimed, synced, failed } (live only; while one runs, a second call waits for it)
 const touching = (rows, from, to) => rows.filter((m) => m.start_date <= addDays(to, 1) && m.end_date >= addDays(from, -1));
 function demoCalendar() {
   return {
@@ -1517,6 +1517,9 @@ function demoCalendar() {
 const MEETING_COLUMNS = 'id, user_id, google_id, title, busy, all_day, start_date, end_date, start_at, end_at';
 function liveCalendar(syncCalendar) {
   const failed = (error) => ({ ok: false, error: error?.message || String(error || 'Request failed') });
+  // The sync in flight: a screen opened during it (the Calendar after the Dashboard started one, or the other way round)
+  // waits for that run, which syncs everyone, and reads after it, instead of starting one that claims nobody.
+  let running = null;
   return {
     live: true,
     meetings: async (from, to) => {
@@ -1546,7 +1549,7 @@ function liveCalendar(syncCalendar) {
         };
       } catch (e) { return failed(e); }
     },
-    sync: (opts) => syncCalendar(opts),
+    sync: (opts) => (running ||= Promise.resolve(syncCalendar(opts)).finally(() => { running = null; })),
   };
 }
 

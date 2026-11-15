@@ -154,15 +154,16 @@ export function collectEntries(state, { meetings = [], tz, userId = state?.me } 
 /** The Dashboard's meetings for `day` (§27): everyone's Google meetings and the team's meetings, events and reminders on
  *  it (an all-day one over several days counts on each), all-day first, then by time (collectEntries' order). A Google
  *  meeting several teammates share (one row each in calendar_meetings, same google_id) is one entry with all of them;
- *  a Busy copy stays apart from a titled one, and copies at different times (one not synced since a move) stay apart. */
+ *  Busy copies (Private or Confidential) are never merged, so nobody sees who shares one, and copies at different times
+ *  (one not synced since a move) stay apart. */
 export function meetingsOn(entries, day) {
   const out = [];
   const shared = new Map(); // google_id, busy, date and times → the entry kept
   (entries || []).forEach((e) => {
     if (!SCHEDULED.includes(e.kind) || e.date > day || (e.endDate || e.date) < day) return;
-    const id = e.kind === 'google' ? e.meeting?.google_id : '';
+    const id = e.kind === 'google' && !e.busy ? e.meeting?.google_id : '';
     if (!id) { out.push(e); return; }
-    const key = JSON.stringify([id, Boolean(e.busy), e.date, e.endDate, e.time, e.endTime]);
+    const key = JSON.stringify([id, e.date, e.endDate, e.time, e.endTime]);
     const kept = shared.get(key);
     if (kept) { kept.people = [...new Set([...kept.people, ...e.people])]; return; }
     const copy = { ...e, people: [...e.people] };

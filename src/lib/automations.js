@@ -114,6 +114,13 @@ const adminRole = (state, userId) => {
   const u = (state.users || []).find((x) => x.id === userId);
   return Boolean(u) && u.active !== false && ['superadmin', 'admin'].includes(u.role); // isAdmin() in access.js
 };
+// The week a bank screenshot reminder is for, when it isn't the week of its day: one moved on from an earlier week
+// (0017) says so on the Dashboard ("week of 9 Nov"). → 'YYYY-MM-DD' (that Monday) or ''.
+export const bankWeekOf = (todo) => {
+  const week = todo?.source === 'automation' && String(todo.ref || '').startsWith('bank:') ? todo.ref.slice(5) : '';
+  return isYmd(week) && isYmd(todo.day) && week !== mondayOf(todo.day) ? week : '';
+};
+
 const hasAutomation = (state, assignee, ref, day) => state.todos
   .some((t) => t.source === 'automation' && t.assignee === assignee && t.ref === ref && t.day === day);
 
@@ -226,8 +233,9 @@ const EARLY_STAGES = ['Opportunities', 'Contacted'];
 // The contact_pipeline trigger, for a contact whose status was `prevStatus` ('' for a new contact). When it becomes
 // Replied or Meeting booked: a deal for it (named after the organisation, owned by the contact's owner or `me`), or
 // its deal moves from Opportunities or Contacted to First meetings on a booking (never back from later on); and the owner gets a follow-up to-do for `day`,
-// by default the owner's own today (user_today()), once per contact and day. → { deal, todo } (todo null when it
-// already existed), or null when nothing applies.
+// by default the owner's own today (user_today()), once per contact and day: when the day already has the contact's
+// to-do with another title (a follow-up, then the meeting is booked), it takes the new title and is open again (0017).
+// → { deal, todo } (todo null when the day's to-do was already there with that title), or null when nothing applies.
 export function contactPipelineLocal(state, contactId, prevStatus = '', { day, me = state.me, uid: newId = uid } = {}) {
   const c = (state.contacts || []).find((x) => x.id === contactId);
   if (!c || !PIPELINE_STATUSES.includes(c.status) || c.status === prevStatus) return null;
@@ -252,12 +260,14 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day, m
 
   let todo = null;
   const ref = `contact:${c.id}`;
-  if (owner && !hasAutomation(state, owner, ref, day)) {
-    todo = makeTodo({
-      assignee: owner, createdBy: me, title: booked ? `Prepare: meeting with ${name}` : `Follow up: ${name} replied`,
-      day, category: 'Outreach', source: 'automation', ref,
-    }, newId);
+  const title = booked ? `Prepare: meeting with ${name}` : `Follow up: ${name} replied`;
+  const had = owner && state.todos.find((t) => t.source === 'automation' && t.assignee === owner && t.ref === ref && t.day === day);
+  if (owner && !had) {
+    todo = makeTodo({ assignee: owner, createdBy: me, title, day, category: 'Outreach', source: 'automation', ref }, newId);
     state.todos.push(todo);
+  } else if (had && had.title !== title) {
+    Object.assign(had, { title, done: false, doneAt: '' });
+    todo = had;
   }
   return { deal, todo };
 }

@@ -6334,10 +6334,16 @@ async function phase17(ctx) {
   };
   const dayOf = async () => Object.fromEntries((await rows('select title, day::text as day from todos where id = any($1)', [Object.values(ids)]))
     .map((r) => [r.title, r.day]));
+  // An invoice awaiting approval, so the Approve invoices step runs: with the undone one moving, no second one is made.
+  const awaitingInvoice = await one("update invoices set status = 'Awaiting approval' where id = (select id from invoices order by id limit 1) returning id");
+  const routinesOn = async (dow) => (await one('select count(*)::int as n from routines where assignee_id = $1 and active and $2 = any (weekdays)', [boss, dow])).n;
+  const fridayRoutines = await routinesOn(5);
+  const thursdayRoutines = await routinesOn(4);
   await as(boss);
   const friday = await attempt('select public.ensure_todos($1::date) as n', ['2026-12-04']);
   await as(null);
   const routinesMade = (await one("select count(*)::int as n from todos where assignee_id = $1 and day = '2026-12-04' and source = 'routine'", [boss])).n;
+  const newApprove = (await one("select count(*)::int as n from todos where ref = 'approve:2026-12-04'")).n;
   const approvesMade = (await one("select count(*)::int as n from todos where assignee_id = $1 and ref like 'approve:%' and not done", [boss])).n;
   const fridayDays = await dayOf();
   const fridayList = (await rows(`select coalesce(nullif(title, ''), source) as t, source, position from todos
@@ -6353,6 +6359,14 @@ async function phase17(ctx) {
   const helloCall = await attempt('select public.ensure_todos($1::date) as n', ['2026-12-04']);
   await as(null);
   const helloDay = (await one('select day::text as day from todos where id = $1', [ids.hellos])).day;
+  // A Monday: that week's bank reminder is made, and last week's undone one moves on with the other reminders.
+  ids.bankOld = await add('bankOld', boss, '2026-11-30', 'automation', 'bank:2026-11-30');
+  const mondayRoutines = await routinesOn(1);
+  await as(boss);
+  const monday = await attempt('select public.ensure_todos($1::date) as n', ['2026-12-07']);
+  await as(null);
+  const mondayRows = (await rows(`select coalesce(nullif(ref, ''), source) as r, day::text as day from todos
+    where assignee_id = $1 and day = '2026-12-07' and source = 'automation' order by position`, [boss])).map((r) => r.r);
   const fn17 = await one("select prosecdef, array_to_string(proconfig, ',') as config from pg_proc where proname = 'ensure_todos'");
   const grants = await one(`select has_function_privilege('anon', 'public.ensure_todos(date)', 'execute') as anon,
     has_function_privilege('authenticated', 'public.ensure_todos(date)', 'execute') as users`);
@@ -6367,18 +6381,68 @@ async function phase17(ctx) {
     approve: '2026-12-04', followOld: '2026-12-01', followNew: '2026-12-04', contractDone: '2026-12-01', thereAlready: '2026-12-01',
     aheadZ: '2026-12-07', manual: '2026-12-01', todays: '2026-12-04', later: '2026-12-08', hellos: '2026-12-01',
   };
+  const steps = {
+    fridayRoutines, routinesMade, thursdayRoutines, backRoutines, newApprove, approvesMade, mondayRoutines, monday, mondayRows,
+    noMondayApprove: (await one("select count(*)::int as n from todos where ref = 'approve:2026-12-07'")).n,
+  };
   check('123. ensure_todos (0017): an undone automation to-do from an earlier day moves to the day, after its to-dos and oldest first, keeping its '
     + 'ref; one per ref (the newest); done, manual, other people\'s and later ones, and refs already on that day or later stay; never back; '
     + 'again nothing; staff only, still security definer',
-    typeof friday === 'object' && friday?.n === 2 + routinesMade && approvesMade === 1 && stable(fridayDays) === stable(want)
+    typeof friday === 'object' && fridayRoutines > 0 && routinesMade === fridayRoutines && friday?.n === 2 + fridayRoutines
+      && newApprove === 0 && approvesMade === 1 && stable(fridayDays) === stable(want)
       && stable(moved) === stable(['approve', 'followNew']) && positions === fridayList.map((_, i) => i).join(',')
       && stable(refs) === stable([{ title: 'approve', ref: 'approve:2026-12-01' }, { title: 'followNew', ref: 'contact:test-x' }])
-      && again?.n === 0 && back?.n === backRoutines && stable(afterBack) === stable(want) && helloCall?.n >= 1 && helloDay === '2026-12-04'
+      && again?.n === 0 && thursdayRoutines > 0 && backRoutines === thursdayRoutines && back?.n === thursdayRoutines
+      && stable(afterBack) === stable(want) && helloCall?.n >= 1 && helloDay === '2026-12-04'
+      && mondayRoutines > 0 && monday?.n === mondayRoutines + 1 + 3 && steps.noMondayApprove === 0
+      && stable(mondayRows) === stable(['contact:test-z', 'bank:2026-12-07', 'bank:2026-11-30', 'approve:2026-12-01', 'contact:test-x'])
       && fn17.prosecdef === true && /search_path=public/.test(fn17.config) && grants.anon === false && grants.users === true
       && inactiveCall !== null,
-    { friday, routinesMade, approvesMade, fridayDays, fridayList, refs, again, back, backRoutines, afterBack, helloCall, helloDay, fn17, grants, inactiveCall });
+    { friday, steps, fridayDays, fridayList, refs, again, back, afterBack, helloCall, helloDay, fn17, grants, inactiveCall });
   await db.query('delete from todos where id = any($1)', [Object.values(ids)]);
+  await db.query("delete from todos where assignee_id = any($1) and day between '2026-12-01' and '2026-12-08'", [[boss, hello]]);
   await db.query('update todos set done = false where id = any($1)', [setAside]);
+  await db.query("update invoices set status = 'Approved' where id = $1", [awaitingInvoice?.id]);
+
+  // 124. contact_pipeline (0017): the day's to-do for a contact takes the new stage's title. A follow-up moved on to
+  // today, then the meeting booked: one open "Prepare: meeting with …". The same title again leaves a ticked one ticked;
+  // another title reopens it.
+  await as(null);
+  const today = (await one('select public.user_today($1)::text as d', [boss])).d;
+  await as(boss);
+  const pat = (await one(`insert into contacts (name, org, email, status, owner_id)
+    values ('Pat Example', 'Example Pumps', 'pat@example.com', 'Sent', $1) returning id`, [boss])).id;
+  await db.query("update contacts set status = 'Replied' where id = $1", [pat]);
+  await as(null);
+  const ref = `contact:${pat}`;
+  await db.query("update todos set day = day - 2 where ref = $1", [ref]); // made two days ago, left unticked
+  await as(boss);
+  await attempt('select public.ensure_todos($1::date) as n', [today]);
+  const forPat = async () => (await rows('select title, day::text as day, done from todos where ref = $1 order by day', [ref]));
+  const movedOn = await forPat();
+  await db.query("update contacts set status = 'Meeting booked' where id = $1", [pat]);
+  const booked = await forPat();
+  await as(null);
+  await db.query('update todos set done = true, done_at = now() where ref = $1', [ref]);
+  await as(boss);
+  await db.query("update contacts set status = 'Sent' where id = $1", [pat]);
+  await db.query("update contacts set status = 'Meeting booked' where id = $1", [pat]);
+  const sameTitle = await forPat();
+  await db.query("update contacts set status = 'Replied' where id = $1", [pat]);
+  const otherTitle = await forPat();
+  await as(null);
+  const cp = await one("select prosecdef, array_to_string(proconfig, ',') as config from pg_proc where proname = 'contact_pipeline'");
+  check('124. contact_pipeline (0017): a follow-up moved on to today gives way to the meeting booked that day (one open Prepare to-do); the '
+    + 'same title again leaves a ticked one ticked, another reopens it; still security definer',
+    stable(movedOn) === stable([{ title: 'Follow up: Pat Example replied', day: today, done: false }])
+      && stable(booked) === stable([{ title: 'Prepare: meeting with Pat Example', day: today, done: false }])
+      && stable(sameTitle) === stable([{ title: 'Prepare: meeting with Pat Example', day: today, done: true }])
+      && stable(otherTitle) === stable([{ title: 'Follow up: Pat Example replied', day: today, done: false }])
+      && cp.prosecdef === true && /search_path=public/.test(cp.config),
+    { today, movedOn, booked, sameTitle, otherTitle, cp });
+  await db.query('delete from todos where ref = $1', [ref]);
+  await db.query('delete from deals where contact_id = $1', [pat]);
+  await db.query('delete from contacts where id = $1', [pat]);
 
   // Tidy up.
   await as(null);

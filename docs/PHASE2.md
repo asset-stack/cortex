@@ -1364,10 +1364,11 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   Tomorrow's, or the date), everyone's Google meetings (read on demand, as the Calendar page does) and the team's
   meetings, events and reminders (`calendar_events`), from `collectEntries()` filtered by `meetingsOn()`: all-day first,
   then by time; a Private or Confidential Google meeting stays Busy. A Google meeting several teammates share (a
-  `calendar_meetings` row each, same `google_id`, now read with the meetings) is one row with all of them; a Busy copy
-  or one at another time stays apart. Each row: colour, time (or All day), title, who's on it. The title links to the
+  `calendar_meetings` row each, same `google_id`, now read with the meetings) is one row with all of them; Busy copies
+  are never merged (nobody sees who shares a Private meeting), and a copy at another time stays apart. Each row: colour, time (or All day), title, who's on it. The title links to the
   Calendar. Empty: No meetings. Opening the Dashboard syncs Google when the last sync is over 10 minutes old and someone
-  is connected, as opening the Calendar does (`syncDue()`, `SYNC_STALE`), then reads the day again (live mode).
+  is connected, as opening the Calendar does (`syncDue()`, `SYNC_STALE`), then reads the day again (live mode). A sync
+  already running is shared (`liveCalendar().sync`): a screen opened during it waits for it and reads after it.
 - **Dashboard order** (left column): My list, Waiting on you (when there is any), the day's meetings, Today (to-dos and
   Add). Carried over is gone (undone to-dos from earlier days are no longer listed on the Dashboard; the day navigator
   still shows them on their day), and with it `TodoList`'s move button and day column. The KPIs, side column, My tasks
@@ -1379,16 +1380,24 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   that day, after its to-dos, oldest first, keeping its ref. One per ref (the newest: a contact can have follow-ups on
   several days, and a person has one to-do per ref and day), none when that ref already has a to-do on that day or
   later, never back to an earlier day. Routine (made again each day), manual and Do today to-dos stay on their day.
-  `ensure_todos` returns the rows added or moved.
+  `ensure_todos` returns the rows added or moved. A bank screenshot reminder moved on from an earlier week shows that
+  week after its title ("week of 9 Nov", `bankWeekOf()`), so it isn't taken for this week's.
+- **A contact's to-do takes the new stage's title** (0017 redefines `contact_pipeline`, as 0008 but for its insert;
+  `contactPipelineLocal`): a person has one automation to-do per ref and day, so a follow-up moved on to today used to
+  stop "Prepare: meeting with …" when the meeting was booked that day. Now the day's to-do for the contact takes the new
+  title and is open again; the same title again (a status set back and forth) leaves it as it is, ticked or not.
 - **A board's calendar** (`BoardCalendar.jsx`, `boards.calendar`, §15): one full-width month, the current one, titled
   with its name; the count is that month's posts. The months around are on the team Calendar. `MonthGrid` lost its
   compact mode.
-- **Release**: 0017 adds a table with `since`, so the release can go first; run 0017 right after (until it runs, live
-  mode keeps 0004's `ensure_todos`, so an unticked "Approve invoices" stays on its first day). Check:
-  `select to_regclass('public.my_list');` gives `my_list`.
+- **Release**: run 0017 **before** publishing. The app live now copes with it (it syncs only the tables it knows, and the
+  moved reminders show in its Today), while the new app without it would keep 0004's `ensure_todos`, so an unticked
+  "Approve invoices" would stay out of sight on its first day. `my_list` still has `since`, so the new app opens either
+  way. Check: `select to_regclass('public.my_list');` gives `my_list`.
 - **Tests**: `scripts/test-sync.mjs` (the `my_list` mapping and `since`, `cleanListText()`, `listOf()`, `meetingsOn()` with
-  shared meetings, `syncDue()`, reminders following the day in `ensureTodosLocal()`, the seed and `migrate()`);
-  `scripts/test-db.mjs` checks 121–123 (0017 whole, again and statement by statement, its done row, RLS, four policies,
+  shared and Busy meetings, `syncDue()`, reminders following the day in `ensureTodosLocal()`, `bankWeekOf()`,
+  `contactPipelineLocal()` after a move, the seed and `migrate()`);
+  `scripts/test-db.mjs` checks 121–124 (0017 whole, again and statement by statement, its done row, RLS, four policies,
   realtime; own lines only for staff, admins and the SuperAdmin; no inserting for someone else; `protect_my_list` keeps
   `user_id` and `created_at`; a deactivated person gets nothing, not even their own lines; `ensure_todos` moving
-  reminders: one per ref, after the day's to-dos, never back, again nothing).
+  reminders: one per ref, after the day's to-dos, never back, again nothing, with its routine, bank and Approve invoices
+  steps as 0004; `contact_pipeline`: a moved follow-up gives way to the booking).

@@ -1,6 +1,8 @@
 -- Cortex 0017 (docs/PHASE2.md §27): My list, each person's own list at the top of their Dashboard.
--- Run in the Supabase SQL editor (before or after the release that shows it: until it runs, the app hides My list and
--- admins see which file to run). Safe to re-run, also statement by statement (the SQL editor may run it that way).
+-- Run in the Supabase SQL editor BEFORE publishing the release that shows it: the app live now ignores my_list (it only
+-- syncs the tables it knows) and copes with sections 5 and 6, while the new app without this file would hide an unticked
+-- reminder after its first day. (If it does go the other way round, the new app still opens: it hides My list and tells
+-- admins which file to run.) Safe to re-run, also statement by statement (the SQL editor may run it that way).
 --
 -- - Why (owner, 2026-11-15): the Dashboard should open with a plain list the person types into, not linked to anything:
 --   lines added, ticked, edited and deleted, kept until removed (not tied to a day).
@@ -11,6 +13,9 @@
 --   gone), so ensure_todos moves an undone automation to-do from an earlier day (Approve invoices, the bank screenshot,
 --   Prepare contract, a follow-up) to the day it is called for. Otherwise "Approve invoices", made only while no undone
 --   one exists, would never be seen again after its first day. Mirrored in ensureTodosLocal (src/lib/automations.js).
+-- - contact_pipeline (section 6): a contact's to-do for the day now takes the new stage's title. A follow-up moved to
+--   today (above) used to stop "Prepare: meeting with …" when the meeting was booked that day (one to-do per person,
+--   ref and day), so the booking replaces it and reopens it. Mirrored in contactPipelineLocal.
 
 begin;
 
@@ -158,6 +163,56 @@ $$;
 
 revoke execute on function public.ensure_todos(date) from public, anon;
 grant execute on function public.ensure_todos(date) to authenticated;
+
+-- 6. contact_pipeline: as 0008, but the day's to-do for a contact takes the new stage's title ------------------------
+-- Replied, then Meeting booked on a day that already has the contact's to-do (made that day, or a follow-up moved to it
+-- by ensure_todos): "Prepare: meeting with …" replaces "Follow up: … replied" and is open again. The same title again
+-- (a status set back and forth) leaves the row as it is, ticked or not.
+
+create or replace function public.contact_pipeline() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  v_booked boolean := new.status = 'Meeting booked';
+  v_name text := coalesce(nullif(btrim(new.name), ''), nullif(btrim(new.org), ''), 'contact');
+  v_owner uuid := coalesce(new.owner_id, auth.uid());
+  v_day date := public.user_today(coalesce(new.owner_id, auth.uid()));
+  v_deal uuid;
+  v_stage text;
+begin
+  if new.status is null or new.status not in ('Replied', 'Meeting booked')
+     or (tg_op = 'UPDATE' and new.status is not distinct from old.status) then
+    return null;
+  end if;
+
+  select id, stage into v_deal, v_stage from public.deals where contact_id = new.id order by position, id limit 1;
+  if v_deal is null then
+    insert into public.deals (name, stage, owner_id, priority, next_step, contact_id, position)
+    values (
+      coalesce(nullif(btrim(new.org), ''), new.name),
+      case when v_booked then 'First meetings' else 'Opportunities' end,
+      v_owner, 'P2',
+      case when v_booked then 'Prepare meeting with ' else 'Reply to ' end || v_name,
+      new.id,
+      (select coalesce(max(position) + 1, 0) from public.deals));
+  elsif v_booked and v_stage in ('Opportunities', 'Contacted') then
+    update public.deals set stage = 'First meetings' where id = v_deal;
+  end if;
+
+  if v_owner is not null then
+    insert into public.todos (assignee_id, title, day, category, source, ref, position)
+    values (
+      v_owner,
+      case when v_booked then 'Prepare: meeting with ' || v_name else 'Follow up: ' || v_name || ' replied' end,
+      v_day, 'Outreach', 'automation', 'contact:' || new.id,
+      public.next_todo_position(v_owner, v_day))
+    on conflict (assignee_id, ref, day) where source = 'automation' do update
+      set title = excluded.title, done = false, done_at = null
+      where public.todos.title is distinct from excluded.title;
+  end if;
+
+  return null;
+end;
+$$;
 
 commit;
 
