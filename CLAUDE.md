@@ -110,7 +110,8 @@ setup steps are in `DEPLOY.md`.
   `generate_due_invoices` RPCs) and in `src/lib/automations.js` in demo mode. Change both together; live mode
   never creates those rows client-side. The Dashboard lists only the day's to-dos (no Carried over, §27), so
   `ensure_todos` (0017) ⇄ `ensureTodosLocal` move an undone automation to-do from an earlier day to the day (one per
-  ref), and `contact_pipeline` (0017) ⇄ `contactPipelineLocal` give a contact's to-do for the day the new stage's title.
+  ref), and `contact_pipeline` (0017) ⇄ `contactPipelineLocal` give a booking its own to-do (`meeting:<id>`, the
+  follow-up `contact:<id>`), never changing an existing one.
 - Time zones: business dates (invoices, plan due dates) are Sydney's (`team_today()` / `TEAM_TIMEZONE` in
   `src/lib/format.js`); personal dates (My Work, follow-up to-dos, the 16:30 timesheet prompt) are the person's own
   (`profiles.timezone`, `user_today()`; the browser's day in the app). Josh is in `Asia/Tbilisi`, ops staff in

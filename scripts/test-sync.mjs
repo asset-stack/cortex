@@ -2891,33 +2891,42 @@ await check('automations: contactPipelineLocal creates the deal and the follow-u
   const again = auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-12' });
   assert.equal(again.deal, out.deal);
   assert.equal(out.deal.stage, 'First meetings', 'a booking moves it on');
-  assert.equal(again.todo, out.todo, 'one to-do per contact and day: the booking takes it over (0017)');
-  assert.deepEqual([out.todo.title, out.todo.done, st.todos.filter((t) => t.ref === 'contact:c1').length], ['Prepare: meeting with Pat Doe', false, 1]);
+  // The booking's to-do has its own ref (0017), so the day's follow-up doesn't stop it, and stays as it was.
+  assert.deepEqual([again.todo.title, again.todo.ref, again.todo.day], ['Prepare: meeting with Pat Doe', 'meeting:c1', '2026-10-12']);
+  assert.deepEqual([out.todo.title, out.todo.done], ['Follow up: Pat Doe replied', false]);
+  assert.equal(auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-12' }).todo, null, 'once per contact, stage and day');
   st.contacts[0].status = 'Replied';
   auto.contactPipelineLocal(st, 'c1', 'Meeting booked', { day: '2026-10-13' });
   assert.equal(out.deal.stage, 'First meetings', 'never moves back');
   assert.equal(st.todos.at(-1).title, 'Follow up: Pat Doe replied');
   assert.equal(st.deals.length, 2);
-  assert.equal(st.todos.length, 2);
-  // The same title again (a status set back and forth) leaves the day's to-do as it is, ticked or not.
-  Object.assign(st.todos.at(-1), { done: true, doneAt: '2026-10-13T01:00:00.000Z' });
-  assert.equal(auto.contactPipelineLocal(st, 'c1', 'Sent', { day: '2026-10-13' }).todo, null);
-  assert.deepEqual([st.todos.at(-1).title, st.todos.at(-1).done, st.todos.length], ['Follow up: Pat Doe replied', true, 2]);
-  // Another title on a ticked one reopens it.
+  assert.equal(st.todos.length, 3);
+  // A ticked to-do is never changed or reopened, whichever way the status goes.
+  const followUp = st.todos.at(-1);
+  Object.assign(followUp, { done: true, doneAt: '2026-10-13T01:00:00.000Z' });
+  assert.equal(auto.contactPipelineLocal(st, 'c1', 'Sent', { day: '2026-10-13' }).todo, null, 'Replied again: nothing new');
   st.contacts[0].status = 'Meeting booked';
-  assert.equal(auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-13' }).todo, st.todos.at(-1));
-  assert.deepEqual([st.todos.at(-1).title, st.todos.at(-1).done, st.todos.at(-1).doneAt], ['Prepare: meeting with Pat Doe', false, '']);
+  const prep = auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-13' }).todo;
+  assert.deepEqual([prep.ref, prep.done], ['meeting:c1', false], 'booked after a ticked follow-up: its own to-do');
+  Object.assign(prep, { done: true, doneAt: '2026-10-13T02:00:00.000Z' });
+  st.contacts[0].status = 'Replied';
+  assert.equal(auto.contactPipelineLocal(st, 'c1', 'Meeting booked', { day: '2026-10-13' }).todo, null);
+  st.contacts[0].status = 'Meeting booked';
+  assert.equal(auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-13' }).todo, null);
+  assert.deepEqual(st.todos.filter((t) => t.day === '2026-10-13').map((t) => [t.title, t.done, t.doneAt]),
+    [['Follow up: Pat Doe replied', true, '2026-10-13T01:00:00.000Z'], ['Prepare: meeting with Pat Doe', true, '2026-10-13T02:00:00.000Z']]);
 });
 
-await check('automations: a follow-up moved on to the day (0017) gives way to the meeting booked that day', () => {
+await check('automations: a follow-up moved on to the day (0017) doesn’t stop the meeting booked that day', () => {
   const st = outreachState();
   auto.contactPipelineLocal(st, 'c1', 'Sent', { day: '2026-10-12' }); // Follow up, owner stu, left unticked
   assert.equal(auto.ensureTodosLocal(st, '2026-10-15', { me: 'stu' }) >= 1, true, 'moved on to Thursday');
   st.contacts[0].status = 'Meeting booked';
   const out = auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-15' });
-  const mine = st.todos.filter((t) => t.ref === 'contact:c1');
-  assert.deepEqual(mine.map((t) => [t.day, t.title, t.done]), [['2026-10-15', 'Prepare: meeting with Pat Doe', false]]);
-  assert.equal(out.todo, mine[0]);
+  const mine = st.todos.filter((t) => t.ref.endsWith(':c1'));
+  assert.deepEqual(mine.map((t) => [t.day, t.ref, t.title, t.done]), [
+    ['2026-10-15', 'contact:c1', 'Follow up: Pat Doe replied', false], ['2026-10-15', 'meeting:c1', 'Prepare: meeting with Pat Doe', false]]);
+  assert.equal(out.todo, mine[1]);
 });
 
 await check('automations: contactPipelineLocal names, owners and stages', () => {

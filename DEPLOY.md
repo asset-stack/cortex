@@ -92,10 +92,11 @@ groups and tasks moved onto it, and 0014's automatic row dropped; run it after i
 check it with the same query, now one row `Demos`, and
 `select count(*) from public.boards where module = 'clients' and name = 'Demos';`, 0; `docs/PHASE2.md` §26), then
 `0017_my_list.sql` (My list, each person's own list at the top of their Dashboard, and reminders that follow the day:
-`ensure_todos` moves an unticked Approve invoices or follow-up to-do to today, and `contact_pipeline` lets a booking
-take over that day's follow-up; run it **before** publishing its release (the app live before it copes with it; the
-new app without it opens, hides My list and tells admins to run it, but keeps unticked reminders out of sight); check
-it with `select to_regclass('public.my_list');`, which gives `my_list`; `docs/PHASE2.md` §27). 0014 then has nothing left to do: a project that hasn't run it can skip it (running it
+`ensure_todos` moves an unticked Approve invoices or follow-up to-do to today, and `contact_pipeline` gives a booking
+its own Prepare to-do; run it **before** publishing its release, and publish straight after the check (the app live
+before it copes with it; the new app without it opens, hides My list and tells admins to run it, but keeps unticked
+reminders out of sight); check it with `select to_regclass('public.my_list');`, which gives `my_list`;
+`docs/PHASE2.md` §27). 0014 then has nothing left to do: a project that hasn't run it can skip it (running it
 after 0016 would bring the automatic row back).
 
 **0013 must run before the release that needs it is published.** It adds a column (`source`) to `deals` and

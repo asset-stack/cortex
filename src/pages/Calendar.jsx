@@ -123,6 +123,12 @@ export default function Calendar() {
       window.history.replaceState(window.history.state, '', '#/calendar'); // a reload doesn't repeat it (no hashchange)
       if (back === 'connected') { actions.refreshGoogle(); sync(true); return; }
     }
+    const run = calendar.pending?.(); // one already running (the Dashboard started it): wait for it, then read again
+    if (run) {
+      setSyncing(true);
+      run.finally(() => { setSyncing(false); loadStatus(); loadRef.current(); });
+      return;
+    }
     loadStatus().then((res) => {
       if (calendar.live && res?.ok && syncDue(res)) sync(false);
     });

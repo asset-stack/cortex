@@ -18,6 +18,11 @@ export default function DayMeetings({ day, title }) {
   useEffect(() => {
     if (!calendar.live) return undefined;
     let gone = false;
+    const run = calendar.pending?.(); // one already running (the Calendar started it): read again after it
+    if (run) {
+      run.then(() => { if (!gone) setSynced((n) => n + 1); }, () => {});
+      return () => { gone = true; };
+    }
     calendar.status().then((res) => {
       if (gone || !res?.ok || !syncDue(res)) return;
       calendar.sync({ force: false }).then((r) => { if (!gone && r?.ok) setSynced((n) => n + 1); }, () => {});

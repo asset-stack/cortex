@@ -86,7 +86,7 @@ boards: [{ id, module, name, owner, groups }],          // 0006 (§11); was { pr
 //   item.values.startedAt: iso      when its status first left Not started (§24; only nextValues() sets it)
 todos: [{ id, assignee, createdBy, title, notes, day /* 'YYYY-MM-DD' */, start /* 'HH:MM'|'' */,
           minutes, category, source /* 'manual'|'routine'|'automation' */, routineId /* ''|id */,
-          ref /* e.g. 'contact:<id>' | 'deal:<id>' | 'item:<id>' | 'bank:<YYYY-MM-DD>' | '' */,
+          ref /* e.g. 'contact:<id>' | 'meeting:<id>' (0017) | 'deal:<id>' | 'item:<id>' | 'bank:<YYYY-MM-DD>' | 'approve:<YYYY-MM-DD>' | '' */,
           done, doneAt /* iso | '' */ }],
 routines: [{ id, title, category, minutes, assignee, weekdays /* [1..7], 1 = Monday */, start, active }],
 routineRuns: ['<day>|<routineId>|<userId>'],            // demo only: ensureTodosLocal's run log (live: routine_runs)
@@ -1368,7 +1368,9 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   are never merged (nobody sees who shares a Private meeting), and a copy at another time stays apart. Each row: colour, time (or All day), title, who's on it. The title links to the
   Calendar. Empty: No meetings. Opening the Dashboard syncs Google when the last sync is over 10 minutes old and someone
   is connected, as opening the Calendar does (`syncDue()`, `SYNC_STALE`), then reads the day again (live mode). A sync
-  already running is shared (`liveCalendar().sync`): a screen opened during it waits for it and reads after it.
+  already running in the tab is shared (`liveCalendar().sync`) and waited for (`pending()`): the Dashboard or the
+  Calendar opened during it reads again after it, whatever the status says (it looks fresh once its first person is
+  saved).
 - **Dashboard order** (left column): My list, Waiting on you (when there is any), the day's meetings, Today (to-dos and
   Add). Carried over is gone (undone to-dos from earlier days are no longer listed on the Dashboard; the day navigator
   still shows them on their day), and with it `TodoList`'s move button and day column. The KPIs, side column, My tasks
@@ -1382,17 +1384,18 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   later, never back to an earlier day. Routine (made again each day), manual and Do today to-dos stay on their day.
   `ensure_todos` returns the rows added or moved. A bank screenshot reminder moved on from an earlier week shows that
   week after its title ("week of 9 Nov", `bankWeekOf()`), so it isn't taken for this week's.
-- **A contact's to-do takes the new stage's title** (0017 redefines `contact_pipeline`, as 0008 but for its insert;
-  `contactPipelineLocal`): a person has one automation to-do per ref and day, so a follow-up moved on to today used to
-  stop "Prepare: meeting with …" when the meeting was booked that day. Now the day's to-do for the contact takes the new
-  title and is open again; the same title again (a status set back and forth) leaves it as it is, ticked or not.
+- **A booking gets its own to-do** (0017 redefines `contact_pipeline`, as 0008 but for the ref; `contactPipelineLocal`):
+  a person has one automation to-do per ref and day, so a follow-up already on the day (moved on to it, or made and
+  ticked earlier that day) used to stop "Prepare: meeting with …". Now the follow-up keeps `contact:<id>` and the
+  booking's to-do is `meeting:<id>`. An existing to-do is never changed or reopened, whichever way the status goes.
 - **A board's calendar** (`BoardCalendar.jsx`, `boards.calendar`, §15): one full-width month, the current one, titled
   with its name; the count is that month's posts. The months around are on the team Calendar. `MonthGrid` lost its
   compact mode.
-- **Release**: run 0017 **before** publishing. The app live now copes with it (it syncs only the tables it knows, and the
-  moved reminders show in its Today), while the new app without it would keep 0004's `ensure_todos`, so an unticked
-  "Approve invoices" would stay out of sight on its first day. `my_list` still has `since`, so the new app opens either
-  way. Check: `select to_regclass('public.my_list');` gives `my_list`.
+- **Release**: run 0017 **before** publishing, and publish straight after its check. The app live now copes with it (it
+  syncs only the tables it knows, and the moved reminders show in its Today; in the minutes before the release, an older
+  week's bank reminder there has no week label), while the new app without it would keep 0004's `ensure_todos`, so an
+  unticked "Approve invoices" would stay out of sight on its first day. `my_list` still has `since`, so the new app opens
+  either way. Check: `select to_regclass('public.my_list');` gives `my_list`.
 - **Tests**: `scripts/test-sync.mjs` (the `my_list` mapping and `since`, `cleanListText()`, `listOf()`, `meetingsOn()` with
   shared and Busy meetings, `syncDue()`, reminders following the day in `ensureTodosLocal()`, `bankWeekOf()`,
   `contactPipelineLocal()` after a move, the seed and `migrate()`);
@@ -1400,4 +1403,4 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   realtime; own lines only for staff, admins and the SuperAdmin; no inserting for someone else; `protect_my_list` keeps
   `user_id` and `created_at`; a deactivated person gets nothing, not even their own lines; `ensure_todos` moving
   reminders: one per ref, after the day's to-dos, never back, again nothing, with its routine, bank and Approve invoices
-  steps as 0004; `contact_pipeline`: a moved follow-up gives way to the booking).
+  steps as 0004; `contact_pipeline`: the booking's own to-do beside a moved follow-up, nothing ticked reopened).

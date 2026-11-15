@@ -13,9 +13,10 @@
 --   gone), so ensure_todos moves an undone automation to-do from an earlier day (Approve invoices, the bank screenshot,
 --   Prepare contract, a follow-up) to the day it is called for. Otherwise "Approve invoices", made only while no undone
 --   one exists, would never be seen again after its first day. Mirrored in ensureTodosLocal (src/lib/automations.js).
--- - contact_pipeline (section 6): a contact's to-do for the day now takes the new stage's title. A follow-up moved to
---   today (above) used to stop "Prepare: meeting with …" when the meeting was booked that day (one to-do per person,
---   ref and day), so the booking replaces it and reopens it. Mirrored in contactPipelineLocal.
+-- - contact_pipeline (section 6): a booking's "Prepare: meeting with …" gets its own ref (meeting:<contact>, the follow-up
+--   keeps contact:<contact>). One automation to-do per person, ref and day, so a follow-up moved to today (above), or
+--   made and ticked earlier that day, used to stop it. Nothing existing is changed or reopened. Mirrored in
+--   contactPipelineLocal.
 
 begin;
 
@@ -164,10 +165,10 @@ $$;
 revoke execute on function public.ensure_todos(date) from public, anon;
 grant execute on function public.ensure_todos(date) to authenticated;
 
--- 6. contact_pipeline: as 0008, but the day's to-do for a contact takes the new stage's title ------------------------
--- Replied, then Meeting booked on a day that already has the contact's to-do (made that day, or a follow-up moved to it
--- by ensure_todos): "Prepare: meeting with …" replaces "Follow up: … replied" and is open again. The same title again
--- (a status set back and forth) leaves the row as it is, ticked or not.
+-- 6. contact_pipeline: as 0008, but a booking's to-do has its own ref ---------------------------------------------
+-- "Follow up: … replied" keeps contact:<id>; "Prepare: meeting with …" is meeting:<id>, so a follow-up already on the day
+-- (made and ticked that day, or moved to it by ensure_todos) no longer stops it. Still once per ref and day, and an
+-- existing to-do is never changed (a status set back and forth leaves them as they are, ticked or not).
 
 create or replace function public.contact_pipeline() returns trigger
 language plpgsql security definer set search_path = public as $$
@@ -203,11 +204,9 @@ begin
     values (
       v_owner,
       case when v_booked then 'Prepare: meeting with ' || v_name else 'Follow up: ' || v_name || ' replied' end,
-      v_day, 'Outreach', 'automation', 'contact:' || new.id,
+      v_day, 'Outreach', 'automation', case when v_booked then 'meeting:' else 'contact:' end || new.id,
       public.next_todo_position(v_owner, v_day))
-    on conflict (assignee_id, ref, day) where source = 'automation' do update
-      set title = excluded.title, done = false, done_at = null
-      where public.todos.title is distinct from excluded.title;
+    on conflict do nothing;
   end if;
 
   return null;

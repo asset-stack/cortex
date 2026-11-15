@@ -233,9 +233,10 @@ const EARLY_STAGES = ['Opportunities', 'Contacted'];
 // The contact_pipeline trigger, for a contact whose status was `prevStatus` ('' for a new contact). When it becomes
 // Replied or Meeting booked: a deal for it (named after the organisation, owned by the contact's owner or `me`), or
 // its deal moves from Opportunities or Contacted to First meetings on a booking (never back from later on); and the owner gets a follow-up to-do for `day`,
-// by default the owner's own today (user_today()), once per contact and day: when the day already has the contact's
-// to-do with another title (a follow-up, then the meeting is booked), it takes the new title and is open again (0017).
-// → { deal, todo } (todo null when the day's to-do was already there with that title), or null when nothing applies.
+// by default the owner's own today (user_today()), once per contact, stage and day: "Follow up: … replied" is
+// contact:<id>, "Prepare: meeting with …" meeting:<id> (0017), so a follow-up already on the day doesn't stop the
+// booking's. An existing to-do is never changed. → { deal, todo } (todo null when it already existed), or null when
+// nothing applies.
 export function contactPipelineLocal(state, contactId, prevStatus = '', { day, me = state.me, uid: newId = uid } = {}) {
   const c = (state.contacts || []).find((x) => x.id === contactId);
   if (!c || !PIPELINE_STATUSES.includes(c.status) || c.status === prevStatus) return null;
@@ -259,15 +260,13 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day, m
   }
 
   let todo = null;
-  const ref = `contact:${c.id}`;
-  const title = booked ? `Prepare: meeting with ${name}` : `Follow up: ${name} replied`;
-  const had = owner && state.todos.find((t) => t.source === 'automation' && t.assignee === owner && t.ref === ref && t.day === day);
-  if (owner && !had) {
-    todo = makeTodo({ assignee: owner, createdBy: me, title, day, category: 'Outreach', source: 'automation', ref }, newId);
+  const ref = `${booked ? 'meeting' : 'contact'}:${c.id}`;
+  if (owner && !hasAutomation(state, owner, ref, day)) {
+    todo = makeTodo({
+      assignee: owner, createdBy: me, title: booked ? `Prepare: meeting with ${name}` : `Follow up: ${name} replied`,
+      day, category: 'Outreach', source: 'automation', ref,
+    }, newId);
     state.todos.push(todo);
-  } else if (had && had.title !== title) {
-    Object.assign(had, { title, done: false, doneAt: '' });
-    todo = had;
   }
   return { deal, todo };
 }

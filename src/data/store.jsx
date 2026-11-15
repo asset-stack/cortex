@@ -1501,6 +1501,8 @@ const DEMO_GOOGLE = { ready: true, demo: true, account: false, connected: false,
 //   meetings(from, to) → { rows }: calendar_meetings rows touching from…to, a day wider each side for time zones
 //   status() → { people: [{ userId, connected, syncedAt, error, reconnect }], earliest, syncedAt }
 //   sync({ force }) → { claimed, synced, failed } (live only; while one runs, a second call waits for it)
+//   pending() → the sync running in this tab, or null: a screen opened during it reads again after it (the status
+//     already looks fresh once its first person is saved, so it wouldn't ask for a sync itself)
 const touching = (rows, from, to) => rows.filter((m) => m.start_date <= addDays(to, 1) && m.end_date >= addDays(from, -1));
 function demoCalendar() {
   return {
@@ -1511,6 +1513,7 @@ function demoCalendar() {
       return { ok: true, people: [], earliest: rows.reduce((m, x) => (!m || x.start_date < m ? x.start_date : m), ''), syncedAt: '' };
     },
     sync: async () => ({ ok: false, error: 'Google works in live mode only.' }),
+    pending: () => null,
   };
 }
 
@@ -1550,6 +1553,7 @@ function liveCalendar(syncCalendar) {
       } catch (e) { return failed(e); }
     },
     sync: (opts) => (running ||= Promise.resolve(syncCalendar(opts)).finally(() => { running = null; })),
+    pending: () => running,
   };
 }
 

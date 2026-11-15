@@ -6404,9 +6404,9 @@ async function phase17(ctx) {
   await db.query('update todos set done = false where id = any($1)', [setAside]);
   await db.query("update invoices set status = 'Approved' where id = $1", [awaitingInvoice?.id]);
 
-  // 124. contact_pipeline (0017): the day's to-do for a contact takes the new stage's title. A follow-up moved on to
-  // today, then the meeting booked: one open "Prepare: meeting with …". The same title again leaves a ticked one ticked;
-  // another title reopens it.
+  // 124. contact_pipeline (0017): a booking's "Prepare: meeting with …" has its own ref (meeting:<id>), so a follow-up
+  // moved on to today, or ticked earlier that day, doesn't stop it; an existing to-do is never changed or reopened,
+  // whichever way the status goes; still security definer.
   await as(null);
   const today = (await one('select public.user_today($1)::text as d', [boss])).d;
   await as(boss);
@@ -6414,33 +6414,35 @@ async function phase17(ctx) {
     values ('Pat Example', 'Example Pumps', 'pat@example.com', 'Sent', $1) returning id`, [boss])).id;
   await db.query("update contacts set status = 'Replied' where id = $1", [pat]);
   await as(null);
-  const ref = `contact:${pat}`;
-  await db.query("update todos set day = day - 2 where ref = $1", [ref]); // made two days ago, left unticked
+  const refs124 = [`contact:${pat}`, `meeting:${pat}`];
+  await db.query('update todos set day = day - 2 where ref = $1', [refs124[0]]); // made two days ago, left unticked
   await as(boss);
   await attempt('select public.ensure_todos($1::date) as n', [today]);
-  const forPat = async () => (await rows('select title, day::text as day, done from todos where ref = $1 order by day', [ref]));
+  const forPat = async () => (await rows(`select split_part(ref, ':', 1) as kind, title, day::text as day, done from todos
+    where ref = any($1) order by day, ref`, [refs124]));
   const movedOn = await forPat();
   await db.query("update contacts set status = 'Meeting booked' where id = $1", [pat]);
   const booked = await forPat();
   await as(null);
-  await db.query('update todos set done = true, done_at = now() where ref = $1', [ref]);
+  await db.query('update todos set done = true, done_at = now() where ref = any($1)', [refs124]); // both ticked
   await as(boss);
-  await db.query("update contacts set status = 'Sent' where id = $1", [pat]);
-  await db.query("update contacts set status = 'Meeting booked' where id = $1", [pat]);
-  const sameTitle = await forPat();
   await db.query("update contacts set status = 'Replied' where id = $1", [pat]);
-  const otherTitle = await forPat();
+  await db.query("update contacts set status = 'Meeting booked' where id = $1", [pat]);
+  await db.query("update contacts set status = 'Sent' where id = $1", [pat]);
+  await db.query("update contacts set status = 'Replied' where id = $1", [pat]);
+  const toggled = await forPat();
   await as(null);
   const cp = await one("select prosecdef, array_to_string(proconfig, ',') as config from pg_proc where proname = 'contact_pipeline'");
-  check('124. contact_pipeline (0017): a follow-up moved on to today gives way to the meeting booked that day (one open Prepare to-do); the '
-    + 'same title again leaves a ticked one ticked, another reopens it; still security definer',
-    stable(movedOn) === stable([{ title: 'Follow up: Pat Example replied', day: today, done: false }])
-      && stable(booked) === stable([{ title: 'Prepare: meeting with Pat Example', day: today, done: false }])
-      && stable(sameTitle) === stable([{ title: 'Prepare: meeting with Pat Example', day: today, done: true }])
-      && stable(otherTitle) === stable([{ title: 'Follow up: Pat Example replied', day: today, done: false }])
+  const ticked = (title) => ({ kind: title.startsWith('Follow') ? 'contact' : 'meeting', title, day: today, done: true });
+  check('124. contact_pipeline (0017): a booking gets its own Prepare to-do (meeting:<id>) beside a follow-up moved on to today; a ticked to-do '
+    + 'is never changed or reopened, whichever way the status goes; still security definer',
+    stable(movedOn) === stable([{ kind: 'contact', title: 'Follow up: Pat Example replied', day: today, done: false }])
+      && stable(booked) === stable([{ kind: 'contact', title: 'Follow up: Pat Example replied', day: today, done: false },
+        { kind: 'meeting', title: 'Prepare: meeting with Pat Example', day: today, done: false }])
+      && stable(toggled) === stable([ticked('Follow up: Pat Example replied'), ticked('Prepare: meeting with Pat Example')])
       && cp.prosecdef === true && /search_path=public/.test(cp.config),
-    { today, movedOn, booked, sameTitle, otherTitle, cp });
-  await db.query('delete from todos where ref = $1', [ref]);
+    { today, movedOn, booked, toggled, cp });
+  await db.query('delete from todos where ref = any($1)', [refs124]);
   await db.query('delete from deals where contact_id = $1', [pat]);
   await db.query('delete from contacts where id = $1', [pat]);
 
