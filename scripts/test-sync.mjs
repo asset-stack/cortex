@@ -1844,7 +1844,7 @@ const { BOARD_SCHEMAS: SCHEMAS, PRIORITY: PRIO, PRIORITY_HINTS } = await import(
 
 await check('owners: Projects, Marketing, Outreach and Clients boards have one Owner and Priority (Urgent → Low, each with a meaning); Work in Progress keeps its people', () => {
   const cols = (m) => SCHEMAS[m].columns.map((c) => `${c.key}:${c.type}`).join(' ');
-  // §20: Also on after the Owner, and the Department last, on every team board (Operations then has the Deal, §22).
+  // §20: Also on after the Owner, and the Department last, on every team board (Projects then has the Deal, §22).
   assert.equal(cols('projects'), 'people:owner also:also status:status priority:label due:date department:department deal:deal');
   assert.equal(cols('outreach'), 'deal:deal people:owner also:also status:status priority:label due:date department:department', 'Outreach boards link a task to its deal');
   assert.equal(cols('clients'), 'client:client people:owner also:also status:status priority:label due:date department:department', 'Clients boards say which client (their Deal column went with Demos, §26)');
@@ -1933,12 +1933,12 @@ await check('new task: starts Not started with you as owner; made for someone el
   assert.equal(work.newTaskValues({ owner: 'ben', acceptedAt: 'x' }, { me: 'ana', now }).acceptedAt, undefined);
 });
 
-await check('where a task lives: department (Operations for Projects) › board › client; a personal page is its notes', () => {
+await check('where a task lives: department (Projects, §29) › board › client; a personal page is its notes', () => {
   const { MODULE_LABELS } = boardsLib;
-  assert.deepEqual(MODULE_LABELS, { projects: 'Operations', marketing: 'Marketing', outreach: 'Outreach', clients: 'Clients', pipeline: 'Pipeline' });
+  assert.deepEqual(MODULE_LABELS, { projects: 'Projects', marketing: 'Marketing', outreach: 'Outreach', clients: 'Clients', pipeline: 'Pipeline' });
   const st = { users: [{ id: 'dv', name: 'David' }], clients: [{ id: 'c-1', name: 'Example Council' }] };
   const it = (values = {}) => ({ id: 'i', values });
-  assert.deepEqual(work.whereOf(st, { module: 'projects', name: 'BAU', owner: '' }, it()), ['Operations', 'BAU']);
+  assert.deepEqual(work.whereOf(st, { module: 'projects', name: 'BAU', owner: '' }, it()), ['Projects', 'BAU']);
   assert.deepEqual(work.whereOf(st, { module: 'clients', name: 'Previews', owner: '' }, it({ client: 'c-1' })), ['Clients', 'Previews', 'Example Council']);
   assert.deepEqual(work.whereOf(st, { module: 'clients', name: 'Previews', owner: '' }, it({ client: 'gone' })), ['Clients', 'Previews']);
   assert.deepEqual(work.whereOf(st, { module: 'projects', name: '', owner: 'dv' }, it()), ['David’s notes']);
@@ -2059,7 +2059,7 @@ await check('§20 columns: Also on and Department on team boards only (a persona
   assert.equal(schemaOf(mine), schemaOf({ module: 'projects', owner: 'stu' }), 'personal pages: one shared copy');
   assert.deepEqual(schemaOf(mine).columns.map((c) => c.key), ['people', 'status', 'priority', 'due'], 'no Also on or Department on notes');
   assert.ok(['marketing', 'outreach', 'clients', 'pipeline'].every((m) => SCHEMAS[m].columns.at(-1).key === 'department'), 'Department last everywhere');
-  assert.deepEqual(SCHEMAS.projects.columns.slice(-2).map((c) => c.key), ['department', 'deal'], 'Operations: then the Deal (§22)');
+  assert.deepEqual(SCHEMAS.projects.columns.slice(-2).map((c) => c.key), ['department', 'deal'], 'Projects: then the Deal (§22)');
   assert.deepEqual(['projects', 'marketing', 'outreach', 'clients', 'pipeline'].map((m) => work.hasAlso({ module: m })), [true, true, true, true, false],
     'Also on wherever there is an owner (not Work in Progress)');
   assert.deepEqual([work.hasDepartment(team), work.hasDepartment(mine), work.hasAlso(mine), work.hasOwner(mine)], [true, false, false, true]);
@@ -2103,7 +2103,7 @@ await check('§20 Also on: nextValues keeps it clean (each once, never the owner
   const web = st.boards.find((b) => b.id === 'web');
   assert.deepEqual(work.taggable(st, web, { values: { people: ['stu'] } }).sort(), ['ann', 'sue']);
   st.moduleAccess = [{ userId: 'stu', module: 'projects', level: 'none' }];
-  assert.deepEqual(work.taggable(st, web, { values: { people: ['ann'] } }).sort(), ['sue'], 'no Operations access: not offered');
+  assert.deepEqual(work.taggable(st, web, { values: { people: ['ann'] } }).sort(), ['sue'], 'no Projects access: not offered');
 });
 
 await check('§24 passing a task on: whoever had it falls back to Also on (handed on, or taken back); not when you give away one you haven’t started, a new task, a clear or a people list', () => {
@@ -2171,7 +2171,7 @@ await check('§25 a person’s lists are what they own: Also on, or second on a 
     work.ownedBy(web, { values: { people: ['stu'] } }, ''), work.ownedBy(web, null, 'stu')], [true, false, false, true, false, false]);
 });
 
-await check('§20 by board: a card per board in menu order (Operations first; within a module, team boards in their order, then personal pages), its rows in the board’s own order, split by group', () => {
+await check('§20 by board: a card per board in menu order (Projects first; within a module, team boards in their order, then personal pages), its rows in the board’s own order, split by group', () => {
   const st = taskState();
   const web = st.boards.find((b) => b.id === 'web');
   web.groups.push({ id: 'g-web-2', name: 'Backlog', items: [{ id: 'w-back', name: 'w-back', values: { people: ['stu'] }, done: false, updates: [], subtasks: [] }] });
@@ -2465,7 +2465,7 @@ await check('§26 no automatic Demos row: a deal reaching Demos or Proposal sent
   assert.equal(/dealDemoRow/.test(store), false, 'nothing in the store adds one');
 });
 
-await check('§22 deal next steps on Operations: a Team Tasks task linked to a deal shows on its profile and for its owner (§25: not for Also on); personal pages have no Deal', () => {
+await check('§22 deal next steps on Projects: a Team Tasks task linked to a deal shows on its profile and for its owner (§25: not for Also on); personal pages have no Deal', () => {
   const st = taskState();
   st.deals = [{ id: 'd-9', name: 'Example deal', clientId: '' }];
   const web = st.boards.find((b) => b.id === 'web');
@@ -2473,7 +2473,7 @@ await check('§22 deal next steps on Operations: a Team Tasks task linked to a d
     done: false, updates: [], subtasks: [] });
   st.boards.find((b) => b.id === 'sales').groups[0].items.push({ id: 'sales-deal', name: 'Call back', values: { people: ['ann'], deal: 'd-9' }, done: false, updates: [], subtasks: [] });
   assert.deepEqual([work.hasDeal({ module: 'projects', owner: '' }), work.hasDeal({ module: 'projects', owner: 'ann' })], [true, false]);
-  assert.deepEqual(work.dealTasks(st, 'd-9').map((r) => r.item.id), ['ops-deal', 'sales-deal'], 'both homes, Operations first');
+  assert.deepEqual(work.dealTasks(st, 'd-9').map((r) => r.item.id), ['ops-deal', 'sales-deal'], 'both homes, Projects first');
   assert.ok(!work.prioritiesFor(st, 'stu', { today: '2026-10-25', teamOnly: true }).some((r) => r.item.id === 'ops-deal'), 'not on the Also-on person’s Team view (§25)');
   assert.ok(work.prioritiesFor(st, 'ann', { today: '2026-10-25', teamOnly: true }).some((r) => r.item.id === 'ops-deal'), 'the owner’s');
 });
@@ -2501,7 +2501,7 @@ const migrationFile = (prefix) => {
   const f = existsSync(migrationsDir) && readdirSync(migrationsDir).find((x) => x.startsWith(prefix) && x.endsWith('.sql'));
   return f ? [f, readFileSync(new URL(f, migrationsDir), 'utf8')] : null;
 };
-await check('§25/§26 Pipeline › Demos: one fixed board (Operations underneath, shown as Pipeline), its own columns; a deal’s tasks live there; 0015 makes it, 0016 names it', async () => {
+await check('§25/§26 Pipeline › Demos: one fixed board (Projects underneath, shown as Pipeline), its own columns; a deal’s tasks live there; 0015 makes it, 0016 names it', async () => {
   const { DEAL_TASKS_BOARD, isDealTasks, schemaOf } = await import('../src/data/boards.js');
   const deal = { id: DEAL_TASKS_BOARD, module: 'projects', name: 'Demos', owner: '', groups: [{ id: 'g-dt', name: 'Next steps', items: [] }] };
   assert.deepEqual([isDealTasks(deal), isDealTasks({ id: 'x', module: 'projects' }), isDealTasks(null)], [true, false, false]);
@@ -2526,7 +2526,7 @@ await check('§25/§26 Pipeline › Demos: one fixed board (Operations underneat
   assert.ok(work.prioritiesFor(st, 'ann', { teamOnly: true }).some((r) => r.item.id === 'moved'), 'a moved row is its owner’s task');
   assert.ok(work.clientTasks(st, 'c-1').some((r) => r.item.id === 'moved'), 'a moved row keeps showing on its client’s Tasks (its Client value, §26)');
   const cards = work.byBoard(work.prioritiesFor(st, 'stu', { teamOnly: true }), st.boards).map((c) => c.board.id);
-  assert.equal(cards.indexOf(DEAL_TASKS_BOARD) > cards.indexOf('web'), true, 'its card comes with Pipeline’s, after Operations’');
+  assert.equal(cards.indexOf(DEAL_TASKS_BOARD) > cards.indexOf('web'), true, 'its card comes with Pipeline’s, after Projects’');
   // Never a module's default board; its own address opens it.
   const visible = st.boards.filter((b) => b.module === 'projects');
   assert.notEqual(boardsLib.resolveBoard(st, [deal, ...visible.filter((b) => b !== deal)], 'projects', '', '')?.id, DEAL_TASKS_BOARD);
@@ -2546,7 +2546,7 @@ await check('§25/§26 Pipeline › Demos: one fixed board (Operations underneat
     const b = s.boards.find(isDealTasks);
     assert.ok(b && b.module === 'projects' && !b.owner && b.name === 'Demos' && b.groups.map((g) => g.name).join('|') === 'Next steps|To do|Done');
     assert.equal(s.boards.some((x) => x.module === 'clients' && x.name === 'Demos'), false, 'no Clients › Demos in the demo');
-    // Older demo data gets it once, after Operations' team boards, called Demos, with Clients › Demos' groups; deleted, it
+    // Older demo data gets it once, after Projects' team boards, called Demos, with Clients › Demos' groups; deleted, it
     // stays deleted.
     const old = structuredClone(s);
     old.boards = old.boards.filter((x) => !isDealTasks(x));

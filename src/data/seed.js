@@ -101,7 +101,7 @@ function boards(clientId = () => '', dealId = () => '') {
         item('Outsource time logger', { people: ['david'], status: 'Done', priority: 'Low', due: '2026-10-09' }),
       ]),
     ]),
-    // Pipeline › Demos (§25, §26): the deals' tasks; an Operations board underneath, with its fixed id, under Pipeline in
+    // Pipeline › Demos (§25, §26): the deals' tasks; a Projects board underneath, with its fixed id, under Pipeline in
     // the sidebar. Clients › Demos' groups came here (0016).
     { ...board('projects', 'Demos', [
       group('Next steps', '#c9ffe6', [
@@ -769,7 +769,7 @@ export function migrate(data) {
     }
     data.seededBoards.push(module);
   });
-  // Pipeline › Deal tasks (§25, 0015): older demo data gets the board once, after Operations' team boards.
+  // Pipeline › Deal tasks (§25, 0015): older demo data gets the board once, after Projects' team boards.
   if (!data.boards.some((b) => b.id === DEAL_TASKS_BOARD) && !data.seededBoards.includes('dealTasks')) {
     const at = data.boards.findLastIndex((b) => b.module === 'projects' && !b.owner) + 1;
     data.boards.splice(at, 0, { id: DEAL_TASKS_BOARD, module: 'projects', name: 'Deal tasks', owner: '', calendar: false,

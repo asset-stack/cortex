@@ -42,7 +42,7 @@ setup steps are in `DEPLOY.md`.
   (`docs/PHASE2.md` §11, §13), and board store actions take a board id. Board modules are Projects, Marketing, Outreach,
   Clients and Pipeline (`BOARD_MODULES`); Outreach's and Clients' menus start with their own page (`MODULE_HOMES`), and
   Pipeline's boards (Work in Progress) sit on its page under the deals, not in the menu (`PAGE_BOARD_MODULES`); Pipeline's
-  menu is its page, then Pipeline › Demos (§26: the `DEAL_TASKS_BOARD`, an Operations board underneath). Admins add
+  menu is its page, then Pipeline › Demos (§26: the `DEAL_TASKS_BOARD`, a Projects board underneath). Admins add
   new team boards in the app; personal pages come and go with their person.
 - **Board tasks have one home and one Owner** (`docs/PHASE2.md` §17, §18, §20): a task lives on one board (the Dashboard,
   Team pages and a client's page are views of it, never copies, and the Dashboard and Team › Name show it in its board's
@@ -51,8 +51,8 @@ setup steps are in `DEPLOY.md`.
   over and accepting, the Dashboard and Team lists, Needs attention, task mentions, a client's tasks and Do today live
   in `src/lib/work.js` (only `nextValues()` / `acceptedValues()` set `assignedBy` / `assignedAt` / `acceptedAt` /
   `startedAt`). An
-  `@Name` in an update never changes who is on a task. The Projects module is shown as **Operations** (`MODULE_LABELS`);
-  its key stays `projects`. **Also on** (`values.also`, §20) puts others on a task without making it theirs: it never
+  `@Name` in an update never changes who is on a task. The Projects module is shown as **Projects** (`MODULE_LABELS`; it was Operations
+  §18–§28, §29); its key is `projects`. **Also on** (`values.also`, §20) puts others on a task without making it theirs: it never
   counts in `workload()`, never waits on them, never lists the owner, and never puts a task in their lists or filters
   (§25: a person's Dashboard, Team page and person filters show what they own, `ownedBy()`); when the Owner changes from one person to another,
   the one who had it goes on it (`nextValues()`, §24; not when they give away their own task never started: `startedAt`). A task's **Department** is `departmentOf()` (a
@@ -63,8 +63,8 @@ setup steps are in `DEPLOY.md`.
   co-pitched or AssetStack direct; `LEADS` / `leadOf()` in `src/data/boards.js`, the marks in `src/components/LeadIcon.jsx`),
   and Make client carries it. A deal's tasks (its profile's **Tasks**, **Add task**) have `values.deal` and live on
   **Pipeline › Demos** (§25, §26: one board with the fixed id `DEAL_TASKS_BOARD`, made by 0015, named Demos and given Clients
-  › Demos' groups and tasks by 0016, in the demo by the seed and `migrate()`; an Operations board underneath, shown as
-  Pipeline by `areaOf()`, listed under Pipeline in the sidebar, never a module's default; older ones stay on Operations or
+  › Demos' groups and tasks by 0016, in the demo by the seed and `migrate()`; a Projects board underneath, shown as
+  Pipeline by `areaOf()`, listed under Pipeline in the sidebar, never a module's default; older ones stay on Projects or
   Outreach boards). Nothing is added by itself when a deal moves (0016 drops 0014's `deal_demo_row`). Real deals and clients never go in this repo: the live pipeline is loaded with SQL run in the SQL editor.
 - **CRM profile (0012)**: a deal's or client's notes, meetings and links are `crm_entries` (`state.crmEntries`; rules in
   `src/lib/crm.js` ⇄ 0012's policies and triggers). An entry on a client follows Clients access, one on a deal that isn't

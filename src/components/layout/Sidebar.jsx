@@ -10,14 +10,14 @@ import { ROLE_LABELS, roleOf, useAccess } from '@/lib/access';
 import { MENU_BOARD_MODULES, MODULE_HOMES, MODULE_LABELS, boardHref, boardTitle, resolveBoard } from '@/lib/boards';
 import { DEAL_TASKS_BOARD, isDealTasks } from '@/data/boards';
 
-// Pipeline › Demos lives at #/projects/<id> (an Operations board underneath) but shows as Pipeline's (§25): the nav marks Pipeline.
+// Pipeline › Demos lives at #/projects/<id> (a Projects board underneath) but shows as Pipeline's (§25): the nav marks Pipeline.
 const navRoute = (route, sub) => (route === 'projects' && sub === DEAL_TASKS_BOARD ? 'pipeline' : route);
 import { hashParam } from '@/lib/router';
 import { cn } from '@/lib/cn';
 import Logo from '@/components/Logo';
 
 // Everything a page can link to, in nav order. `module` pages show only when the user can at least view that module
-// (src/lib/access.js); the former Admin board is part of Projects, shown as Operations (§18).
+// (src/lib/access.js); the former Admin board is part of Projects (shown as Operations §18–§28, Projects again §29).
 export const NAV = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   // The team Calendar (0009) and Team (§18): no module of their own; each thing on them keeps its own access rule
@@ -46,7 +46,7 @@ export function useNav() {
 }
 
 /**
- * What's listed under the board modules (Operations and Marketing: their team boards; Outreach and Clients: their own
+ * What's listed under the board modules (Projects and Marketing: their team boards; Outreach and Clients: their own
  * page, then their team boards; personal pages are on each person's Dashboard as My notes), only the boards you can
  * open, and under Team each active person; and the id of the entry on screen (`current`: a board's id, a MODULE_HOMES id
  * on #/outreach or #/clients, a person's id on #/team/<id>, '' elsewhere).
@@ -57,7 +57,7 @@ function useBoardNav(route, sub) {
   const visible = (state.boards || []).filter(access.canViewBoard);
   const lists = Object.fromEntries(MENU_BOARD_MODULES.map((m) => [m, [
     ...(MODULE_HOMES[m] ? [MODULE_HOMES[m]] : []),
-    ...visible.filter((b) => b.module === m && !b.owner && !isDealTasks(b)) // Pipeline › Demos: under Pipeline, not Operations (§26)
+    ...visible.filter((b) => b.module === m && !b.owner && !isDealTasks(b)) // Pipeline › Demos: under Pipeline, not Projects (§26)
       .map((b) => ({ id: b.id, href: boardHref(b), title: boardTitle(state, b) })),
   ]]));
   lists.team = state.users.filter((u) => u.active !== false).map((u) => ({ id: u.id, href: `#/team/${encodeURIComponent(u.id)}`, title: u.name }));

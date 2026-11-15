@@ -48,7 +48,7 @@ const linkProblem = (v) => {
 const escapeCancels = (cancel) => (e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); cancel(); } };
 
 /** A deal's or client's Tasks: its open linked tasks (each opens it) and Add task (a task for someone, linked to it, with
- *  every task field: on Pipeline › Demos for a deal (§26; before 0015, an Operations or Outreach board); a Clients board
+ *  every task field: on Pipeline › Demos for a deal (§26; before 0015, a Projects or Outreach board); a Clients board
  *  for a client). It shows in its owner's Team view and Dashboard. */
 export function NextSteps({ target }) {
   const { state } = useStore();

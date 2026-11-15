@@ -327,7 +327,7 @@ export function ClientPicker({ value, onChange, label = 'Client', className, rea
   );
 }
 
-/** Which deal a task is for (a board's Deal column: Operations, Outreach, Clients): the open deals by name (and the one it's on, if
+/** Which deal a task is for (a board's Deal column: Projects, Outreach, Clients): the open deals by name (and the one it's on, if
  *  that's been made a client). `readOnly` shows the name. */
 export function DealPicker({ value, onChange, label = 'Deal', className, readOnly = false }) {
   const { state } = useStore();

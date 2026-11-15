@@ -1415,3 +1415,10 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   in the app (owner, after the release); an old word anywhere else shows as an uncoloured pill until someone picks a new
   type. The demo seed uses only the new types.
 - **Tests**: `scripts/test-sync.mjs` §28 (the five options in order, each coloured; the seed uses only them).
+
+## 29. Operations is called Projects again (no migration)
+
+- **Why** (owner, 2026-11-15): the module shown as Operations since §18 is called **Projects**.
+- **What**: `MODULE_LABELS.projects` (`src/lib/boards.js`) and `BOARD_SCHEMAS.projects.title` (`src/data/boards.js`) say
+  Projects, so the sidebar, breadcrumbs (`whereOf()`), the Department options and filters and Settings → Team do. The key
+  (`projects`), Department values and access rows never changed, so no data moves. Sections §18–§28 say Operations.

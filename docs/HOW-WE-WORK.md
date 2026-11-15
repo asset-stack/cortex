@@ -4,13 +4,13 @@ A short note for the team: who owns a task, what comes first, and where work goe
 
 ## Every task has one home and one owner
 - A task lives in one place: the board where the work belongs (for example **Clients › Previews**, linked to the client,
-  or **Operations › Team Tasks**). Your Dashboard, Team › your name and the client's page all show that same task, in the
+  or **Projects › Team Tasks**). Your Dashboard, Team › your name and the client's page all show that same task, in the
   same table and with the same columns as its board: change it in any of them and it changes everywhere.
 - The **Owner** says who is answerable for it. One person, never a group.
 - Someone else working on it too? Keep the owner and add them under **Also on**: it shows on the task who else is on it,
   but the task stays the owner's. Your Dashboard, Team › your name and the person filters list only the tasks you own.
 - A quick question for someone? Write `@Name` in an update on the task. They see it in their Dashboard → **Mentions**.
-- **Department** says what a task is for (Operations, Marketing, Outreach, Clients, Pipeline). It's the board's own
+- **Department** says what a task is for (Projects, Marketing, Outreach, Clients, Pipeline). It's the board's own
   unless you change it: on a mixed board like Team Tasks, set it on each task, and filter the board by it.
 
 ## Handing work over
@@ -74,12 +74,12 @@ deal's **Lead** when you add it: **LYCO** (co-pitched) or **AssetStack** (direct
 and coloured edge show on the card, and the All · LYCO · AssetStack filter on Pipeline and Clients shows one side's work.
 
 When a deal is made a client, its profile comes with it. Adding a meeting, note or link needs **Edit** on Pipeline (a
-deal) or Clients (a client). A deal's tasks are on Pipeline › Demos (older ones on Operations or Outreach boards still
-show); Demos is an Operations board underneath, so adding them needs Edit on Operations. A client's are on the Clients
+deal) or Clients (a client). A deal's tasks are on Pipeline › Demos (older ones on Projects or Outreach boards still
+show); Demos is a Projects board underneath, so adding them needs Edit on Projects. A client's are on the Clients
 boards. Ask an admin if you only have View.
 
 ## Where work goes
-- **Operations**: running the business: BAU, finance, development and internal projects.
+- **Projects**: running the business: BAU, finance, development and internal projects.
 - **Marketing**: posts, campaigns and events.
 - **Outreach**: sales tasks.
 - **Pipeline → Demos**: a deal's tasks, its demos included. Add them from the deal's page (**Add task**) so the deal is

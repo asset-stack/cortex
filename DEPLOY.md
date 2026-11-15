@@ -84,7 +84,7 @@ Contacted → First meetings → Demos, and Work in Progress under the deals; `d
 Demos by itself; no table or column, so it can run before or after its release; check it with
 `select tgname from pg_trigger where tgname = 'deal_demo_row';`; `docs/PHASE2.md` §23), then `0015_deal_tasks_board.sql`
 (Pipeline › Deal tasks, where a deal's next steps live; no table or column, so the new app opens without it; run it
-**after** its release is live, because the app before it would show Deal tasks as an ordinary Operations board, in the
+**after** its release is live, because the app before it would show Deal tasks as an ordinary Projects board, in the
 menu and in every New task;
 check it with `select name from public.boards where id = 'dea15000-0000-4000-8000-000000000001';`, one row `Deal tasks`;
 `docs/PHASE2.md` §25), then `0016_pipeline_demos.sql` (Pipeline › Demos: 0015's board renamed Demos, Clients › Demos'
@@ -365,12 +365,12 @@ There are no invitations to send.
 2. On first sign-in Cortex creates their profile as **Staff** and adds them to #general. Addresses from
    `setup-admins.sql` come in with the role listed there (**SuperAdmin** or **Admin**).
 3. The SuperAdmin manages people in **Settings** → **Team**: the **Role** menu (SuperAdmin / Admin / Staff),
-   the **Active** switch, and each staff member's access to **Operations** (the Projects module), **Marketing**,
-   **Outreach**, **Pipeline** and **Clients** (None / View / Edit). Staff start with Operations and Marketing on Edit,
+   the **Active** switch, and each staff member's access to **Projects**, **Marketing**,
+   **Outreach**, **Pipeline** and **Clients** (None / View / Edit). Staff start with Projects and Marketing on Edit,
    Pipeline and Clients on View, and Outreach on None; admins always have Edit. Admins see the page read-only.
    Give staff **Edit** on Clients so they can own, accept and update client work (Demos, Previews).
    Each person also gets their own page (**My notes** on their Dashboard), which they can always edit (unless
-   Operations is None for them).
+   Projects is None for them).
    Switching Active off removes all of that person's access at once, because every database policy checks it.
    Your own row is locked, and the last active SuperAdmin can't be demoted or deactivated.
 4. Admins set each person's daily routines in **Settings** → **Routines**; they appear on that person's
@@ -672,14 +672,14 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
 | "Couldn't load your workspace … client_contacts" after an update | `0004_clients_google.sql` hasn't run yet (section 2). |
 | "Couldn't load your workspace … work_tools" after an update | `0005_work_tools.sql` hasn't run yet (section 2). |
 | "Couldn't load your workspace … boards", Projects shows nothing, or "Not saved" mentions `board_id` | `0006_boards.sql` hasn't run yet (section 2). |
-| A staff member can edit their own notes but not **Landing Page** or another team board | Their **Operations** (Projects) level is **View** in **Settings** → **Team** (an override; the default after 0006 is Edit). The SuperAdmin sets it back to **Edit**. |
+| A staff member can edit their own notes but not **Landing Page** or another team board | Their **Projects** level is **View** in **Settings** → **Team** (an override; the default after 0006 is Edit). The SuperAdmin sets it back to **Edit**. |
 | A task's drawer on someone's own page offers no **Board** to move it to | By design: tasks move between team boards, or between groups of one page, never onto or off a personal page. |
 | An admin can't see another admin's notes (*Name’s notes*, once called *Name’s Projects*) | By design: admins see their own and staff's pages; only the SuperAdmin sees everyone's. |
 | No rename or delete on someone's notes page | Personal pages come and go with their person. Only team boards are renamed or deleted (by admins). |
 | "Couldn't load your workspace … crm_entries" after an update (before this was handled: now Cortex opens with a *Database update needed* notice instead) | `0012_crm_profile.sql` hasn't run. In the SQL editor, `select to_regclass('public.crm_entries');`: NULL means run the file (section 2) and look for an error if it doesn't finish; `crm_entries` means the table is there and PostgREST hasn't noticed: run `notify pgrst, 'reload schema';`. Then **Retry**. |
 | **Database update needed: run 00NN_….sql** at the top of Cortex (admins) | That migration hasn't run on this database: run it (section 2), then reload. Until then what it adds is off; everything else works. If `select to_regclass('public.<its table>');` already shows the table, PostgREST hasn't noticed it yet: run `notify pgrst, 'reload schema';`, then reload. Still there? Check that the SQL editor's project is the one in Cloudflare's `VITE_SUPABASE_URL`. |
 | A staff member reads a deal's or a client's profile but has no **Note**, **Meeting** or **Add link** | Expected with View: adding to a deal's profile needs **Pipeline** Edit, to a client's **Clients** Edit (**Settings** → **Team**). Someone else's entry is changed only by its author or an admin. |
-| A deal's profile has no **Tasks**, or no **Add task** | A deal's tasks live on Pipeline › Demos, an Operations board underneath: seeing them needs **Operations** View and adding them Operations Edit (staff have Edit by default). Before 0015 runs, Add task uses Operations' and Outreach's boards. |
+| A deal's profile has no **Tasks**, or no **Add task** | A deal's tasks live on Pipeline › Demos, a Projects board underneath: seeing them needs **Projects** View and adding them Projects Edit (staff have Edit by default). Before 0015 runs, Add task uses Projects' and Outreach's boards. |
 | On **Team**, a staff member sees fewer of a teammate's tasks than an admin does, or **New task** says a teammate can't edit a board they can | `0011_team_access_read.sql` hasn't run yet (section 2): until then staff read only their own access levels. |
 | **Projects** / **Marketing** look empty after running 0006, or it showed an error | The run stopped part-way, so tasks aren't linked to a board yet (nothing is deleted). Run the current `0006_boards.sql` again; it links them to **General** / **Posting schedule** and finishes the rest. |
 | A new group turned up on **General** or **Posting schedule** after the 0006 update | An old open tab (the app from before 0006) added it. Move its tasks where they belong, delete it, and reload that tab. |
