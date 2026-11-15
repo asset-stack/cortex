@@ -19,6 +19,7 @@ import {
 import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, parseAmount, ymdIn } from '@/lib/format';
 import { acceptedValues, boardValues, itemRef, newTaskValues, nextValues, todoForItem, todoItemId } from '@/lib/work';
 import { canAddEntry, canChangeEntry, carryDealEntriesLocal, cleanEntry, dropDealEntriesLocal } from '@/lib/crm';
+import { cleanListText, listOf } from '@/lib/myList';
 import { categoryOf } from '@/lib/timesheet';
 import { cleanTool } from '@/lib/tools';
 import { cleanCalendarEvent } from '@/lib/calendar';
@@ -376,7 +377,7 @@ function createActions(mutate, mode) {
       b.name = title;
       return true;
     }),
-    // Show or hide a team board's 3-month calendar above its tasks (0009; boards with a date column).
+    // Show or hide a team board's calendar of this month above its tasks (0009; boards with a date column).
     setBoardCalendar: (boardId, on) => onTeamBoard(boardId, (d, b) => {
       if (!hasDates(BOARD_SCHEMAS[b.module]) || Boolean(b.calendar) === Boolean(on)) return false;
       b.calendar = Boolean(on);
@@ -877,6 +878,35 @@ function createActions(mutate, mode) {
       const e = (d.crmEntries || []).find((x) => x.id === id);
       if (!canChangeEntry(d, e)) return false;
       d.crmEntries = d.crmEntries.filter((x) => x !== e);
+      return true;
+    }),
+
+    // ── My list (0017): your own lines, private (src/lib/myList.js ⇄ 0017's policies) ──
+
+    // At the end of your list. → id
+    addListItem: (text) => !absent('my_list') && mutate((d) => {
+      const clean = cleanListText(text);
+      if (!clean || !d.me) return false;
+      const mine = listOf(d, d.me);
+      const x = { id: uid(), user: d.me, text: clean, done: false, position: mine.length ? Math.max(...mine.map((i) => i.position ?? 0)) + 1 : 0, createdAt: nowIso() };
+      (d.myList ||= []).push(x);
+      return x.id;
+    }),
+    // Its text (an empty one is refused: removeListItem takes a line away) or whether it's done. Only your own.
+    updateListItem: (id, patch = {}) => !absent('my_list') && mutate((d) => {
+      const x = (d.myList || []).find((i) => i.id === id && i.user === d.me);
+      if (!x) return false;
+      const next = {};
+      if ('text' in patch) { const clean = cleanListText(patch.text); if (!clean) return false; if (clean !== x.text) next.text = clean; }
+      if ('done' in patch && Boolean(patch.done) !== Boolean(x.done)) next.done = Boolean(patch.done);
+      if (!Object.keys(next).length) return false;
+      Object.assign(x, next);
+      return true;
+    }),
+    removeListItem: (id) => !absent('my_list') && mutate((d) => {
+      const x = (d.myList || []).find((i) => i.id === id && i.user === d.me);
+      if (!x) return false;
+      d.myList = d.myList.filter((i) => i !== x);
       return true;
     }),
 
@@ -1484,7 +1514,7 @@ function demoCalendar() {
   };
 }
 
-const MEETING_COLUMNS = 'id, user_id, title, busy, all_day, start_date, end_date, start_at, end_at';
+const MEETING_COLUMNS = 'id, user_id, google_id, title, busy, all_day, start_date, end_date, start_at, end_at';
 function liveCalendar(syncCalendar) {
   const failed = (error) => ({ ok: false, error: error?.message || String(error || 'Request failed') });
   return {

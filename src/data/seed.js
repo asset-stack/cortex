@@ -37,7 +37,7 @@ const item = (name, values, extra = {}) => ({
 
 // Projects: everyone's own page, then the team boards; Marketing, Outreach, Clients and Pipeline: their team boards
 // (docs/PHASE2.md §11).
-// calendar (0009): Posting schedule starts with its 3-month calendar above its tasks, as 0009 sets it once in the database.
+// calendar (0009): Posting schedule starts with its calendar of this month above its tasks, as 0009 sets it once in the database.
 const board = (module, name, groups, owner = '') => ({
   id: id('b'), module, name: owner ? '' : name, owner, calendar: !owner && module === 'marketing' && name === 'Posting schedule', groups,
 });
@@ -561,7 +561,7 @@ export function demoMeetings(today) {
     const start = new Date(`${day}T${utc}:00Z`);
     const end = new Date(start.getTime() + minutes * 60e3);
     return {
-      id: `gm-${key}`, user_id: user, title: busy ? '' : title, busy, all_day: false, start_date: start.toISOString().slice(0, 10),
+      id: `gm-${key}`, user_id: user, google_id: `g-${key}`, title: busy ? '' : title, busy, all_day: false, start_date: start.toISOString().slice(0, 10),
       end_date: end.toISOString().slice(0, 10), start_at: start.toISOString(), end_at: end.toISOString(),
     };
   };
@@ -571,9 +571,10 @@ export function demoMeetings(today) {
     timed('3', 'david', 'Westbay onboarding call', addDays(monday, 1), '23:00', 60), // Wednesday 10:00 Sydney
     timed('4', 'josh', 'Dentist', addDays(monday, 2), '08:00', 60, true),
     timed('5', 'hello', 'Content shoot', addDays(monday, 3), '01:00', 120),
-    { id: 'gm-6', user_id: 'hello', title: 'Leave', busy: false, all_day: true, start_date: addDays(nextMonth, 6), end_date: addDays(nextMonth, 8),
+    { id: 'gm-6', user_id: 'hello', google_id: 'g-6', title: 'Leave', busy: false, all_day: true, start_date: addDays(nextMonth, 6), end_date: addDays(nextMonth, 8),
       start_at: null, end_at: null },
     timed('7', 'david', 'Harbour Construction demo', addDays(nextMonth, 12), '00:30', 60),
+    timed('8', 'josh', 'Weekly pipeline review', today, '03:00', 45), // today, so the Dashboard's meetings show one (§27)
   ];
 }
 
@@ -629,6 +630,12 @@ export function createSeed() {
     org: { ...ORG },
     boards: boards((name) => seedClients.find((c) => c.name === name)?.id || '', (name) => deals.find((dl) => dl.name === name)?.id || ''),
     crmEntries: crmDemo(deals, seedClients),
+    // My list (0017, §27): David's own lines at the top of his Dashboard (each person sees only theirs).
+    myList: [
+      { id: id('ml'), user: 'david', text: 'Call Stu about the cement demo', done: false, position: 0, createdAt: hoursAgo(26) },
+      { id: id('ml'), user: 'david', text: 'Ideas for the webinar deck', done: false, position: 1, createdAt: hoursAgo(20) },
+      { id: id('ml'), user: 'david', text: 'Send Josh the meeting notes', done: true, position: 2, createdAt: hoursAgo(5) },
+    ],
     deals,
     clients: seedClients,
     contacts,
@@ -683,7 +690,7 @@ export function createSeed() {
   generateDueInvoicesLocal(state, today, { uid: () => id('i') }); // Westbay's licence for this month: Awaiting approval
   contactPipelineLocal(state, contactId('Quinn Avery'), 'Sent', { ...opts, day: today, me: 'josh', uid: () => id('d') });
 
-  // Hello's last working day: routines done except one, which carries over.
+  // Hello's last working day: routines done except one, left undone (the Dashboard lists only the day's to-dos, §27).
   ensureTodosLocal(state, lastWorkday, { ...opts, me: 'hello' });
   state.todos.forEach((t) => {
     if (t.day === lastWorkday && t.title !== 'Check outreach replies') Object.assign(t, { done: true, doneAt: `${lastWorkday}T07:00:00.000Z` });
@@ -702,7 +709,7 @@ export function createSeed() {
 }
 
 const COLLECTIONS = ['moduleAccess', 'todos', 'routines', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'timeEntries', 'tools',
-  'crmEntries'];
+  'crmEntries', 'myList'];
 
 // Brings demo data saved by older builds (localStorage) up to the current shape. Safe to run more than once.
 export function migrate(data) {
@@ -826,7 +833,7 @@ export function migrate(data) {
   if (!data.outreachGmail || typeof data.outreachGmail !== 'object') Object.assign(data, outreachGmailDemo(data.outreachEmails, data.mailboxes, localYmd()));
   data.outreachThreads ??= [];
   data.outreachMessages ??= [];
-  // Calendar (0009): Posting schedule's 3-month calendar is switched on once (as 0009 does), so switching it off stays off;
+  // Calendar (0009): Posting schedule's calendar is switched on once (as 0009 does), so switching it off stays off;
   // older demo data gets the demo team events.
   if (!data.calendarSeeded) {
     data.boards.filter((b) => b.module === 'marketing' && !b.owner && b.name === 'Posting schedule').forEach((b) => { b.calendar = true; });

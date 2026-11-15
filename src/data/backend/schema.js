@@ -52,7 +52,7 @@ const COLUMNS = {
     id: 'int', business_name: t, abn: t, address: t, email: t, phone: t, bank_account_name: t, bsb: t,
     account_number: t, invoice_prefix: t, payment_terms_days: 'int', contract_template: t, contract_folder: t,
   },
-  // calendar (0009): the board shows its 3-month calendar above its tasks (team boards; Posting schedule to start).
+  // calendar (0009): the board shows a calendar of this month above its tasks (team boards; Posting schedule to start).
   boards: { id: 'id', module: t, name: t, owner_id: 'fk', position: 'int', calendar: 'bool' },
   board_groups: { id: 'id', board_key: t, board_id: 'id', name: t, color: t, position: 'int' },
   items: { id: 'id', board_key: t, board_id: 'id', group_id: 'id', position: 'int', name: t, values: 'json', done: 'bool' },
@@ -127,6 +127,8 @@ const COLUMNS = {
     id: 'id', deal_id: 'fk', client_id: 'fk', kind: t, title: t, body: t, url: t, label: t, happened_on: 'date', attendees: t,
     user_id: 'fk', created_at: 'ts',
   },
+  // My list (0017): each person's own lines at the top of their Dashboard; only its owner reads or writes them.
+  my_list: { id: 'id', user_id: 'fk', text: t, done: 'bool', position: 'int', created_at: 'ts' },
   // Outreach (0007). outreach_emails is not here: the app reads it on demand (store.outreach) and never writes it.
   outreach_mailboxes: { id: 'id', name: t, addresses: 'texts', owner_id: 'fk', active: 'bool', position: 'int' },
   outreach_notes: { id: 'id', mailbox_id: 'fk', pinned: 'bool', body: t, author_id: 'fk', created_at: 'ts' },
@@ -160,6 +162,7 @@ export const TABLES = [
   // After deals and clients. A client deleted takes its entries (on delete cascade; the store drops them too); a deal
   // deleted takes the ones that never reached a client and leaves the others off it (0012's trigger, then set null).
   { name: 'crm_entries', key: byId, setNull: { deal_id: 'deals', user_id: 'profiles' }, since: '0012_crm_profile.sql' },
+  { name: 'my_list', key: byId, since: '0017_my_list.sql' }, // after profiles; the database has only your own rows
   { name: 'client_tasks', key: byId, parent: ['clients', 'client_id'] },
   { name: 'billing_plans', key: byId, parent: ['clients', 'client_id'] }, // before invoices (invoices.plan_id)
   { name: 'invoices', key: byId, parent: ['clients', 'client_id'], setNull: { plan_id: 'billing_plans' } },
@@ -388,6 +391,9 @@ export function flatten(state) {
     id: x.id, deal_id: x.dealId || null, client_id: x.clientId || null, kind: x.kind, title: x.title, body: x.body, url: x.url,
     label: x.label, happened_on: x.happenedOn || null, attendees: x.attendees, user_id: x.user || null, created_at: x.createdAt,
   }));
+  (state.myList || []).forEach((x) => put('my_list', {
+    id: x.id, user_id: x.user || null, text: x.text, done: Boolean(x.done), position: x.position ?? 0, created_at: x.createdAt,
+  }));
   (state.calendarEvents || []).forEach((x) => put('calendar_events', {
     id: x.id, kind: x.kind, title: x.title, day: x.day, end_day: x.endDay, starts_at: x.startsAt, ends_at: x.endsAt, people: x.people,
     created_by: x.createdBy,
@@ -556,6 +562,9 @@ export function assemble(rowsByTable, { me } = {}) {
       id: x.id, dealId: x.deal_id ?? '', clientId: x.client_id ?? '', kind: x.kind, title: x.title, body: x.body, url: x.url,
       label: x.label, happenedOn: x.happened_on ?? '', attendees: x.attendees, user: x.user_id ?? '', createdAt: x.created_at ?? '',
     })),
+    // In its order (position, then when it was added).
+    myList: all('my_list').sort((a, b) => (a.position ?? 0) - (b.position ?? 0) || cmp(a.created_at || '', b.created_at || '') || cmp(a.id, b.id))
+      .map((x) => ({ id: x.id, user: x.user_id ?? '', text: x.text ?? '', done: Boolean(x.done), position: x.position ?? 0, createdAt: x.created_at ?? '' })),
     // By day, then start time (all-day first).
     calendarEvents: all('calendar_events').sort((a, b) => cmp(a.day || '', b.day || '') || cmp(a.starts_at || '', b.starts_at || '')
       || cmp(a.id, b.id)).map((x) => ({

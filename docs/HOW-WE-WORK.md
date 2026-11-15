@@ -37,17 +37,22 @@ A short note for the team: who owns a task, what comes first, and where work goe
 Anyone can set the owner and the priority. If two things feel Urgent, ask an admin which one is.
 
 ## Start the day on your Dashboard
-1. **Waiting on you**: accept what's been handed to you.
-2. **Today**: your to-dos for the day. **Do today** on a task puts it here.
-3. **My tasks**, under Today: every task you own (not the ones you're only Also on), as each board shows it: a
+1. **My list**, at the top: your own list, for anything you want to jot down. Type a line and press Enter, tick it when
+   it's done, click it to change it, or delete it. It isn't linked to any task, day or deal, it stays until you delete
+   it, and only you see it (admins too).
+2. **Waiting on you**: accept what's been handed to you.
+3. **Today's meetings**: everyone's meetings and the team's events for the day (the title opens the Calendar).
+4. **Today**: your to-dos for the day. **Do today** on a task puts it here. Reminders the app makes (Approve invoices,
+   the bank screenshot, a follow-up) stay on Today until you tick them; other to-dos stay on their own day.
+5. **My tasks**, under Today: every task you own (not the ones you're only Also on), as each board shows it: a
    table per board with the same columns (Task, Updates, Owner, Also on, Status, Priority, Due, Department). Change a
    status, priority or due date right there, click a task to open it, and **Today** puts it on your day. The order, the
    groups and adding tasks are on the board itself (open it from the table's title). Team › your name shows the same
    tables, and everyone can look at anyone's there. Repeating daily work belongs in your routines (it shows on Today),
    not as a task kept In progress.
-4. Keep at most **2 tasks In progress**. Finish or pause one before starting another.
-5. Stuck? Set the status to **Stuck** and say why in an update. On a team board, an admin sees it in Needs attention.
-6. **My notes**, at the bottom, is your own page. It never shows on the Team page, but admins can open staff notes (and
+6. Keep at most **2 tasks In progress**. Finish or pause one before starting another.
+7. Stuck? Set the status to **Stuck** and say why in an update. On a team board, an admin sees it in Needs attention.
+8. **My notes**, at the bottom, is your own page. It never shows on the Team page, but admins can open staff notes (and
    the SuperAdmin everyone's).
 
 ## After a meeting with a prospect or client

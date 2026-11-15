@@ -17,7 +17,7 @@ setup steps are in `DEPLOY.md`.
   and seed data, and CI builds it that way (no env vars), so the build must never require them.
 - Supabase schema changes go in a new numbered file in `supabase/migrations/` (`0003_….sql`, …). **Never edit a
   migration that has been applied** (`0001`–`0013`, `0015` and `0016` are live in production; `0014` was skipped:
-  0016 drops what it adds, so never run it there): fix forward in the next file (`0017_….sql`). A migration must never mention `module_level` unless it redefines it
+  0016 drops what it adds, so never run it there): fix forward in the next file. `0017_my_list.sql` is written but not yet run in production (it may still change until it is); the next new file is `0018_….sql`. A migration must never mention `module_level` unless it redefines it
   (`scripts/test-sync.mjs` reads the staff defaults from the newest file that does). Every table
   keeps row-level security on with policies that require `is_staff()` (directly or through `is_admin()` /
   `can_view()` / `can_edit()` / the board helpers), and is added to the `supabase_realtime` publication if it is synced. Extend
@@ -72,6 +72,11 @@ setup steps are in `DEPLOY.md`.
   database (`crm_carry_to_client`; `carryDealEntriesLocal()` in demo mode, never client-side in live mode). A meeting
   keeps a link to its notes and a summary: Cortex never reads the Doc. Next steps are board tasks (`values.deal` /
   `values.client`, `dealTasks()` / `clientTasks()`), never entries.
+- **My list (0017, `docs/PHASE2.md` §27)**: `my_list` / `state.myList` is each person's own list at the top of their
+  Dashboard, never linked to a task, day or deal. Private, enforced twice with the same rule: RLS lets only its owner
+  read or write a line (`user_id = auth.uid()`, admins and the SuperAdmin too) ⇄ the store's `addListItem` /
+  `updateListItem` / `removeListItem` act only on `state.me`'s lines (rules in `src/lib/myList.js`). Shown only on your
+  own Dashboard.
 - **A new module gets a module key**: add it to `MODULES` and `STAFF_DEFAULTS` in `src/lib/access.js`, to the
   `module_access.module` check and the defaults in `public.module_level()` (in a new migration), give its tables
   `can_view` / `can_edit` policies on that key, and set `module` on its `NAV` entry in `Sidebar.jsx`.
@@ -97,13 +102,14 @@ setup steps are in `DEPLOY.md`.
   and Google meetings: everyone). `calendar_events` is synced (anyone adds; the creator or an admin edits and deletes).
   `calendar_meetings` is written only by the `google` function's `calendar-sync` and read only through
   `useStore().calendar`; it keeps a meeting's title and times, never its description, place, guests or link, and a
-  Private or Confidential one is Busy with no title. A board's 3-month calendar is `boards.calendar`, never a name match.
+  Private or Confidential one is Busy with no title. A board's calendar above its tasks (this month only, §27) is `boards.calendar`, never a name match.
   Sharing a calendar is an explicit flag (`private.google_accounts.calendar`, set only after a calendar connect, cleared
   by Stop sharing), never inferred from the stored Google scopes. Staff may use Google only to connect their calendar
   (connect with purpose `calendar`); everything else stays admins only.
 - Automations run in the database in live mode (`contact_pipeline` trigger, `ensure_todos` and
   `generate_due_invoices` RPCs) and in `src/lib/automations.js` in demo mode. Change both together; live mode
-  never creates those rows client-side.
+  never creates those rows client-side. The Dashboard lists only the day's to-dos (no Carried over, §27), so
+  `ensure_todos` (0017) ⇄ `ensureTodosLocal` move an undone automation to-do from an earlier day to the day.
 - Time zones: business dates (invoices, plan due dates) are Sydney's (`team_today()` / `TEAM_TIMEZONE` in
   `src/lib/format.js`); personal dates (My Work, follow-up to-dos, the 16:30 timesheet prompt) are the person's own
   (`profiles.timezone`, `user_today()`; the browser's day in the app). Josh is in `Asia/Tbilisi`, ops staff in

@@ -112,6 +112,8 @@ outreachEmails: [{ id, mailbox, sender, sentOn, … }],   // demo only (emailFro
 // 0012 (§19): a deal's or client's CRM profile. Newest first.
 crmEntries:     [{ id, dealId, clientId, kind /* 'note'|'meeting'|'link' */, title, body, url, label, happenedOn,
                    attendees, user, createdAt }],
+// 0017 (§27): each person's My list, at the top of their Dashboard. Private: live mode holds only your own lines (RLS).
+myList:         [{ id, user, text, done, position, createdAt }],   // by position, then createdAt
 ```
 Empty strings, never `null`, for absent text/ids/dates in state (as phase 1). Money and counts are numbers.
 Lists that live views read newest-first are stored with the same position convention as phase 1.
@@ -160,7 +162,7 @@ Additive and safe to run once on the live database (which may already hold rows)
   `subscriptions (name, vendor, category text, amount numeric, cycle check in ('monthly','annually'), renews_on date null, active bool, notes text, position int)`; **admins only**.
   `time_entries (user_id → profiles cascade, day date, start_time time, minutes int, category text, note text, source text check in ('manual','suggested'), position int)`; all ops own rows; admins select all.
 - RPCs (security definer, `set search_path = public`, granted to `authenticated`):
-  - `ensure_todos(p_day date) returns int`: for the caller's active routines whose `weekdays` contain `isodow(p_day)` and that haven't run for the caller that day (`routine_runs`, so a deleted or moved to-do doesn't come back), record the run and insert a `routine` to-do (title/category/minutes/start from the routine) `on conflict do nothing`. If the caller is an admin, `p_day` is a Monday and no `bank_statements.week_start = p_day` exists, insert automation to-do *Upload this week's bank screenshot* (`ref 'bank:<p_day>'`, category `Admin`). Returns rows inserted.
+  - `ensure_todos(p_day date) returns int`: for the caller's active routines whose `weekdays` contain `isodow(p_day)` and that haven't run for the caller that day (`routine_runs`, so a deleted or moved to-do doesn't come back), record the run and insert a `routine` to-do (title/category/minutes/start from the routine) `on conflict do nothing`. If the caller is an admin, `p_day` is a Monday and no `bank_statements.week_start = p_day` exists, insert automation to-do *Upload this week's bank screenshot* (`ref 'bank:<p_day>'`, category `Admin`). Returns rows inserted (since 0017 also moved: undone automation to-dos from earlier days move to `p_day`, §27).
   - `generate_due_invoices() returns int` (admins only, raises otherwise): locks `invoices`; for each active plan with `next_date <= team_today()` and no more than two years behind (further back is a mistyped date, left alone), repeatedly create an invoice (status `Awaiting approval`, number = org prefix + next number for that prefix, min 1001, one line `description`, qty `'1'`, rate = amount as text, `plan_id`) for each period not already in `billed_periods`, and advance `next_date` by 1/3/12 months on the plan's billing day (`anchor_day`, else `next_date`'s; the month's last day when shorter) until it is in the future.
   - `team_today()`: the team's calendar day for the automations; sessions run in UTC. `Australia/Perth` in 0002,
     `Australia/Sydney` since 0003 (§8).
@@ -218,7 +220,7 @@ The round-trip property must hold for every table. Rows the user can't read simp
   and Marketing, and since 0007 Outreach and Clients (after their own page, §13), list their boards as sub-menus
   (§11).
 - **My Work** (`src/pages/MyWork.jsx` + `src/components/work/*`): day navigator (‹ Today ›); admins get a person
-  picker (default me). Sections: *Carried over* (undone to-dos before today), *Today* (to-dos sorted by start time
+  picker (default me). Sections: *Carried over* (undone to-dos before today; gone from the Dashboard since §27), *Today* (to-dos sorted by start time
   then position: checkbox, title, category pill, minutes, source icon for routine/automation, delete), inline add
   (title, category, minutes, optional time; admins can add for the selected person), *On boards* (items on any board
   you can see whose `people` include the person and aren't done; *Priorities* since §17), *Mentions* (existing).
@@ -304,7 +306,7 @@ app version that uses it.
   The old columns stay, blank and no longer synced. New columns: `clients.platform_url`, `client_usage.credits`,
   `invoices.sent_to`, `org_settings.contract_template / contract_folder` (Drive links).
 - **Automations**: `ensure_todos` adds **Approve invoices** (admins, ref `approve:<day>`, category Clients) while any
-  invoice is *Awaiting approval* (one undone reminder per admin at a time: an undone one carries over), and admins' first My Work load each day raises due invoices first
+  invoice is *Awaiting approval* (one undone reminder per admin at a time: an undone one carries over; since §27 it moves on to the day), and admins' first My Work load each day raises due invoices first
   (`generate_due_invoices`), so recurring billing needs no cron. Trigger `client_contract_todo` (after insert on
   `clients`): a new **Onboarding** client gives its owner if they're an admin, else the admin who added it,
   **Prepare contract: <name>** on their own day (ref `contract:<id>`). Approving the last waiting invoice ticks the
@@ -741,7 +743,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   events added on the Calendar, and invoice due and contract dates for people with Clients access; not My Work to-dos.
   Teammates see Google meetings' titles and times; Private or Confidential ones show as **Busy**; declined and
   cancelled ones are left out. The 3-month calendar is a board switch (on for Posting schedule to start; admins switch it
-  on or off for any team board with dates), so a rename keeps it. Calendar sits between My Work and Projects.
+  on or off for any team board with dates), so a rename keeps it. Since §27 it shows only the current month. Calendar sits between My Work and Projects.
 - **No module key**: the Calendar only gathers what each source already lets the viewer see, with that source's rule
   (`collectEntries()` in `src/lib/calendar.js`, which demo mode needs as its state holds everyone's data; RLS does it in
   live mode): board tasks on boards they can see (`canViewBoard`; tasks on a board with its calendar on are *posts*),
@@ -785,7 +787,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   earliest dated thing, newest first; their meetings load when it opens). A task opens in its drawer (read only unless
   the viewer can edit its board), an event in its form, a meeting in a short summary, an invoice or contract on Clients.
   Opening the page syncs Google when the last sync is over 10 minutes old. Boards with `calendar` on show
-  `BoardCalendar` above their tasks: this month and the next two (`MonthGrid`, which the board's Calendar view also
+  `BoardCalendar` above their tasks: this month and the next two (this month only since §27) (`MonthGrid`, which the board's Calendar view also
   uses), following the board's search and filters. Board options: **Show calendar** / **Hide calendar** (admins).
 - **Tests**: `scripts/test-db.mjs` phase 9 (0009 re-runs, the board switch once, who adds, edits and deletes events,
   meetings read only, the claim and save rules, forgetting, function privileges); `scripts/test-sync.mjs` (the
@@ -978,7 +980,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   edit (`canViewBoard` / `canEditBoard` for them); without it, to staff every other staff member looked like the staff
   defaults. Levels aren't secret; only the SuperAdmin still changes them. `scripts/test-db.mjs` phase 11.
 - **Dashboard** (`#/dashboard`, `src/pages/Dashboard.jsx`; `#/work` redirects there): **Waiting on you** (tasks handed to
-  you, not yet accepted: *From David · 2h*, **Accept**), **Today** (the day's to-dos, carried-over ones above), **My
+  you, not yet accepted: *From David · 2h*, **Accept**), **Today** (the day's to-dos, carried-over ones above; §27: no carried-over list), **My
   tasks** (`src/components/work/MyTasks.jsx`: every open task you're on, Urgent first, with its breadcrumb, status, due
   and **Do today**; the team-rule note), and **My notes** (your own page, embedded: `Board embedded title`). Beside them:
   Needs attention (admins), Mentions (counted in its heading), Tools. KPIs: Waiting on you, Urgent, Overdue, To-dos
@@ -1191,7 +1193,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   controls: order, groups and adding stay on the board); `rowAction(item)` fills the last cell (**Today**, i.e. Do
   today, for the person themself or an admin).
 - **Dashboard**: Waiting on you (`src/components/work/WaitingTasks.jsx`, with Accept), Carried over and Today stay
-  beside Needs attention, Mentions and Tools; **My tasks** (the same `PersonTasks`) and My notes go full width below.
+  beside Needs attention, Mentions and Tools (§27: My list first, then Waiting on you, the day's meetings and Today;
+  Carried over gone); **My tasks** (the same `PersonTasks`) and My notes go full width below.
   My tasks' Move up/down and drag went with the compact list (`stepPlace()` removed); order is set on the board.
 - **Deal next steps on Operations**: Operations' team boards have a **Deal** column (`values.deal`, after Department,
   `sparse`: a table shows it only once a task on the board has one; the drawer always does). A deal's **Add next step**
@@ -1335,3 +1338,57 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   gone, the move with updates and subtasks, same_audience back on; no row after; Operations' access; cross-module moves
   refused again).
 
+
+## 27. 0017: My list at the top of the Dashboard; the day's meetings; no Carried over; a board's calendar shows this month
+
+- **Why** (owner, 2026-11-15): the Dashboard should open with a plain list the person types into, not linked to anything,
+  then Waiting on you, then the day's meetings; Carried over goes. The Posting schedule's calendar should show only the
+  current month.
+- **Owner's choices**: My list is a new personal list (its own lines: add, tick, edit, delete; kept until deleted, not tied
+  to a day; private). The meetings are everyone's. Today's to-dos, My tasks and My notes stay below; Needs attention,
+  Mentions and Tools stay in the side column.
+- **My list** (`src/components/work/MyList.jsx`, rules in `src/lib/myList.js`): a card titled My list with the number of
+  lines not done. A line has a checkbox (done lines are struck through and stay until deleted), its text (click to change
+  it; Enter or leaving saves, Escape cancels, saving it empty deletes it) and Delete. **Add a line** at the bottom: Enter
+  adds it at the end and keeps the box ready for the next. After a delete, focus goes to the next line (else the one
+  before, else the add box). Text is one line, spaces collapsed, at most 500 characters (`cleanListText()`). Only on your
+  own Dashboard (an admin looking at someone else's sees none).
+- **State and table** (0017): `myList: [{ id, user, text, done, position, createdAt }]` ⇄ `public.my_list` (`id`,
+  `user_id → profiles on delete cascade`, default `auth.uid()`; `text` ≤ 500; `done`; `position`; `created_at`). Synced,
+  with `since: '0017_my_list.sql'`: until 0017 runs Cortex opens, My list is hidden and admins see which file to run.
+- **Private, enforced twice**: RLS lets a person select, insert, update and delete only rows where `user_id = auth.uid()`
+  (and `is_staff()`): admins and the SuperAdmin see only their own too. `protect_my_list` keeps `user_id` and
+  `created_at` on update. The store's `addListItem(text)` / `updateListItem(id, { text?, done? })` /
+  `removeListItem(id)` act only on `state.me`'s lines, refuse empty text and do nothing until 0017 has run.
+- **The day's meetings** (`src/components/work/DayMeetings.jsx`): for the Dashboard's day (Today's meetings, Yesterday's,
+  Tomorrow's, or the date), everyone's Google meetings (read on demand, as the Calendar page does) and the team's
+  meetings, events and reminders (`calendar_events`), from `collectEntries()` filtered by `meetingsOn()`: all-day first,
+  then by time; a Private or Confidential Google meeting stays Busy. A Google meeting several teammates share (a
+  `calendar_meetings` row each, same `google_id`, now read with the meetings) is one row with all of them; a Busy copy
+  or one at another time stays apart. Each row: colour, time (or All day), title, who's on it. The title links to the
+  Calendar. Empty: No meetings. Opening the Dashboard syncs Google when the last sync is over 10 minutes old and someone
+  is connected, as opening the Calendar does (`syncDue()`, `SYNC_STALE`), then reads the day again (live mode).
+- **Dashboard order** (left column): My list, Waiting on you (when there is any), the day's meetings, Today (to-dos and
+  Add). Carried over is gone (undone to-dos from earlier days are no longer listed on the Dashboard; the day navigator
+  still shows them on their day), and with it `TodoList`'s move button and day column. The KPIs, side column, My tasks
+  and My notes are unchanged.
+- **Reminders follow the day** (0017 redefines `ensure_todos`, as 0004 plus one step; `ensureTodosLocal` in the demo):
+  "Approve invoices" is made only while no undone one exists, and counted on Carried over to stay in sight, so without
+  it the reminder would vanish after its first day and never come back. Now, when the day's to-dos are made, an undone
+  automation to-do from an earlier day (Approve invoices, the bank screenshot, Prepare contract, a follow-up) moves to
+  that day, after its to-dos, oldest first, keeping its ref. One per ref (the newest: a contact can have follow-ups on
+  several days, and a person has one to-do per ref and day), none when that ref already has a to-do on that day or
+  later, never back to an earlier day. Routine (made again each day), manual and Do today to-dos stay on their day.
+  `ensure_todos` returns the rows added or moved.
+- **A board's calendar** (`BoardCalendar.jsx`, `boards.calendar`, §15): one full-width month, the current one, titled
+  with its name; the count is that month's posts. The months around are on the team Calendar. `MonthGrid` lost its
+  compact mode.
+- **Release**: 0017 adds a table with `since`, so the release can go first; run 0017 right after (until it runs, live
+  mode keeps 0004's `ensure_todos`, so an unticked "Approve invoices" stays on its first day). Check:
+  `select to_regclass('public.my_list');` gives `my_list`.
+- **Tests**: `scripts/test-sync.mjs` (the `my_list` mapping and `since`, `cleanListText()`, `listOf()`, `meetingsOn()` with
+  shared meetings, `syncDue()`, reminders following the day in `ensureTodosLocal()`, the seed and `migrate()`);
+  `scripts/test-db.mjs` checks 121–123 (0017 whole, again and statement by statement, its done row, RLS, four policies,
+  realtime; own lines only for staff, admins and the SuperAdmin; no inserting for someone else; `protect_my_list` keeps
+  `user_id` and `created_at`; a deactivated person gets nothing, not even their own lines; `ensure_todos` moving
+  reminders: one per ref, after the day's to-dos, never back, again nothing).

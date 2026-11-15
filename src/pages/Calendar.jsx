@@ -5,7 +5,7 @@ import { useAccess } from '@/lib/access';
 import { BOARD_SCHEMAS, schemaOf } from '@/data/boards';
 import { findBoard } from '@/lib/boards';
 import {
-  CLIENT_KINDS, KINDS, archiveMonths, collectEntries, earliestDate, entriesByDay, filterEntries, inMonth, lastOf, nextMonths, placeAt,
+  CLIENT_KINDS, KINDS, archiveMonths, collectEntries, earliestDate, entriesByDay, filterEntries, inMonth, lastOf, nextMonths, placeAt, syncDue,
 } from '@/lib/calendar';
 import { localYmd } from '@/lib/format';
 import { hashParam } from '@/lib/router';
@@ -16,7 +16,6 @@ import GoogleCalendar from '@/components/calendar/GoogleCalendar';
 import ItemDrawer from '@/components/board/ItemDrawer';
 import { cn } from '@/lib/cn';
 
-const STALE = 10 * 60e3; // opening the Calendar syncs Google when the last sync is older than this
 // Back from Google (#/calendar?google=connected, or google=error&reason=…).
 const GOOGLE_ERRORS = {
   denied: 'Google sign-in was cancelled',
@@ -125,9 +124,7 @@ export default function Calendar() {
       if (back === 'connected') { actions.refreshGoogle(); sync(true); return; }
     }
     loadStatus().then((res) => {
-      if (!calendar.live || !res?.ok) return;
-      const stale = !res.syncedAt || Date.now() - new Date(res.syncedAt).getTime() > STALE;
-      if (stale && res.people.some((p) => p.connected)) sync(false);
+      if (calendar.live && res?.ok && syncDue(res)) sync(false);
     });
   }, [actions, calendar, loadStatus, sync]);
 

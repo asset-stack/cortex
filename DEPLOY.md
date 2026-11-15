@@ -75,7 +75,7 @@ then `0006_boards.sql` (the boards under Projects and Marketing, and each person
 `0007_outreach.sql` (Outreach, read from the outreach agent's Google Sheet, see section 12; and the boards under
 Outreach and Clients, `docs/PHASE2.md` §13), then `0008_pipeline_stages.sql` (Pipeline's stages: Opportunities →
 Contacted → First meetings → Demos, and Work in Progress under the deals; `docs/PHASE2.md` §14), then
-`0009_calendar.sql` (the team Calendar and the boards' 3-month calendar; Google meetings need section 13;
+`0009_calendar.sql` (the team Calendar and the boards' calendar, of this month since `docs/PHASE2.md` §27; Google meetings need section 13;
 `docs/PHASE2.md` §15), then `0010_outreach_gmail.sql` (Outreach counted from each mailbox's Gmail; section 14;
 `docs/PHASE2.md` §16), then `0011_team_access_read.sql` (everyone reads everyone's access levels, for the Team pages;
 `docs/PHASE2.md` §18), then `0012_crm_profile.sql` (a deal's and a client's profile: meetings, notes and links;
@@ -90,9 +90,12 @@ check it with `select name from public.boards where id = 'dea15000-0000-4000-800
 `docs/PHASE2.md` §25), then `0016_pipeline_demos.sql` (Pipeline › Demos: 0015's board renamed Demos, Clients › Demos'
 groups and tasks moved onto it, and 0014's automatic row dropped; run it after its release is live; no table or column;
 check it with the same query, now one row `Demos`, and
-`select count(*) from public.boards where module = 'clients' and name = 'Demos';`, 0; `docs/PHASE2.md` §26). 0014 then
-has nothing left to do: a project that hasn't run it can skip it (running it after 0016 would bring the automatic row
-back).
+`select count(*) from public.boards where module = 'clients' and name = 'Demos';`, 0; `docs/PHASE2.md` §26), then
+`0017_my_list.sql` (My list, each person's own list at the top of their Dashboard, and reminders that follow the day:
+`ensure_todos` moves an unticked Approve invoices or follow-up to-do to today; a new table, so the app opens without
+it, hides My list and tells admins to run it; run it right after its release; check it with
+`select to_regclass('public.my_list');`, which gives `my_list`; `docs/PHASE2.md` §27). 0014 then has nothing left to do: a project that hasn't run it can skip it (running it
+after 0016 would bring the automatic row back).
 
 **0013 must run before the release that needs it is published.** It adds a column (`source`) to `deals` and
 `clients`, and that release saves it with every deal and client: until the file has run, those saves fail. Run it, check
@@ -100,7 +103,7 @@ it, then publish:
 `select table_name from information_schema.columns where table_schema = 'public' and column_name = 'source' and table_name in ('deals', 'clients');`
 must return two rows (`clients`, `deals`).
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0015_…`). Run each new file
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0018_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one. From `0013`, each file ends with a line that
 prints `Cortex 00NN applied`: if the SQL editor doesn't show that row, the file didn't finish (look for the error above
 it). To check that a file with a new table ran, `select to_regclass('public.<table>');` shows the table's name, or

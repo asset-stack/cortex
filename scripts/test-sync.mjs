@@ -206,6 +206,11 @@ const fixture = () => ({
     { id: 'ce-n1', dealId: 'd-1', clientId: '', kind: 'note', title: '', body: 'Call back Friday', url: '', label: '', happenedOn: '',
       attendees: '', user: U1, createdAt: '2026-10-19T01:00:00.000Z' },
   ],
+  // My list (0017): in its order (position, then when added).
+  myList: [
+    { id: 'ml-1', user: U1, text: 'Call the printer', done: false, position: 0, createdAt: '2026-10-21T01:00:00.000Z' },
+    { id: 'ml-2', user: U1, text: 'Ideas for the deck', done: true, position: 1, createdAt: '2026-10-21T02:00:00.000Z' },
+  ],
   // Calendar (0009): by day, then start (all-day first).
   calendarEvents: [
     { id: 'ce-1', kind: 'meeting', title: 'Planning', day: '2026-10-19', endDay: '', startsAt: '2026-10-18T23:00:00.000Z',
@@ -305,8 +310,9 @@ await check('assemble: order and state fields', () => {
   const back = assemble(flatten(s), { me: U1 });
   assert.deepEqual(Object.keys(back).sort(), ['approvals', 'boards', 'channels', 'clients', 'contacts', 'deals', 'emails', 'lastRead',
     'messages', 'org', 'sequences', 'users', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements',
-    'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'calendarEvents', 'crmEntries'].sort());
+    'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'calendarEvents', 'crmEntries', 'myList'].sort());
   assert.deepEqual(back.crmEntries, s.crmEntries, 'CRM entries newest first, every field back');
+  assert.deepEqual(back.myList, s.myList, 'My list in its order, every field back');
   assert.deepEqual(back.boards.map((b) => b.id), ['b-ana', 'b-ben', 'b-web', 'b-gen', 'b-post', 'b-events']);
   const web = back.boards.find((b) => b.id === 'b-web');
   assert.deepEqual(web.groups.map((g) => g.id), ['g-1', 'g-2', 'g-3']);
@@ -367,7 +373,7 @@ await check('flatten: boards, and the board on every group and task (0006)', () 
   const rows = flatten(s);
   assert.deepEqual(rows.boards.get('b-ana'), { id: 'b-ana', module: 'projects', name: '', owner_id: U1, position: 0, calendar: false });
   assert.deepEqual(rows.boards.get('b-gen'), { id: 'b-gen', module: 'projects', name: 'General', owner_id: null, position: 1, calendar: false });
-  // The 3-month calendar flag (0009) is a team board's: a personal page never sends one.
+  // The board calendar flag (0009) is a team board's: a personal page never sends one.
   assert.equal(rows.boards.get('b-post').calendar, true);
   assert.equal(flatten({ ...s, boards: [{ ...s.boards[0], calendar: true }] }).boards.get('b-ana').calendar, false);
   // Team boards are numbered within their module, in array order; a personal board is always 0.
@@ -1422,11 +1428,11 @@ await check('sync: loadAll pages every table and normalises rows', async () => {
 // the schema cache") loses that feature, not the workspace.
 const NOT_FOUND = { code: 'PGRST205', message: "Could not find the table 'public.crm_entries' in the schema cache" };
 await check('sync: a table whose migration hasn’t run (TABLES since) is left out — no rows, no realtime, no writes — and the rest loads', async () => {
-  assert.deepEqual(TABLES.filter((t) => t.since).map((t) => [t.name, t.since]), [['crm_entries', '0012_crm_profile.sql']]);
+  assert.deepEqual(TABLES.filter((t) => t.since).map((t) => [t.name, t.since]), [['crm_entries', '0012_crm_profile.sql'], ['my_list', '0017_my_list.sql']]);
   const { sb, sync } = setup({ deals: [{ id: 'd1', name: 'D', value: 0, position: 0 }] });
   sb.failures.push({ table: 'crm_entries', method: 'select', ...NOT_FOUND, sticky: true });
   assert.deepEqual(await sync.probe(), ['crm_entries']);
-  assert.deepEqual(sb.calls.map((c) => [c.table, c.columns, c.range]), [['crm_entries', 'id', [0, 0]]], 'one small select per since table');
+  assert.deepEqual(sb.calls.map((c) => [c.table, c.columns, c.range]), [['crm_entries', 'id', [0, 0]], ['my_list', 'id', [0, 0]]], 'one small select per since table');
   sync.subscribe(() => {});
   const tables = sb.channels.at(-1).handlers.map((h) => h.filter.table);
   assert.ok(!tables.includes('crm_entries') && tables.includes('deals') && tables.length === TABLES.length - 1, 'left out of realtime');
@@ -2556,6 +2562,59 @@ await check('§25/§26 Pipeline › Demos: one fixed board (Operations underneat
   }
 });
 
+await check('§27 My list: one clean line each (trimmed, one line, ≤ 500); a person’s own lines in order; the day’s meetings for the Dashboard', async () => {
+  const ml = await import('../src/lib/myList.js');
+  assert.deepEqual([ml.cleanListText('  Call   the\nprinter  '), ml.cleanListText(''), ml.cleanListText(null), ml.cleanListText('x'.repeat(600)).length], ['Call the printer', '', '', 500]);
+  const st = { me: 'ann', myList: [
+    { id: 'b', user: 'ann', text: 'Second', position: 1, createdAt: '2026-11-01T02:00:00Z' },
+    { id: 'z', user: 'stu', text: 'Stu’s', position: 0, createdAt: '2026-11-01T00:00:00Z' },
+    { id: 'a', user: 'ann', text: 'First', position: 0, createdAt: '2026-11-01T03:00:00Z' },
+    { id: 'c', user: 'ann', text: 'Same place, later', position: 1, createdAt: '2026-11-01T04:00:00Z' },
+  ] };
+  assert.deepEqual(ml.listOf(st).map((x) => x.id), ['a', 'b', 'c'], 'Ann’s only, by position then when added');
+  assert.deepEqual(ml.listOf(st, 'stu').map((x) => x.id), ['z']);
+  assert.deepEqual(ml.listOf({}), []);
+  // The day's meetings: Google meetings and the team's meetings, events and reminders on it (an all-day one over several
+  // days on each), never tasks, posts, invoices or contracts.
+  const cal = await import('../src/lib/calendar.js');
+  const e = (kind, date, endDate, time = '') => ({ kind, date, endDate, time, key: `${kind}:${date}:${time}` });
+  const entries = [e('google', '2026-11-15', '2026-11-15', '09:00'), e('event', '2026-11-14', '2026-11-16'), e('meeting', '2026-11-15', '2026-11-15', '14:00'),
+    e('reminder', '2026-11-16', '2026-11-16'), e('task', '2026-11-15', '2026-11-15'), e('post', '2026-11-15', '2026-11-15'), e('invoice', '2026-11-15', '2026-11-15')];
+  assert.deepEqual(cal.meetingsOn(entries, '2026-11-15').map((x) => x.kind), ['google', 'event', 'meeting']);
+  assert.deepEqual(cal.meetingsOn(entries, '2026-11-16').map((x) => x.kind), ['event', 'reminder']);
+  assert.deepEqual(cal.meetingsOn(null, '2026-11-15'), []);
+  // A Google meeting several teammates share (a calendar_meetings row each, same google_id) is one row with all of them.
+  // A Busy copy, a copy at another time (not synced since a move) and a row with no google_id each stay their own.
+  const gm = (id, user, gid, at, extra = {}) => ({ id, user_id: user, google_id: gid, title: 'Pipeline review', busy: false, all_day: false,
+    start_date: at.slice(0, 10), end_date: at.slice(0, 10), start_at: at, end_at: at.replace('T03', 'T04'), ...extra });
+  const shared = cal.meetingsOn(cal.collectEntries({ me: 'ann' }, { tz: 'UTC', meetings: [
+    gm('m1', 'ann', 'g1', '2026-11-15T03:00:00.000Z'), gm('m2', 'bob', 'g1', '2026-11-15T03:00:00.000Z'), gm('m3', 'cy', 'g1', '2026-11-15T03:00:00.000Z'),
+    gm('m4', 'dee', 'g1', '2026-11-15T03:00:00.000Z', { busy: true, title: '' }), gm('m5', 'eve', 'g1', '2026-11-15T03:30:00.000Z'),
+    gm('m6', 'fay', '', '2026-11-15T03:00:00.000Z'), gm('m7', 'gus', 'g2', '2026-11-16T03:00:00.000Z'),
+  ] }), '2026-11-15');
+  assert.deepEqual(shared.map((x) => [x.title, x.time, x.people]), [
+    ['Busy', '03:00', ['dee']], ['Pipeline review', '03:00', ['ann', 'bob', 'cy']], ['Pipeline review', '03:00', ['fay']], ['Pipeline review', '03:30', ['eve']],
+  ]);
+  const raw = cal.collectEntries({ me: 'ann' }, { tz: 'UTC', meetings: [gm('m1', 'ann', 'g1', '2026-11-15T03:00:00.000Z'), gm('m2', 'bob', 'g1', '2026-11-15T03:00:00.000Z')] });
+  cal.meetingsOn(raw, '2026-11-15');
+  assert.deepEqual(raw.map((x) => x.people), [['ann'], ['bob']], 'the entries passed in are not changed');
+  // Opening the Dashboard (or the Calendar) syncs Google when the last sync is over 10 minutes old and someone is connected.
+  const at = Date.parse('2026-11-15T03:00:00Z');
+  const status = (syncedAt, connected = true) => ({ syncedAt, people: [{ userId: 'ann', connected }] });
+  assert.deepEqual([
+    cal.syncDue(status(''), at), cal.syncDue(status('2026-11-15T02:55:00Z'), at), cal.syncDue(status('2026-11-15T02:50:00Z'), at),
+    cal.syncDue(status('2026-11-15T02:49:59Z'), at), cal.syncDue(status('not a date'), at), cal.syncDue(status('', false), at),
+    cal.syncDue({ syncedAt: '', people: [] }, at), cal.syncDue(null, at),
+  ], [true, false, false, true, true, false, false, false]);
+  if (createSeed) {
+    const s = createSeed();
+    assert.ok(ml.listOf(s, 'david').length >= 2 && ml.listOf(s, 'josh').length === 0, 'David has demo lines; nobody else');
+    const old = structuredClone(s);
+    delete old.myList;
+    assert.deepEqual(migrate(old).myList, [], 'older demo data gets an empty list');
+  }
+});
+
 const boardsSql = migrationFile('0006_');
 const outreachBoardsSql = migrationFile('0007_');
 const pipelineBoardsSql = migrationFile('0008_');
@@ -2679,7 +2738,8 @@ await check('automations: ensureTodosLocal adds the Monday bank reminder for adm
     source: 'automation', routineId: '', ref: 'bank:2026-10-12', done: false, doneAt: '',
   });
   assert.equal(auto.ensureTodosLocal(st, '2026-10-12', { me: 'al' }), 0);
-  assert.equal(auto.ensureTodosLocal(st, '2026-10-19', { me: 'al' }), 1, 'statement uploaded for that week: routine only');
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-19', { me: 'al' }), 2, 'statement uploaded for that week: the routine, and last week’s undone reminder moves on (0017)');
+  assert.deepEqual(st.todos.filter((t) => t.ref.startsWith('bank:')).map((t) => [t.ref, t.day]), [['bank:2026-10-12', '2026-10-19']], 'no reminder of its own for that week');
   assert.equal(auto.ensureTodosLocal(st, '2026-10-13', { me: 'al' }), 0, 'Mondays only');
   assert.ok(!st.todos.some((t) => t.assignee === 'stu'));
   auto.ensureTodosLocal(st, '2026-10-26');
@@ -2698,8 +2758,9 @@ await check('automations: "Approve invoices" for admins while any invoice awaits
   assert.equal(auto.ensureTodosLocal(st, '2026-10-13', { me: 'al' }), 0, 'once a day');
   auto.ensureTodosLocal(st, '2026-10-13', { me: 'stu' });
   assert.ok(!st.todos.some((t) => t.assignee === 'stu' && t.ref.startsWith('approve:')), 'staff never get it');
-  auto.ensureTodosLocal(st, '2026-10-14', { me: 'al' });
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-14', { me: 'al' }), 1, 'the undone reminder moves on (0017)');
   assert.ok(!st.todos.some((t) => t.ref === 'approve:2026-10-14'), 'an undone reminder carries over: no new one each day');
+  assert.deepEqual([approve[0].day, st.todos.filter((t) => t.ref.startsWith('approve:')).length], ['2026-10-14', 1], 'it is on the new day now (§27)');
   approve[0].done = true;
   auto.ensureTodosLocal(st, '2026-10-15', { me: 'al' });
   assert.equal(st.todos.filter((t) => t.ref === 'approve:2026-10-15').length, 1, 'once ticked, a new one while invoices still wait');
@@ -2707,6 +2768,36 @@ await check('automations: "Approve invoices" for admins while any invoice awaits
   st.todos.forEach((t) => { t.done = true; });
   auto.ensureTodosLocal(st, '2026-10-16', { me: 'al' });
   assert.ok(!st.todos.some((t) => t.ref === 'approve:2026-10-16'), 'nothing awaiting: no to-do');
+});
+
+await check('automations: reminders follow the day (0017, §27): an undone automation to-do from an earlier day moves on, one per ref', () => {
+  const st = workState();
+  const todo = (id, assignee, day, source, ref, done = false) => auto.makeTodo({ id, assignee, createdBy: assignee, title: id, day, source, ref, done });
+  st.todos = [
+    todo('approve', 'al', '2026-10-13', 'automation', 'approve:2026-10-13'),
+    todo('follow-old', 'al', '2026-10-12', 'automation', 'contact:x'),
+    todo('follow-new', 'al', '2026-10-13', 'automation', 'contact:x'),
+    todo('contract-done', 'al', '2026-10-12', 'automation', 'contract:c', true),
+    todo('there-already', 'al', '2026-10-12', 'automation', 'contact:z'),
+    todo('today-z', 'al', '2026-10-15', 'automation', 'contact:z'),
+    todo('manual', 'al', '2026-10-12', 'manual', ''),
+    { ...todo('routine', 'al', '2026-10-12', 'routine', ''), routineId: 'r-al' },
+    todo('stus', 'stu', '2026-10-12', 'automation', 'contact:s'),
+    todo('later', 'al', '2026-10-20', 'automation', 'contact:later'),
+    todo('today-manual', 'al', '2026-10-15', 'manual', ''),
+  ];
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-15', { me: 'al' }), 2, 'Thursday: no routine; two reminders moved');
+  const dayOf = Object.fromEntries(st.todos.map((t) => [t.id, t.day]));
+  assert.deepEqual(dayOf, {
+    approve: '2026-10-15', 'follow-old': '2026-10-12', 'follow-new': '2026-10-15', 'contract-done': '2026-10-12', 'there-already': '2026-10-12',
+    'today-z': '2026-10-15', manual: '2026-10-12', routine: '2026-10-12', stus: '2026-10-12', later: '2026-10-20', 'today-manual': '2026-10-15',
+  }, 'the newest undone one per ref moves; done, routine, manual, someone else’s, later ones, and ones whose ref is on the day already stay');
+  assert.deepEqual(st.todos.filter((t) => t.assignee === 'al' && t.day === '2026-10-15').map((t) => t.id), ['today-z', 'today-manual', 'approve', 'follow-new'],
+    'after the day’s own to-dos, oldest first (the order is their position)');
+  assert.deepEqual([st.todos.find((t) => t.id === 'approve').ref, st.todos.find((t) => t.id === 'follow-new').ref], ['approve:2026-10-13', 'contact:x'], 'refs kept');
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-15', { me: 'al' }), 0, 'again: nothing');
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-14', { me: 'al' }), 0, 'never back to an earlier day, and an older copy stays while a later one exists');
+  assert.equal(st.todos.find((t) => t.id === 'approve').day, '2026-10-15');
 });
 
 await check('automations: clientCreatedLocal gives an admin owner a "Prepare contract" to-do on their own day (0004)', () => {
@@ -4155,6 +4246,7 @@ if (createSeed) {
     const m = demoMeetings(today);
     assert.ok(m.some((x) => x.busy && x.title === '') && m.some((x) => x.all_day));
     assert.ok(m.some((x) => x.start_date < '2026-10-01'), 'last month, for the Archive');
+    assert.ok(m.some((x) => x.start_date === today && !x.all_day), 'one today, for the Dashboard’s meetings (§27)');
     assert.ok(m.every((x) => ['david', 'josh', 'hello'].includes(x.user_id) && x.end_date >= x.start_date));
   });
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarCheck, Clock, History, Plus } from 'lucide-react';
+import { CalendarCheck, Clock, Plus } from 'lucide-react';
 import { ensuredTodos, useStore, useUsers } from '@/data/store';
 import { KpiRow } from '@/components/ui';
 import Board from '@/components/board/Board';
@@ -9,6 +9,8 @@ import PersonSwitch from '@/components/work/PersonSwitch';
 import TodoList from '@/components/work/TodoList';
 import AddTodo from '@/components/work/AddTodo';
 import WaitingTasks from '@/components/work/WaitingTasks';
+import MyList from '@/components/work/MyList';
+import DayMeetings from '@/components/work/DayMeetings';
 import PersonTasks from '@/components/work/PersonTasks';
 import NeedsAttention from '@/components/work/NeedsAttention';
 import Mentions, { mentionsOf } from '@/components/work/Mentions';
@@ -33,9 +35,10 @@ const byStart = (todos) => todos
   .map(({ t }) => t);
 
 /**
- * The Dashboard (docs/PHASE2.md §18, §20, §22; was My Work): someone's master task list (Waiting on you, the day's to-dos,
- * My tasks: each board's own table with the tasks they own, §25) and their notes (their own page), with Needs
- * attention (admins), Mentions and Tools beside it. Admins look at anyone's.
+ * The Dashboard (docs/PHASE2.md §18, §20, §22, §27; was My Work): My list first (your own lines, only on your own
+ * Dashboard), then Waiting on you, the day's meetings (everyone's) and the day's to-dos; below, My tasks (each board's own
+ * table with the tasks they own, §25) and their notes (their own page), with Needs attention (admins), Mentions and Tools
+ * beside it. Admins look at anyone's.
  */
 export default function Dashboard() {
   const { state, actions } = useStore();
@@ -65,10 +68,6 @@ export default function Dashboard() {
 
   const mine = useMemo(() => state.todos.filter((t) => t.assignee === personId), [state.todos, personId]);
   const dayTodos = useMemo(() => byStart(mine.filter((t) => t.day === day)), [mine, day]);
-  const carried = useMemo(() => mine.filter((t) => !t.done && t.day < today)
-    .map((t, position) => ({ t, position }))
-    .sort((a, b) => (a.t.day < b.t.day ? -1 : a.t.day > b.t.day ? 1 : 0) || a.position - b.position)
-    .map(({ t }) => t), [mine, today]);
   const mentions = useMemo(() => mentionsOf(state, person), [state, person]);
   const rows = useMemo(() => prioritiesFor(state, personId, { today }), [state, personId, today]);
   const load = workload(rows);
@@ -76,6 +75,7 @@ export default function Dashboard() {
   const showNotes = notes && access.canViewBoard(notes);
 
   const title = offset === 0 ? 'Today' : offset === -1 ? 'Yesterday' : offset === 1 ? 'Tomorrow' : dayLabel(day);
+  const meetingsTitle = offset === 0 ? 'Today’s meetings' : offset === -1 ? 'Yesterday’s meetings' : offset === 1 ? 'Tomorrow’s meetings' : `Meetings, ${dayLabel(day)}`;
 
   return (
     <div>
@@ -109,10 +109,9 @@ export default function Dashboard() {
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex min-w-0 flex-col gap-6">
+          {self && <MyList />}
           {load.waiting > 0 && <WaitingTasks rows={rows.filter((r) => r.waiting)} personId={personId} act title={self ? 'Waiting on you' : `Waiting on ${person?.name}`} />}
-          {offset === 0 && carried.length > 0 && (
-            <TodoList title="Carried over" icon={History} todos={carried} showDay moveTo={{ day: today, label: 'today' }} />
-          )}
+          <DayMeetings day={day} title={meetingsTitle} />
           <TodoList title={title} icon={CalendarCheck} todos={dayTodos} empty="Nothing planned." rim>
             <AddTodo assignee={personId} day={day} />
           </TodoList>

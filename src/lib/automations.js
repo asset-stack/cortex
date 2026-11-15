@@ -124,7 +124,8 @@ const RUNS_KEPT_DAYS = 14;
 // a Monday the bank screenshot reminder until that week's statement is in, and "Approve invoices" while any invoice
 // awaits approval (0004). A routine runs once per person and day
 // (state.routineRuns, '<day>|<routine id>|<user id>', as the routine_runs table does in the database), so a to-do
-// deleted or moved to another day doesn't come back. → to-dos added.
+// deleted or moved to another day doesn't come back. Reminders follow the day (0017, docs/PHASE2.md §27): their undone
+// automation to-dos from earlier days move to `day`, after its to-dos. → to-dos added or moved.
 export function ensureTodosLocal(state, day = localYmd(), { me = state.me, uid: newId = uid } = {}) {
   const user = (state.users || []).find((u) => u.id === me);
   if (!isYmd(day) || !user || user.active === false) return 0;
@@ -159,7 +160,7 @@ export function ensureTodosLocal(state, day = localYmd(), { me = state.me, uid: 
     added++;
   }
 
-  // One undone reminder at a time: it carries over (My Work's carried-over list) instead of a new one each day.
+  // One undone reminder at a time: an undone one moves on to the day (below) instead of a new one each day.
   const approve = `approve:${day}`;
   if (adminRole(state, me) && (state.clients || []).some((c) => (c.invoices || []).some((i) => i.status === 'Awaiting approval'))
     && !hasAutomation(state, me, approve, day)
@@ -169,6 +170,27 @@ export function ensureTodosLocal(state, day = localYmd(), { me = state.me, uid: 
     }, newId));
     added++;
   }
+
+  // Reminders follow the day (0017): the Dashboard lists only the day's to-dos, so an undone automation to-do from an
+  // earlier day (Approve invoices, the bank screenshot, Prepare contract, a follow-up) moves to `day`, at the end of its
+  // list, oldest first, keeping its ref. One per ref (the newest: a contact can have follow-ups on several days, and a
+  // person has one to-do per ref and day), none when that ref already has a to-do on `day` or later. Routine and other
+  // to-dos stay put.
+  const ahead = new Set(state.todos.filter((t) => t.source === 'automation' && t.assignee === me && t.day >= day).map((t) => t.ref));
+  const newest = new Map(); // ref → { t, position }
+  state.todos.forEach((t, position) => {
+    if (t.source !== 'automation' || t.assignee !== me || t.done || !isYmd(t.day) || t.day >= day || ahead.has(t.ref)) return;
+    const was = newest.get(t.ref);
+    if (!was || t.day > was.t.day || (t.day === was.t.day && position > was.position)) newest.set(t.ref, { t, position });
+  });
+  [...newest.values()]
+    .sort((a, b) => cmp(a.t.day, b.t.day) || a.position - b.position)
+    .forEach(({ t }) => {
+      state.todos.splice(state.todos.indexOf(t), 1);
+      t.day = day;
+      state.todos.push(t);
+      added++;
+    });
   return added;
 }
 
