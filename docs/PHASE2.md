@@ -1404,3 +1404,14 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   `user_id` and `created_at`; a deactivated person gets nothing, not even their own lines; `ensure_todos` moving
   reminders: one per ref, after the day's to-dos, never back, again nothing, with its routine, bank and Approve invoices
   steps as 0004; `contact_pipeline`: the booking's own to-do beside a moved follow-up, nothing ticked reopened).
+
+## 28. Posting types: Features, Industry, Internal, Clients, Other (no migration)
+
+- **Why** (owner, 2026-11-15): the Posting schedule's **Type** options become Features, Industry, Internal, Clients and
+  Other (were Industry, Sponsorship, Projects, Staff internal).
+- **Where**: `BOARD_SCHEMAS.marketing`'s `type` label column (`src/data/boards.js`), so every Marketing board has the same
+  list. Colours: Features purple, Industry gold (as before), Internal pink (Staff internal's), Clients teal, Other grey.
+- **Existing posts**: types are words stored on each task (`values.type`). The one live post with a type is set to Clients
+  in the app (owner, after the release); an old word anywhere else shows as an uncoloured pill until someone picks a new
+  type. The demo seed uses only the new types.
+- **Tests**: `scripts/test-sync.mjs` §28 (the five options in order, each coloured; the seed uses only them).

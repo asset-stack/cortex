@@ -126,33 +126,33 @@ function boards(clientId = () => '', dealId = () => '') {
     board('marketing', 'Posting schedule', [
       group('October', '#bfe9ff', [
         item('LinkedIn weekly engagement', { people: ['hello'], status: 'Not started', priority: 'Medium', type: 'Industry', channel: 'LinkedIn', approval: '', due: '2026-10-31' }),
-        item('Golf Day promotion', { people: [], status: 'In progress', priority: 'High', type: 'Sponsorship', channel: 'LinkedIn', approval: '', due: '2026-10-12' }),
+        item('Golf Day promotion', { people: [], status: 'In progress', priority: 'High', type: 'Industry', channel: 'LinkedIn', approval: '', due: '2026-10-12' }),
         item('Team on site', { people: ['david'], status: 'Done', priority: 'Medium', type: 'Industry', channel: 'LinkedIn', approval: 'No', due: '2026-10-15' }),
         item('Golf Day content', { people: ['hello'], status: 'Done', priority: 'High', type: 'Industry', channel: 'Content', approval: '', due: '2026-10-16' }),
-        item('Bridge project spotlight', { people: ['david'], status: 'Not started', type: 'Projects', channel: 'Website', approval: '', due: '2026-10-20' }),
-        item('Monthly award', { people: ['josh'], status: 'Stuck', priority: 'Low', type: 'Staff internal', channel: 'LinkedIn', approval: 'No', due: '2026-10-28' }),
-        item('Sponsorship announcement', { people: ['david'], status: 'Not started', priority: 'High', type: 'Sponsorship', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-24' }),
+        item('Bridge project spotlight', { people: ['david'], status: 'Not started', type: 'Clients', channel: 'Website', approval: '', due: '2026-10-20' }),
+        item('Monthly award', { people: ['josh'], status: 'Stuck', priority: 'Low', type: 'Internal', channel: 'LinkedIn', approval: 'No', due: '2026-10-28' }),
+        item('Sponsorship announcement', { people: ['david'], status: 'Not started', priority: 'High', type: 'Industry', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-24' }),
       ]),
       group('November', '#ead9ff', [
-        item('LinkedIn weekly engagement', { people: [], status: 'Not started', priority: 'Medium', type: 'Projects', channel: 'LinkedIn', approval: '', due: '2026-11-30' }),
-        item('Westbay case study', { people: ['hello'], status: 'Not started', priority: 'High', type: 'Projects', channel: 'Website', approval: 'Pending', due: '2026-11-14' },
+        item('LinkedIn weekly engagement', { people: [], status: 'Not started', priority: 'Medium', type: 'Other', channel: 'LinkedIn', approval: '', due: '2026-11-30' }),
+        item('Westbay case study', { people: ['hello'], status: 'Not started', priority: 'High', type: 'Clients', channel: 'Website', approval: 'Pending', due: '2026-11-14' },
           { updates: [{ id: id('u'), user: 'david', text: '@Hello can you add the October usage numbers?', ts: hoursAgo(5) }] }),
         item('G2 + Google reviews', { people: ['david'], status: 'Not started', priority: 'Low', type: 'Industry', channel: 'Reviews', approval: '', due: '2026-11-21' }),
         item('Council landing page', {
-          people: ['hello'], status: 'Not started', priority: 'Medium', type: 'Projects', channel: 'Content', approval: '', due: '2026-11-25',
+          people: ['hello'], status: 'Not started', priority: 'Medium', type: 'Clients', channel: 'Content', approval: '', due: '2026-11-25',
           assignedBy: 'david', assignedAt: hoursAgo(4),
         }),
       ]),
     ]),
     board('marketing', 'Campaigns', [
       group('This quarter', '#ead9ff', [
-        item('Council digital twin campaign', { people: ['david'], status: 'Not started', priority: 'High', type: 'Projects', channel: 'LinkedIn', approval: 'Pending', due: '2026-11-28' }),
+        item('Council digital twin campaign', { people: ['david'], status: 'Not started', priority: 'High', type: 'Features', channel: 'LinkedIn', approval: 'Pending', due: '2026-11-28' }),
         item('Utilities email campaign', { people: ['josh'], status: 'Not started', priority: 'Medium', type: 'Industry', channel: 'Content', approval: '', due: '2026-12-05' }),
       ]),
     ]),
     board('marketing', 'Events', [
       group('Upcoming', '#ffe6b0', [
-        item('Golf Day', { people: ['hello'], status: 'Done', priority: 'High', type: 'Sponsorship', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-12' }),
+        item('Golf Day', { people: ['hello'], status: 'Done', priority: 'High', type: 'Industry', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-12' }),
         item('Local government conference stand', { people: ['david'], status: 'Not started', priority: 'Medium', type: 'Industry', channel: 'Website', approval: '', due: '2026-11-19' }),
       ]),
     ]),

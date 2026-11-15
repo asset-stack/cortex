@@ -2562,6 +2562,18 @@ await check('§25/§26 Pipeline › Demos: one fixed board (Operations underneat
   }
 });
 
+await check('§28 posting types: Features, Industry, Internal, Clients, Other (in that order, each coloured); the demo posts use only those', () => {
+  const type = SCHEMAS.marketing.columns.find((c) => c.key === 'type');
+  assert.deepEqual(Object.keys(type.options), ['Features', 'Industry', 'Internal', 'Clients', 'Other']);
+  assert.ok(Object.values(type.options).every((c) => /^#[0-9a-f]{6}$/i.test(c)), 'each has a colour');
+  if (createSeed) {
+    const used = createSeed().boards.filter((b) => b.module === 'marketing')
+      .flatMap((b) => b.groups.flatMap((g) => g.items.map((it) => it.values.type))).filter(Boolean);
+    assert.ok(used.length > 0 && used.every((t) => t in type.options), `seed types: ${[...new Set(used)].join(', ')}`);
+    assert.deepEqual([...new Set(used)].sort(), ['Clients', 'Features', 'Industry', 'Internal', 'Other'], 'every type shows in the demo');
+  }
+});
+
 await check('§27 My list: one clean line each (trimmed, one line, ≤ 500); a person’s own lines in order; the day’s meetings for the Dashboard', async () => {
   const ml = await import('../src/lib/myList.js');
   assert.deepEqual([ml.cleanListText('  Call   the\nprinter  '), ml.cleanListText(''), ml.cleanListText(null), ml.cleanListText('x'.repeat(600)).length], ['Call the printer', '', '', 500]);

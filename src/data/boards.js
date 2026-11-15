@@ -55,7 +55,7 @@ export const BOARD_SCHEMAS = {
       PRIORITY_COLUMN,
       {
         key: 'type', label: 'Type', type: 'label',
-        options: { Industry: '#d9a800', Sponsorship: '#21b8b0', Projects: '#7d8fa3', 'Staff internal': '#ff5ac4' },
+        options: { Features: '#784bd1', Industry: '#d9a800', Internal: '#ff5ac4', Clients: '#21b8b0', Other: '#7d8fa3' }, // §28
       },
       {
         key: 'channel', label: 'Channel', type: 'label',
