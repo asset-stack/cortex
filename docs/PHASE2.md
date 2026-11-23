@@ -86,7 +86,7 @@ boards: [{ id, module, name, owner, groups }],          // 0006 (§11); was { pr
 //   item.values.startedAt: iso      when its status first left Not started (§24; only nextValues() sets it)
 todos: [{ id, assignee, createdBy, title, notes, day /* 'YYYY-MM-DD' */, start /* 'HH:MM'|'' */,
           minutes, category, source /* 'manual'|'routine'|'automation' */, routineId /* ''|id */,
-          ref /* e.g. 'contact:<id>' | 'deal:<id>' | 'item:<id>' | 'bank:<YYYY-MM-DD>' | '' */,
+          ref /* e.g. 'contact:<id>' | 'meeting:<id>' (0017) | 'deal:<id>' | 'item:<id>' | 'bank:<YYYY-MM-DD>' | 'approve:<YYYY-MM-DD>' | '' */,
           done, doneAt /* iso | '' */ }],
 routines: [{ id, title, category, minutes, assignee, weekdays /* [1..7], 1 = Monday */, start, active }],
 routineRuns: ['<day>|<routineId>|<userId>'],            // demo only: ensureTodosLocal's run log (live: routine_runs)
@@ -109,10 +109,10 @@ mailboxes:      [{ id, name, addresses /* [lower-case address] */, owner /* user
 outreachNotes:  [{ id, mailbox /* '' = all mailboxes */, pinned, body, author, createdAt }],         // newest first
 outreachSheet:  '<the sheet link>',                     // undefined in live mode without Outreach access
 outreachEmails: [{ id, mailbox, sender, sentOn, … }],   // demo only (emailFromRow() shape, §12)
-// 0012 (§19): a deal's or client's CRM profile. Newest first. 0018 (§28): or an account's or a contact's.
+// 0012 (§19): a deal's or client's CRM profile. Newest first. 0019 (§31): or an account's or a contact's.
 crmEntries:     [{ id, dealId, clientId, accountId, contactId, kind /* 'note'|'meeting'|'link' */, title, body, url, label,
                    happenedOn, attendees, user, createdAt }],
-// 0018 (§28): the CRM. Accounts in order, then the people at them.
+// 0019 (§31): the CRM. Accounts in order, then the people at them.
 accounts:       [{ id, name, kind /* 'prospect'|'customer'|'partner'|'supplier' */, lifecycle /* LIFECYCLES */,
                    lifecycleNote, revisitOn, sector, country, region, timezone, domain, website, size, guardrails, prepUrl,
                    referredBy /* '' | account id */, owner, clientId /* '' | the customer's client */, createdAt }],
@@ -120,13 +120,15 @@ crmContacts:    [{ id, accountId, name, title, email, phone, linkedin, timezone,
                    status /* 'active'|'left'|'do_not_contact' */, owner, createdAt }],
 //   deal: { ..., accountId, contactIds: [crm contact id], currency, closeOn, probability /* null = the stage's */,
 //           waitingOn /* ''|'us'|'them' */, lostReason, stageAt /* iso: when it reached its stage */ }
-// 0019 (§28): each deal's stage history, oldest first. Written only by the database (read only in the app).
+// 0020 (§31): each deal's stage history, oldest first. Written only by the database (read only in the app).
 dealHistory:    [{ id, dealId, from /* '' when added */, to /* a stage, or 'Won' */, at, by }],
-// 0020 (§29): Leads. Lists in order; leads in the order they were added; suppressions by kind, then value.
+// 0021 (§32): Leads. Lists in order; leads in the order they were added; suppressions by kind, then value.
 leadLists:      [{ id, name, source /* 'csv'|'apollo'|'manual' */, notes, createdBy, createdAt }],
 leads:          [{ id, listId, name, title, email, phone, linkedin, company, domain, sector, country, region, timezone, size,
                    status /* LEAD_STATUSES */, accountId, personId /* the CRM record it became or is */, owner, note, createdAt }],
 suppressions:   [{ id, kind /* 'email'|'domain' */, value, reason, createdBy, createdAt }],
+// 0017 (§27): each person's My list, at the top of their Dashboard. Private: live mode holds only your own lines (RLS).
+myList:         [{ id, user, text, done, position, createdAt }],   // by position, then createdAt
 ```
 Empty strings, never `null`, for absent text/ids/dates in state (as phase 1). Money and counts are numbers.
 Lists that live views read newest-first are stored with the same position convention as phase 1.
@@ -175,7 +177,7 @@ Additive and safe to run once on the live database (which may already hold rows)
   `subscriptions (name, vendor, category text, amount numeric, cycle check in ('monthly','annually'), renews_on date null, active bool, notes text, position int)`; **admins only**.
   `time_entries (user_id → profiles cascade, day date, start_time time, minutes int, category text, note text, source text check in ('manual','suggested'), position int)`; all ops own rows; admins select all.
 - RPCs (security definer, `set search_path = public`, granted to `authenticated`):
-  - `ensure_todos(p_day date) returns int`: for the caller's active routines whose `weekdays` contain `isodow(p_day)` and that haven't run for the caller that day (`routine_runs`, so a deleted or moved to-do doesn't come back), record the run and insert a `routine` to-do (title/category/minutes/start from the routine) `on conflict do nothing`. If the caller is an admin, `p_day` is a Monday and no `bank_statements.week_start = p_day` exists, insert automation to-do *Upload this week's bank screenshot* (`ref 'bank:<p_day>'`, category `Admin`). Returns rows inserted.
+  - `ensure_todos(p_day date) returns int`: for the caller's active routines whose `weekdays` contain `isodow(p_day)` and that haven't run for the caller that day (`routine_runs`, so a deleted or moved to-do doesn't come back), record the run and insert a `routine` to-do (title/category/minutes/start from the routine) `on conflict do nothing`. If the caller is an admin, `p_day` is a Monday and no `bank_statements.week_start = p_day` exists, insert automation to-do *Upload this week's bank screenshot* (`ref 'bank:<p_day>'`, category `Admin`). Returns rows inserted (since 0017 also moved: undone automation to-dos from earlier days move to `p_day`, §27).
   - `generate_due_invoices() returns int` (admins only, raises otherwise): locks `invoices`; for each active plan with `next_date <= team_today()` and no more than two years behind (further back is a mistyped date, left alone), repeatedly create an invoice (status `Awaiting approval`, number = org prefix + next number for that prefix, min 1001, one line `description`, qty `'1'`, rate = amount as text, `plan_id`) for each period not already in `billed_periods`, and advance `next_date` by 1/3/12 months on the plan's billing day (`anchor_day`, else `next_date`'s; the month's last day when shorter) until it is in the future.
   - `team_today()`: the team's calendar day for the automations; sessions run in UTC. `Australia/Perth` in 0002,
     `Australia/Sydney` since 0003 (§8).
@@ -233,7 +235,7 @@ The round-trip property must hold for every table. Rows the user can't read simp
   and Marketing, and since 0007 Outreach and Clients (after their own page, §13), list their boards as sub-menus
   (§11).
 - **My Work** (`src/pages/MyWork.jsx` + `src/components/work/*`): day navigator (‹ Today ›); admins get a person
-  picker (default me). Sections: *Carried over* (undone to-dos before today), *Today* (to-dos sorted by start time
+  picker (default me). Sections: *Carried over* (undone to-dos before today; gone from the Dashboard since §27), *Today* (to-dos sorted by start time
   then position: checkbox, title, category pill, minutes, source icon for routine/automation, delete), inline add
   (title, category, minutes, optional time; admins can add for the selected person), *On boards* (items on any board
   you can see whose `people` include the person and aren't done; *Priorities* since §17), *Mentions* (existing).
@@ -319,7 +321,7 @@ app version that uses it.
   The old columns stay, blank and no longer synced. New columns: `clients.platform_url`, `client_usage.credits`,
   `invoices.sent_to`, `org_settings.contract_template / contract_folder` (Drive links).
 - **Automations**: `ensure_todos` adds **Approve invoices** (admins, ref `approve:<day>`, category Clients) while any
-  invoice is *Awaiting approval* (one undone reminder per admin at a time: an undone one carries over), and admins' first My Work load each day raises due invoices first
+  invoice is *Awaiting approval* (one undone reminder per admin at a time: an undone one carries over; since §27 it moves on to the day), and admins' first My Work load each day raises due invoices first
   (`generate_due_invoices`), so recurring billing needs no cron. Trigger `client_contract_todo` (after insert on
   `clients`): a new **Onboarding** client gives its owner if they're an admin, else the admin who added it,
   **Prepare contract: <name>** on their own day (ref `contract:<id>`). Approving the last waiting invoice ticks the
@@ -756,7 +758,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   events added on the Calendar, and invoice due and contract dates for people with Clients access; not My Work to-dos.
   Teammates see Google meetings' titles and times; Private or Confidential ones show as **Busy**; declined and
   cancelled ones are left out. The 3-month calendar is a board switch (on for Posting schedule to start; admins switch it
-  on or off for any team board with dates), so a rename keeps it. Calendar sits between My Work and Projects.
+  on or off for any team board with dates), so a rename keeps it. Since §27 it shows only the current month. Calendar sits between My Work and Projects.
 - **No module key**: the Calendar only gathers what each source already lets the viewer see, with that source's rule
   (`collectEntries()` in `src/lib/calendar.js`, which demo mode needs as its state holds everyone's data; RLS does it in
   live mode): board tasks on boards they can see (`canViewBoard`; tasks on a board with its calendar on are *posts*),
@@ -800,7 +802,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   earliest dated thing, newest first; their meetings load when it opens). A task opens in its drawer (read only unless
   the viewer can edit its board), an event in its form, a meeting in a short summary, an invoice or contract on Clients.
   Opening the page syncs Google when the last sync is over 10 minutes old. Boards with `calendar` on show
-  `BoardCalendar` above their tasks: this month and the next two (`MonthGrid`, which the board's Calendar view also
+  `BoardCalendar` above their tasks: this month and the next two (this month only since §27) (`MonthGrid`, which the board's Calendar view also
   uses), following the board's search and filters. Board options: **Show calendar** / **Hide calendar** (admins).
 - **Tests**: `scripts/test-db.mjs` phase 9 (0009 re-runs, the board switch once, who adds, edits and deletes events,
   meetings read only, the claim and save rules, forgetting, function privileges); `scripts/test-sync.mjs` (the
@@ -993,7 +995,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   edit (`canViewBoard` / `canEditBoard` for them); without it, to staff every other staff member looked like the staff
   defaults. Levels aren't secret; only the SuperAdmin still changes them. `scripts/test-db.mjs` phase 11.
 - **Dashboard** (`#/dashboard`, `src/pages/Dashboard.jsx`; `#/work` redirects there): **Waiting on you** (tasks handed to
-  you, not yet accepted: *From David · 2h*, **Accept**), **Today** (the day's to-dos, carried-over ones above), **My
+  you, not yet accepted: *From David · 2h*, **Accept**), **Today** (the day's to-dos, carried-over ones above; §27: no carried-over list), **My
   tasks** (`src/components/work/MyTasks.jsx`: every open task you're on, Urgent first, with its breadcrumb, status, due
   and **Do today**; the team-rule note), and **My notes** (your own page, embedded: `Board embedded title`). Beside them:
   Needs attention (admins), Mentions (counted in its heading), Tools. KPIs: Waiting on you, Urgent, Overdue, To-dos
@@ -1206,7 +1208,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   controls: order, groups and adding stay on the board); `rowAction(item)` fills the last cell (**Today**, i.e. Do
   today, for the person themself or an admin).
 - **Dashboard**: Waiting on you (`src/components/work/WaitingTasks.jsx`, with Accept), Carried over and Today stay
-  beside Needs attention, Mentions and Tools; **My tasks** (the same `PersonTasks`) and My notes go full width below.
+  beside Needs attention, Mentions and Tools (§27: My list first, then Waiting on you, the day's meetings and Today;
+  Carried over gone); **My tasks** (the same `PersonTasks`) and My notes go full width below.
   My tasks' Move up/down and drag went with the compact list (`stepPlace()` removed); order is set on the board.
 - **Deal next steps on Operations**: Operations' team boards have a **Deal** column (`values.deal`, after Department,
   `sparse`: a table shows it only once a task on the board has one; the drawer always does). A deal's **Add next step**
@@ -1350,7 +1353,92 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   gone, the move with updates and subtasks, same_audience back on; no row after; Operations' access; cross-module moves
   refused again).
 
-## 27. 0017: task emails — the owner hears when a task is handed to them or updated
+
+## 27. 0017: My list at the top of the Dashboard; the day's meetings; no Carried over; a board's calendar shows this month
+
+- **Why** (owner, 2026-11-15): the Dashboard should open with a plain list the person types into, not linked to anything,
+  then Waiting on you, then the day's meetings; Carried over goes. The Posting schedule's calendar should show only the
+  current month.
+- **Owner's choices**: My list is a new personal list (its own lines: add, tick, edit, delete; kept until deleted, not tied
+  to a day; private). The meetings are everyone's. Today's to-dos, My tasks and My notes stay below; Needs attention,
+  Mentions and Tools stay in the side column.
+- **My list** (`src/components/work/MyList.jsx`, rules in `src/lib/myList.js`): a card titled My list with the number of
+  lines not done. A line has a checkbox (done lines are struck through and stay until deleted), its text (click to change
+  it; Enter or leaving saves, Escape cancels, saving it empty deletes it) and Delete. **Add a line** at the bottom: Enter
+  adds it at the end and keeps the box ready for the next. After a delete, focus goes to the next line (else the one
+  before, else the add box). Text is one line, spaces collapsed, at most 500 characters (`cleanListText()`). Only on your
+  own Dashboard (an admin looking at someone else's sees none).
+- **State and table** (0017): `myList: [{ id, user, text, done, position, createdAt }]` ⇄ `public.my_list` (`id`,
+  `user_id → profiles on delete cascade`, default `auth.uid()`; `text` ≤ 500; `done`; `position`; `created_at`). Synced,
+  with `since: '0017_my_list.sql'`: until 0017 runs Cortex opens, My list is hidden and admins see which file to run.
+- **Private, enforced twice**: RLS lets a person select, insert, update and delete only rows where `user_id = auth.uid()`
+  (and `is_staff()`): admins and the SuperAdmin see only their own too. `protect_my_list` keeps `user_id` and
+  `created_at` on update. The store's `addListItem(text)` / `updateListItem(id, { text?, done? })` /
+  `removeListItem(id)` act only on `state.me`'s lines, refuse empty text and do nothing until 0017 has run.
+- **The day's meetings** (`src/components/work/DayMeetings.jsx`): for the Dashboard's day (Today's meetings, Yesterday's,
+  Tomorrow's, or the date), everyone's Google meetings (read on demand, as the Calendar page does) and the team's
+  meetings, events and reminders (`calendar_events`), from `collectEntries()` filtered by `meetingsOn()`: all-day first,
+  then by time; a Private or Confidential Google meeting stays Busy. A Google meeting several teammates share (a
+  `calendar_meetings` row each, same `google_id`, now read with the meetings) is one row with all of them; Busy copies
+  are never merged (nobody sees who shares a Private meeting), and a copy at another time stays apart. Each row: colour, time (or All day), title, who's on it. The title links to the
+  Calendar. Empty: No meetings. Opening the Dashboard syncs Google when the last sync is over 10 minutes old and someone
+  is connected, as opening the Calendar does (`syncDue()`, `SYNC_STALE`), then reads the day again (live mode). A sync
+  already running in the tab is shared (`liveCalendar().sync`) and waited for (`pending()`): the Dashboard or the
+  Calendar opened during it reads again after it, whatever the status says (it looks fresh once its first person is
+  saved).
+- **Dashboard order** (left column): My list, Waiting on you (when there is any), the day's meetings, Today (to-dos and
+  Add). Carried over is gone (undone to-dos from earlier days are no longer listed on the Dashboard; the day navigator
+  still shows them on their day), and with it `TodoList`'s move button and day column. The KPIs, side column, My tasks
+  and My notes are unchanged.
+- **Reminders follow the day** (0017 redefines `ensure_todos`, as 0004 plus one step; `ensureTodosLocal` in the demo):
+  "Approve invoices" is made only while no undone one exists, and counted on Carried over to stay in sight, so without
+  it the reminder would vanish after its first day and never come back. Now, when the day's to-dos are made, an undone
+  automation to-do from an earlier day (Approve invoices, the bank screenshot, Prepare contract, a follow-up) moves to
+  that day, after its to-dos, oldest first, keeping its ref. One per ref (the newest: a contact can have follow-ups on
+  several days, and a person has one to-do per ref and day), none when that ref already has a to-do on that day or
+  later, never back to an earlier day. Routine (made again each day), manual and Do today to-dos stay on their day.
+  `ensure_todos` returns the rows added or moved. A bank screenshot reminder moved on from an earlier week shows that
+  week after its title ("week of 9 Nov", `bankWeekOf()`), so it isn't taken for this week's.
+- **A booking gets its own to-do** (0017 redefines `contact_pipeline`, as 0008 but for the ref; `contactPipelineLocal`):
+  a person has one automation to-do per ref and day, so a follow-up already on the day (moved on to it, or made and
+  ticked earlier that day) used to stop "Prepare: meeting with …". Now the follow-up keeps `contact:<id>` and the
+  booking's to-do is `meeting:<id>`. An existing to-do is never changed or reopened, whichever way the status goes.
+- **A board's calendar** (`BoardCalendar.jsx`, `boards.calendar`, §15): one full-width month, the current one, titled
+  with its name; the count is that month's posts. The months around are on the team Calendar. `MonthGrid` lost its
+  compact mode.
+- **Release**: run 0017 **before** publishing, and publish straight after its check. The app live now copes with it (it
+  syncs only the tables it knows, and the moved reminders show in its Today; in the minutes before the release, an older
+  week's bank reminder there has no week label), while the new app without it would keep 0004's `ensure_todos`, so an
+  unticked "Approve invoices" would stay out of sight on its first day. `my_list` still has `since`, so the new app opens
+  either way. Check: `select to_regclass('public.my_list');` gives `my_list`.
+- **Tests**: `scripts/test-sync.mjs` (the `my_list` mapping and `since`, `cleanListText()`, `listOf()`, `meetingsOn()` with
+  shared and Busy meetings, `syncDue()`, reminders following the day in `ensureTodosLocal()`, `bankWeekOf()`,
+  `contactPipelineLocal()` after a move, the seed and `migrate()`);
+  `scripts/test-db.mjs` checks 121–124 (0017 whole, again and statement by statement, its done row, RLS, four policies,
+  realtime; own lines only for staff, admins and the SuperAdmin; no inserting for someone else; `protect_my_list` keeps
+  `user_id` and `created_at`; a deactivated person gets nothing, not even their own lines; `ensure_todos` moving
+  reminders: one per ref, after the day's to-dos, never back, again nothing, with its routine, bank and Approve invoices
+  steps as 0004; `contact_pipeline`: the booking's own to-do beside a moved follow-up, nothing ticked reopened).
+
+## 28. Posting types: Features, Industry, Internal, Clients, Other (no migration)
+
+- **Why** (owner, 2026-11-15): the Posting schedule's **Type** options become Features, Industry, Internal, Clients and
+  Other (were Industry, Sponsorship, Projects, Staff internal).
+- **Where**: `BOARD_SCHEMAS.marketing`'s `type` label column (`src/data/boards.js`), so every Marketing board has the same
+  list. Colours: Features purple, Industry gold (as before), Internal pink (Staff internal's), Clients teal, Other grey.
+- **Existing posts**: types are words stored on each task (`values.type`). The one live post with a type is set to Clients
+  in the app (owner, after the release); an old word anywhere else shows as an uncoloured pill until someone picks a new
+  type. The demo seed uses only the new types.
+- **Tests**: `scripts/test-sync.mjs` §28 (the five options in order, each coloured; the seed uses only them).
+
+## 29. Operations is called Projects again (no migration)
+
+- **Why** (owner, 2026-11-15): the module shown as Operations since §18 is called **Projects**.
+- **What**: `MODULE_LABELS.projects` (`src/lib/boards.js`) and `BOARD_SCHEMAS.projects.title` (`src/data/boards.js`) say
+  Projects, so the sidebar, breadcrumbs (`whereOf()`), the Department options and filters and Settings → Team do. The key
+  (`projects`), Department values and access rows never changed, so no data moves. Sections §18–§28 say Operations.
+
+## 30. 0018: task emails — the owner hears when a task is handed to them or updated
 
 - **Owner's ask**: a task's owner gets an email when they are assigned a task or an update is made on it.
 - **Decisions** (made in the build, the owner can change them): "an update" is a post in the task's **Updates** (not
@@ -1359,7 +1447,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   from **one admin's Google account** (their existing Gmail and Drive connection, Settings → Business: no new Google
   permission, vendor or key), named *Cortex*; it isn't each actor's own Gmail, since staff can't use Google for anything
   but their calendar.
-- **Database** (`0017_task_emails.sql`): `private.task_mail` (the queue: kind `assigned | update`, task, update,
+- **Database** (`0018_task_emails.sql`): `private.task_mail` (the queue: kind `assigned | update`, task, update,
   recipient, actor, claimed / sent / attempts / error) and `private.task_mail_settings` (the sender, the last send and
   error), neither readable from the app. Triggers queue in the save's transaction: `queue_task_assigned` (after insert or
   update of `values` / `done` on `items`: a new owner who isn't `auth.uid()`; never a done task, Work in Progress or a
@@ -1378,7 +1466,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **App**: `mailsOwner()` (`src/lib/work.js`) says when a save may have queued one (`addItem`, `updateItem`, `addUpdate`);
   live mode then asks `task-mail` once the save has landed (1.5 s after the last such save, after a flush), on opening
   Cortex and every 5 minutes while the tab is visible. Demo mode sends nothing. **Settings** → **Business** → **Task
-  emails** (admins): *Sent from …* / *Off* / *needs to reconnect Google* / *Run 0017_task_emails.sql …*, **Send from my
+  emails** (admins): *Sent from …* / *Off* / *needs to reconnect Google* / *Run 0018_task_emails.sql …*, **Send from my
   Google**, **Stop**, and the last failure. No synced state changes, so the release doesn't need the migration to open.
 - **Tests**: `scripts/test-db.mjs` phase 13 (re-runs and the done row; what queues and what doesn't, sync upserts;
   privileges; the sender rule; the claim's grouping, drops and retries; access checked as the recipient; stop);
@@ -1387,11 +1475,11 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Later, not built**: a per-person switch to opt out, a daily digest instead of each change, emails for other edits
   (status, due date) or to Also on, sending with nobody's Cortex open (`pg_cron` + `pg_net` calling the function).
 
-## 28. 0018: the CRM — accounts, contacts, and more on each opportunity
+## 31. 0019: the CRM — accounts, contacts, and more on each opportunity
 
 - **Owner's ask**: turn the Pipeline into a full HubSpot-style CRM with accounts, contacts, opportunities and stages,
   designed for the business (a small team selling a high-value platform to councils, housing, utilities, rail, mining
-  and renewables in six countries, with an outreach agent doing cold email). Then a Leads page (later, §29).
+  and renewables in six countries, with an outreach agent doing cold email). Then a Leads page (later, §32).
 - **Owner's decisions** (the brainstorm's recommendations, accepted): HubSpot's core objects, not all of HubSpot.
   **Accounts** (one per organisation; kind Prospect, Customer, Partner or Supplier; sector, country, region, time zone,
   domain, website, size; **guardrails**, what not to say; a **prep pack** link; who **referred** it; an owner). A
@@ -1405,7 +1493,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   probability (each stage's default: 10, 15, 25, 50, 70 %), **waiting on** us or them, **days in stage** (stalled from
   14). **One timeline** on accounts, contacts and deals. Clients stay as they are, linked to their account
   (`accounts.client_id`), not merged.
-- **Database** (`0018_crm_accounts.sql`): `accounts` and `crm_contacts` (synced, realtime; Pipeline's access level:
+- **Database** (`0019_crm_accounts.sql`): `accounts` and `crm_contacts` (synced, realtime; Pipeline's access level:
   `can_view` / `can_edit('pipeline')`; deleting an account deletes its contacts and leaves its deals without one); deals
   get `account_id`, `contact_ids uuid[]`, `currency`, `close_on`, `probability` (null = the stage's), `waiting_on`,
   `lost_reason` and `stage_at` (the database's: the `deal_stage_at` trigger stamps it when the stage changes and keeps it
@@ -1417,8 +1505,8 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   meetings). Existing data, once per row: every client a customer
   account; every deal its account (its client's, else the one with its name, else a new one); a deal from an outreach
   contact that person.
-- **Release**: the app copes without 0018 (Accounts and Contacts hidden, the new deal columns left out of writes:
-  `later` in `TABLES` and `withoutLater()` in the sync engine; admins see the *Database update needed* notice), and 0018
+- **Release**: the app copes without 0019 (Accounts and Contacts hidden, the new deal columns left out of writes:
+  `later` in `TABLES` and `withoutLater()` in the sync engine; admins see the *Database update needed* notice), and 0019
   copes with the app now live (it renames nothing; a deal's Lead (0013) keeps working beside it).
 - **App**: **Pipeline** has three sections. **Opportunities**: the numbers (open deals, the pipeline and its weighted
   value per currency, made clients), search, owner, **All open / Waiting on us / Stalled 14d+ / Lost**, a board by stage
@@ -1439,13 +1527,13 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   `src/lib/format.js` (`compactIn()`, `totalsIn()`).
 - **Demo seed**: accounts for every deal and client, people with roles and time zones at Shire of Southcliff, Northside
   Diocese and Kingsford Housing Trust, a partner (Example Partners Ltd) who referred Kingsford (in GBP), an NZ council in
-  NZD, guardrails, a nurture account with a Lost deal, a suppressed one, stalled deals; `migrate()` does 0018's steps once
+  NZD, guardrails, a nurture account with a Lost deal, a suppressed one, stalled deals; `migrate()` does 0019's steps once
   (`crmBackfillLocal()`).
 - **Tests**: `scripts/test-db.mjs` phase 14 (re-runs and the done row; the backfill; Pipeline access; the checks and
   `stage_at`; entries on accounts and contacts; the outreach automation); `scripts/test-sync.mjs` (the mapping and the
   held-back columns, stages, probability and days, `cleanDealPatch()`, accounts and contacts, lifecycle, the account
   timeline, the backfill, imports, money per currency, the seed).
-- **Stage history (0019, `0019_deal_history.sql`)**: `deal_stage_history` (a row when a deal is added, from ''; each
+- **Stage history (0020, `0020_deal_history.sql`)**: `deal_stage_history` (a row when a deal is added, from ''; each
   stage move; Make client, to 'Won'; with when and who), written only by the `log_deal_stage` trigger (security definer)
   and read with Pipeline view; synced read only (`readOnly` in `TABLES`: the sync engine never sends it a write;
   `logStageLocal()` in demo mode). Existing deals get one starting row. A deal's and an account's timeline show its stage
@@ -1471,10 +1559,10 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - **Later, not built**: email history on the timeline (a summary of each sales email), stage exit checklists,
   merging the Outreach contact list into Contacts, saved views, and bulk edits.
 
-## 29. 0020: Leads — prospect lists, the suppress list, contact history and Convert to CRM
+## 32. 0021: Leads — prospect lists, the suppress list, contact history and Convert to CRM
 
-- **Owner's ask** (with §28): a Leads page to pull lead lists and see each lead's contact history.
-- **Database** (`0020_leads.sql`): `lead_lists` (name, source CSV / Apollo / by hand, notes, who added it), `leads` (a
+- **Owner's ask** (with §31): a Leads page to pull lead lists and see each lead's contact history.
+- **Database** (`0021_leads.sql`): `lead_lists` (name, source CSV / Apollo / by hand, notes, who added it), `leads` (a
   prospect each: name, title, email, phone, LinkedIn, company and domain, sector, country, region, time zone, size; a
   status New → Sent to agent → Contacted → Replied / Meeting booked / Not interested / Bounced, or In CRM; the CRM
   account and contact it became, set null if they go; an owner; a note; deleting a list deletes its leads; ordered by
@@ -1482,7 +1570,7 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
   with why). All synced and on **Outreach's** access level (`can_view` / `can_edit('outreach')`, as the agent's emails are);
   `protect_created()` keeps who added a list or suppression. The app copes without it (`since` in `TABLES`: Leads is
   hidden from the menu and its actions refuse; admins see the notice).
-- **Rules** (`src/lib/leads.js`): `cleanLead()` / `cleanLeadList()` / `cleanSuppression()` (0020's limits; a lead's
+- **Rules** (`src/lib/leads.js`): `cleanLead()` / `cleanLeadList()` / `cleanSuppression()` (0021's limits; a lead's
   domain is its own, else its email's, never a personal mailbox's: `FREE_MAIL`). `suppressedBy()`: on the suppress list
   (email or domain), or an account it could be is Suppressed, or the person is Do not contact in the CRM. `crmMatch()`:
   the account and contact it became, else the contact with its email (and their account), else the account with its

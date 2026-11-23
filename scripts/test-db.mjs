@@ -17,7 +17,7 @@
 // AssetStack direct: its values, and who reads and sets it); then 0014_deal_demo_rows.sql (a deal entering Demos or Proposal sent
 // gets one row on Clients › Demos, added by the database whoever moves it, never twice); then 0015_deal_tasks_board.sql (the
 // Deal tasks board, with Operations' access); then 0016_pipeline_demos.sql (no automatic Demos row; the board called Demos,
-// with Clients › Demos' groups and tasks). Last, the sync engine's writes of every
+// with Clients › Demos' groups and tasks); then 0017_my_list.sql (each person's own list, private). Last, the sync engine's writes of every
 // synced table (flatten() rows as PostgREST upserts), personal pages, Outreach and calendar events included.
 // Usage: node scripts/test-db.mjs (exits non-zero on any failure).
 import { readFile } from 'node:fs/promises';
@@ -26,7 +26,7 @@ import { register } from 'node:module';
 import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { TABLES, flatten, normalizeRow } from '../src/data/backend/schema.js';
-// A row as the sync engine sends it before a later migration's columns exist (TABLES `later`, e.g. deals before 0018).
+// A row as the sync engine sends it before a later migration's columns exist (TABLES `later`, e.g. deals before 0019).
 const heldBack = (table, row) => {
   const cols = new Set((TABLES.find((t) => t.name === table)?.later || []).flatMap((l) => l.columns));
   return Object.fromEntries(Object.entries(row).filter(([k]) => !cols.has(k)));
@@ -49,10 +49,11 @@ const migration13 = await readFile(new URL('supabase/migrations/0013_lead.sql', 
 const migration14 = await readFile(new URL('supabase/migrations/0014_deal_demo_rows.sql', root), 'utf8');
 const migration15 = await readFile(new URL('supabase/migrations/0015_deal_tasks_board.sql', root), 'utf8');
 const migration16 = await readFile(new URL('supabase/migrations/0016_pipeline_demos.sql', root), 'utf8');
-const migration17 = await readFile(new URL('supabase/migrations/0017_task_emails.sql', root), 'utf8');
-const migration18 = await readFile(new URL('supabase/migrations/0018_crm_accounts.sql', root), 'utf8');
-const migration19 = await readFile(new URL('supabase/migrations/0019_deal_history.sql', root), 'utf8');
-const migration20 = await readFile(new URL('supabase/migrations/0020_leads.sql', root), 'utf8');
+const migration17 = await readFile(new URL('supabase/migrations/0017_my_list.sql', root), 'utf8');
+const migration18 = await readFile(new URL('supabase/migrations/0018_task_emails.sql', root), 'utf8');
+const migration19 = await readFile(new URL('supabase/migrations/0019_crm_accounts.sql', root), 'utf8');
+const migration20 = await readFile(new URL('supabase/migrations/0020_deal_history.sql', root), 'utf8');
+const migration21 = await readFile(new URL('supabase/migrations/0021_leads.sql', root), 'utf8');
 const setupAdmins = await readFile(new URL('supabase/setup-admins.sql', root), 'utf8');
 
 // The parts of a Supabase project the migration relies on. auth.uid() / auth.jwt() read the same
@@ -5259,7 +5260,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
       clientId: cli, contactId: con, source: 'lyco', accountId: acct, contactIds: [ppl], currency: 'GBP', closeOn: '2026-12-01', probability: 70, waitingOn: 'them',
       lostReason: '', stageAt: '2026-10-01T00:00:00.000Z',
     }],
-    // The CRM (0018): the deal's account (its client's) and a person there.
+    // The CRM (0019): the deal's account (its client's) and a person there.
     accounts: [{
       id: acct, name: 'Example Client', kind: 'customer', lifecycle: 'customer', lifecycleNote: '', revisitOn: '2027-01-15', sector: 'Utilities',
       country: 'Australia', region: 'QLD', timezone: 'Australia/Brisbane', domain: 'client.example.com', website: 'https://client.example.com/',
@@ -5271,7 +5272,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
       linkedin: 'https://www.linkedin.com/in/example/', timezone: 'Australia/Brisbane', role: 'champion', status: 'active', owner: alice,
       createdAt: '2026-10-02T00:00:00.000Z',
     }],
-    // Leads (0020): a list, a lead converted into the account and person above, a suppression.
+    // Leads (0021): a list, a lead converted into the account and person above, a suppression.
     leadLists: [{ id: lls, name: 'Councils', source: 'apollo', notes: 'Apollo search', createdBy: david, createdAt: '2026-10-02T00:00:00.000Z' }],
     leads: [{
       id: uid(), listId: lls, name: 'Pat', title: 'Asset Manager', email: 'pat@example.com', phone: '+61 7 0000 0000',
@@ -5328,6 +5329,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
       { id: uid(), mailbox: '', pinned: false, body: 'For every mailbox', author: david, createdAt: '2026-10-06T00:00:00.000Z' },
     ],
     outreachSheet: 'https://docs.google.com/spreadsheets/d/1ExampleSyncCheckSheetId0123456789/edit#gid=0',
+    myList: [{ id: uid(), user: david, text: 'Sync check line', done: true, position: 1, createdAt: '2026-10-25T00:00:00.000Z' }],
     calendarEvents: [
       { id: uid(), kind: 'event', title: 'Sync check conference', day: '2026-10-20', endDay: '2026-10-22', startsAt: '', endsAt: '', people: [david, alice],
         createdBy: david },
@@ -6264,23 +6266,245 @@ async function phase16(ctx) {
   return ctx;
 }
 
-// ── 0017: task emails (the queue, claim and settings) ─────────────────────────────────────────────────────────────
+// ── 0017: My list — each person's own lines, private ───────────────────────────────────────────────────────────────
 
 async function phase17(ctx) {
   const { alice, boss, david, hello } = ctx;
-
-  // 121. Runs on top of 0012, whole, again, and statement by statement; ends with its done row.
+  // 121. Runs on top of 0016, whole, again, and statement by statement; its done row last; in the realtime publication;
+  // RLS on; never mentions module_level.
+  const run = async () => db.exec(migration17).then(
+    (r) => ({ error: null, done: r.at(-1)?.rows?.[0]?.done ?? null }),
+    async (e) => { await db.exec('rollback').catch(() => {}); return { error: e.message, done: null }; });
   await as(null);
-  const run = async () => db.exec(migration17).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
   const first = await run();
   const second = await run();
   await as(null);
   const splitErrors = await runSplit(db, migration17, { continueOnError: true });
   const body = migration17.replace(/--.*$/gm, '').trim();
+  const meta = {
+    table: (await one("select to_regclass('public.my_list')::text as t")).t,
+    rls: (await one("select relrowsecurity as on from pg_class where oid = 'public.my_list'::regclass")).on,
+    realtime: (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'my_list'")).n,
+    policies: (await rows("select policyname from pg_policies where schemaname = 'public' and tablename = 'my_list' order by 1")).map((r) => r.policyname),
+  };
+  check('121. 0017 runs on top of 0016, re-runs whole and statement by statement, never mentions module_level, and ends (after commit) with its done '
+    + 'row; my_list exists with RLS on, four policies, and is in the realtime publication',
+    first.error === null && second.error === null && !splitErrors.length && first.done === 'Cortex 0017 applied' && second.done === 'Cortex 0017 applied'
+      && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0017 applied' as done;$/i.test(body) && !migration17.includes('module_level')
+      && meta.table === 'my_list' && meta.rls === true && meta.realtime === 1
+      && meta.policies.join('|') === 'my_list_delete|my_list_insert|my_list_select|my_list_update',
+    { first, second, splitErrors, meta });
+  if (first.error) return null;
+
+  // 122. Private: everyone adds, changes and deletes their own lines and never sees or touches anyone else's (admins and
+  // the SuperAdmin too); a line can't be made for someone else or moved to them; whose it is and when it was made stay.
+  const res = {};
+  await as(hello);
+  const helloLine = (await one("insert into my_list (text) values ('Example line') returning id, user_id")).id;
+  res.helloOwn = (await one('select user_id from my_list where id = $1', [helloLine]))?.user_id === hello;
+  res.helloForOther = await db.query('insert into my_list (user_id, text) values ($1, $2)', [alice, 'Sneaky']).then(() => true, () => false);
+  await as(david);
+  const davidLine = (await one("insert into my_list (text, position) values ('Example admin line', 1) returning id")).id;
+  res.adminSeesHello = (await rows('select id from my_list where id = $1', [helloLine])).length;
+  res.adminChangesHello = (await db.query("update my_list set text = 'x' where id = $1", [helloLine])).affectedRows || 0;
+  res.adminDeletesHello = (await db.query('delete from my_list where id = $1', [helloLine])).affectedRows || 0;
+  await as(boss);
+  res.superSeesOthers = (await rows('select id from my_list where id = any($1)', [[helloLine, davidLine]])).length;
+  await as(hello);
+  res.helloSees = (await rows('select id from my_list')).map((r) => r.id).join(',') === helloLine;
+  res.helloUpdates = (await db.query("update my_list set text = 'Changed', done = true where id = $1", [helloLine])).affectedRows || 0;
+  // protect_my_list: each on its own, so RLS can't be what stops it. Changing when it was made (RLS allows the row) and
+  // handing it to someone else (RLS would refuse the new owner) both go through, and the trigger keeps the old values.
+  res.changeMade = await affected('update my_list set created_at = $1 where id = $2', ['2020-01-01T00:00:00Z', helloLine]);
+  res.changeOwner = await affected('update my_list set user_id = $1 where id = $2', [alice, helloLine]);
+  await as(null);
+  const kept = await one('select user_id, created_at, text, done from my_list where id = $1', [helloLine]);
+  res.keptOwner = kept.user_id === hello && new Date(kept.created_at).getUTCFullYear() !== 2020 && kept.text === 'Changed' && kept.done === true;
+  await as(hello);
+  res.helloDeletes = (await db.query('delete from my_list where id = $1', [helloLine])).affectedRows || 0;
+  // Deactivated: nothing (is_staff()), not even their own lines.
+  await as(alice);
+  const aliceLine = (await one("insert into my_list (text) values ('Example line, before leaving') returning id")).id;
+  await as(null);
+  await db.query('update profiles set active = false where id = $1', [alice]);
+  await as(alice);
+  res.inactive = {
+    adds: await db.query("insert into my_list (text) values ('Inactive')").then(() => true, () => false),
+    sees: (await rows('select id from my_list')).length,
+    changes: await affected("update my_list set text = 'x' where id = $1", [aliceLine]),
+    deletes: await affected('delete from my_list where id = $1', [aliceLine]),
+  };
+  await as(null);
+  await db.query('update profiles set active = true where id = $1', [alice]);
+  res.inactive.lineLeft = (await one('select text from my_list where id = $1', [aliceLine]))?.text === 'Example line, before leaving';
+  await db.query('delete from my_list where id = $1', [aliceLine]);
+  check('122. My list is private: each person adds, changes and deletes only their own lines; admins and the SuperAdmin neither see nor touch '
+    + 'anyone else\'s; a line can\'t be made for or moved to someone else, and keeps when it was made; a deactivated person gets nothing',
+    stable(res) === stable({ helloOwn: true, helloForOther: false, adminSeesHello: 0, adminChangesHello: 0, adminDeletesHello: 0, superSeesOthers: 0,
+      helloSees: true, helloUpdates: 1, changeMade: 1, changeOwner: 1, keptOwner: true, helloDeletes: 1,
+      inactive: { adds: false, sees: 0, changes: 0, deletes: 0, lineLeft: true } }), res);
+
+  // 123. ensure_todos (0017): reminders follow the day. An undone automation to-do from an earlier day moves to the day
+  // asked for, after its to-dos, oldest first, keeping its ref; one per ref (the newest); not when that ref already has a
+  // to-do on that day or later; done, manual and routine to-dos, other people's and later ones stay. Never back to an
+  // earlier day; again it moves nothing; still security definer, staff only.
+  await as(null);
+  // Earlier checks left boss and hello undone reminders of their own: set aside (ticked) for this check, then restored.
+  const setAside = (await rows(`update todos set done = true where assignee_id = any($1) and source = 'automation' and not done
+    returning id`, [[boss, hello]])).map((r) => r.id);
+  const add = async (id, assignee, day, source, ref, done = false) => (await one(`insert into todos
+    (assignee_id, created_by, title, category, day, source, ref, done, position)
+    values ($1, $1, $2, 'Admin', $3, $4, $5, $6, coalesce((select max(position) + 1 from todos where assignee_id = $1 and day = $3::date), 0))
+    returning id`, [assignee, id, day, source, ref, done])).id;
+  const ids = {
+    approve: await add('approve', boss, '2026-12-01', 'automation', 'approve:2026-12-01'),
+    followOld: await add('followOld', boss, '2026-12-01', 'automation', 'contact:test-x'),
+    followNew: await add('followNew', boss, '2026-12-02', 'automation', 'contact:test-x'),
+    contractDone: await add('contractDone', boss, '2026-12-01', 'automation', 'contract:test-c', true),
+    thereAlready: await add('thereAlready', boss, '2026-12-01', 'automation', 'contact:test-z'),
+    aheadZ: await add('aheadZ', boss, '2026-12-07', 'automation', 'contact:test-z'),
+    manual: await add('manual', boss, '2026-12-01', 'manual', ''),
+    todays: await add('todays', boss, '2026-12-04', 'manual', ''),
+    later: await add('later', boss, '2026-12-08', 'automation', 'contact:test-later'),
+    hellos: await add('hellos', hello, '2026-12-01', 'automation', 'contact:test-h'),
+  };
+  const dayOf = async () => Object.fromEntries((await rows('select title, day::text as day from todos where id = any($1)', [Object.values(ids)]))
+    .map((r) => [r.title, r.day]));
+  // An invoice awaiting approval, so the Approve invoices step runs: with the undone one moving, no second one is made.
+  const awaitingInvoice = await one("update invoices set status = 'Awaiting approval' where id = (select id from invoices order by id limit 1) returning id");
+  const routinesOn = async (dow) => (await one('select count(*)::int as n from routines where assignee_id = $1 and active and $2 = any (weekdays)', [boss, dow])).n;
+  const fridayRoutines = await routinesOn(5);
+  const thursdayRoutines = await routinesOn(4);
+  await as(boss);
+  const friday = await attempt('select public.ensure_todos($1::date) as n', ['2026-12-04']);
+  await as(null);
+  const routinesMade = (await one("select count(*)::int as n from todos where assignee_id = $1 and day = '2026-12-04' and source = 'routine'", [boss])).n;
+  const newApprove = (await one("select count(*)::int as n from todos where ref = 'approve:2026-12-04'")).n;
+  const approvesMade = (await one("select count(*)::int as n from todos where assignee_id = $1 and ref like 'approve:%' and not done", [boss])).n;
+  const fridayDays = await dayOf();
+  const fridayList = (await rows(`select coalesce(nullif(title, ''), source) as t, source, position from todos
+    where assignee_id = $1 and day = '2026-12-04' order by position`, [boss]));
+  const refs = await rows("select title, ref from todos where id = any($1) and title in ('approve', 'followNew') order by title", [[ids.approve, ids.followNew]]);
+  await as(boss);
+  const again = await attempt('select public.ensure_todos($1::date) as n', ['2026-12-04']);
+  const back = await attempt('select public.ensure_todos($1::date) as n', ['2026-12-03']);
+  await as(null);
+  const backRoutines = (await one("select count(*)::int as n from todos where assignee_id = $1 and day = '2026-12-03' and source = 'routine'", [boss])).n;
+  const afterBack = await dayOf();
+  await as(hello);
+  const helloCall = await attempt('select public.ensure_todos($1::date) as n', ['2026-12-04']);
+  await as(null);
+  const helloDay = (await one('select day::text as day from todos where id = $1', [ids.hellos])).day;
+  // A Monday: that week's bank reminder is made, and last week's undone one moves on with the other reminders.
+  ids.bankOld = await add('bankOld', boss, '2026-11-30', 'automation', 'bank:2026-11-30');
+  const mondayRoutines = await routinesOn(1);
+  await as(boss);
+  const monday = await attempt('select public.ensure_todos($1::date) as n', ['2026-12-07']);
+  await as(null);
+  const mondayRows = (await rows(`select coalesce(nullif(ref, ''), source) as r, day::text as day from todos
+    where assignee_id = $1 and day = '2026-12-07' and source = 'automation' order by position`, [boss])).map((r) => r.r);
+  const fn17 = await one("select prosecdef, array_to_string(proconfig, ',') as config from pg_proc where proname = 'ensure_todos'");
+  const grants = await one(`select has_function_privilege('anon', 'public.ensure_todos(date)', 'execute') as anon,
+    has_function_privilege('authenticated', 'public.ensure_todos(date)', 'execute') as users`);
+  await db.query('update profiles set active = false where id = $1', [alice]);
+  await as(alice);
+  const inactiveCall = await error("select public.ensure_todos('2026-12-04'::date)");
+  await as(null);
+  await db.query('update profiles set active = true where id = $1', [alice]);
+  const moved = fridayList.slice(-2).map((r) => r.t);
+  const positions = fridayList.map((r) => r.position).join(',');
+  const want = {
+    approve: '2026-12-04', followOld: '2026-12-01', followNew: '2026-12-04', contractDone: '2026-12-01', thereAlready: '2026-12-01',
+    aheadZ: '2026-12-07', manual: '2026-12-01', todays: '2026-12-04', later: '2026-12-08', hellos: '2026-12-01',
+  };
+  const steps = {
+    fridayRoutines, routinesMade, thursdayRoutines, backRoutines, newApprove, approvesMade, mondayRoutines, monday, mondayRows,
+    noMondayApprove: (await one("select count(*)::int as n from todos where ref = 'approve:2026-12-07'")).n,
+  };
+  check('123. ensure_todos (0017): an undone automation to-do from an earlier day moves to the day, after its to-dos and oldest first, keeping its '
+    + 'ref; one per ref (the newest); done, manual, other people\'s and later ones, and refs already on that day or later stay; never back; '
+    + 'again nothing; staff only, still security definer',
+    typeof friday === 'object' && fridayRoutines > 0 && routinesMade === fridayRoutines && friday?.n === 2 + fridayRoutines
+      && newApprove === 0 && approvesMade === 1 && stable(fridayDays) === stable(want)
+      && stable(moved) === stable(['approve', 'followNew']) && positions === fridayList.map((_, i) => i).join(',')
+      && stable(refs) === stable([{ title: 'approve', ref: 'approve:2026-12-01' }, { title: 'followNew', ref: 'contact:test-x' }])
+      && again?.n === 0 && thursdayRoutines > 0 && backRoutines === thursdayRoutines && back?.n === thursdayRoutines
+      && stable(afterBack) === stable(want) && helloCall?.n >= 1 && helloDay === '2026-12-04'
+      && mondayRoutines > 0 && monday?.n === mondayRoutines + 1 + 3 && steps.noMondayApprove === 0
+      && stable(mondayRows) === stable(['contact:test-z', 'bank:2026-12-07', 'bank:2026-11-30', 'approve:2026-12-01', 'contact:test-x'])
+      && fn17.prosecdef === true && /search_path=public/.test(fn17.config) && grants.anon === false && grants.users === true
+      && inactiveCall !== null,
+    { friday, steps, fridayDays, fridayList, refs, again, back, afterBack, helloCall, helloDay, fn17, grants, inactiveCall });
+  await db.query('delete from todos where id = any($1)', [Object.values(ids)]);
+  await db.query("delete from todos where assignee_id = any($1) and day between '2026-12-01' and '2026-12-08'", [[boss, hello]]);
+  await db.query('update todos set done = false where id = any($1)', [setAside]);
+  await db.query("update invoices set status = 'Approved' where id = $1", [awaitingInvoice?.id]);
+
+  // 124. contact_pipeline (0017): a booking's "Prepare: meeting with …" has its own ref (meeting:<id>), so a follow-up
+  // moved on to today, or ticked earlier that day, doesn't stop it; an existing to-do is never changed or reopened,
+  // whichever way the status goes; still security definer.
+  await as(null);
+  const today = (await one('select public.user_today($1)::text as d', [boss])).d;
+  await as(boss);
+  const pat = (await one(`insert into contacts (name, org, email, status, owner_id)
+    values ('Pat Example', 'Example Pumps', 'pat@example.com', 'Sent', $1) returning id`, [boss])).id;
+  await db.query("update contacts set status = 'Replied' where id = $1", [pat]);
+  await as(null);
+  const refs124 = [`contact:${pat}`, `meeting:${pat}`];
+  await db.query('update todos set day = day - 2 where ref = $1', [refs124[0]]); // made two days ago, left unticked
+  await as(boss);
+  await attempt('select public.ensure_todos($1::date) as n', [today]);
+  const forPat = async () => (await rows(`select split_part(ref, ':', 1) as kind, title, day::text as day, done from todos
+    where ref = any($1) order by day, ref`, [refs124]));
+  const movedOn = await forPat();
+  await db.query("update contacts set status = 'Meeting booked' where id = $1", [pat]);
+  const booked = await forPat();
+  await as(null);
+  await db.query('update todos set done = true, done_at = now() where ref = any($1)', [refs124]); // both ticked
+  await as(boss);
+  await db.query("update contacts set status = 'Replied' where id = $1", [pat]);
+  await db.query("update contacts set status = 'Meeting booked' where id = $1", [pat]);
+  await db.query("update contacts set status = 'Sent' where id = $1", [pat]);
+  await db.query("update contacts set status = 'Replied' where id = $1", [pat]);
+  const toggled = await forPat();
+  await as(null);
+  const cp = await one("select prosecdef, array_to_string(proconfig, ',') as config from pg_proc where proname = 'contact_pipeline'");
+  const ticked = (title) => ({ kind: title.startsWith('Follow') ? 'contact' : 'meeting', title, day: today, done: true });
+  check('124. contact_pipeline (0017): a booking gets its own Prepare to-do (meeting:<id>) beside a follow-up moved on to today; a ticked to-do '
+    + 'is never changed or reopened, whichever way the status goes; still security definer',
+    stable(movedOn) === stable([{ kind: 'contact', title: 'Follow up: Pat Example replied', day: today, done: false }])
+      && stable(booked) === stable([{ kind: 'contact', title: 'Follow up: Pat Example replied', day: today, done: false },
+        { kind: 'meeting', title: 'Prepare: meeting with Pat Example', day: today, done: false }])
+      && stable(toggled) === stable([ticked('Follow up: Pat Example replied'), ticked('Prepare: meeting with Pat Example')])
+      && cp.prosecdef === true && /search_path=public/.test(cp.config),
+    { today, movedOn, booked, toggled, cp });
+  await db.query('delete from todos where ref = any($1)', [refs124]);
+  await db.query('delete from deals where contact_id = $1', [pat]);
+  await db.query('delete from contacts where id = $1', [pat]);
+
+  // Tidy up.
+  await as(null);
+  await db.query('delete from my_list where id = $1', [davidLine]);
+  return ctx;
+}
+
+// ── 0018: task emails (the queue, claim and settings) ─────────────────────────────────────────────────────────────
+
+async function phase18(ctx) {
+  const { alice, boss, david, hello } = ctx;
+
+  // 125. Runs on top of 0012, whole, again, and statement by statement; ends with its done row.
+  await as(null);
+  const run = async () => db.exec(migration18).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const first = await run();
+  const second = await run();
+  await as(null);
+  const splitErrors = await runSplit(db, migration18, { continueOnError: true });
+  const body = migration18.replace(/--.*$/gm, '').trim();
   const doneRow = Array.isArray(first) ? first.at(-1)?.rows?.[0]?.done : null;
-  check('121. 0017 runs on top of 0012, re-runs whole and statement by statement, never mentions module_level, and ends with its done row',
-    doneRow === 'Cortex 0017 applied' && Array.isArray(second) && !splitErrors.length && /^begin;/i.test(body)
-      && /commit;\s*select 'Cortex 0017 applied' as done;$/i.test(body) && !migration17.includes('module_level'),
+  check('125. 0018 runs on top of 0012, re-runs whole and statement by statement, never mentions module_level, and ends with its done row',
+    doneRow === 'Cortex 0018 applied' && Array.isArray(second) && !splitErrors.length && /^begin;/i.test(body)
+      && /commit;\s*select 'Cortex 0018 applied' as done;$/i.test(body) && !migration18.includes('module_level'),
     { first: Array.isArray(first) ? 'ok' : first, second: Array.isArray(second) ? 'ok' : second, splitErrors });
   if (!Array.isArray(first)) return null;
 
@@ -6300,7 +6524,7 @@ async function phase17(ctx) {
   await as(null);
   await db.query('delete from private.task_mail');
 
-  // 122. Queued: a task made for someone else, a task handed to someone else, an update on someone else's task. Not: your
+  // 126. Queued: a task made for someone else, a task handed to someone else, an update on someone else's task. Not: your
   // own task, an edit that keeps the owner, your own update, rows written with no signed-in user, Work in Progress rows.
   await as(boss);
   const forAlice = await task('Council landing page', alice);
@@ -6319,10 +6543,10 @@ async function phase17(ctx) {
   await task('Example Shire', alice, { on: wip.board, grp: wip.grp, key: 'pipeline' });
   const q1 = await queue();
   const shape = q1.map((r) => `${r.kind}:${r.item_id === forAlice ? 'forAlice' : r.item_id === handed ? 'handed' : r.item_id}:${r.recipient === alice ? 'alice' : r.recipient === hello ? 'hello' : r.recipient}:${r.actor === boss ? 'boss' : r.actor === hello ? 'hello' : r.actor}`);
-  check('122. the queue gets a task made for someone else, one handed to someone else and an update on someone else’s task; not your own work, a kept owner, imports from the SQL editor or Work in Progress',
+  check('126. the queue gets a task made for someone else, one handed to someone else and an update on someone else’s task; not your own work, a kept owner, imports from the SQL editor or Work in Progress',
     shape.join() === 'assigned:forAlice:alice:boss,assigned:handed:hello:boss,update:forAlice:alice:hello' && q1[2].update_id === update, shape);
 
-  // 123. A sync write (PostgREST upsert) that keeps the owner queues nothing; one that hands the task over queues once.
+  // 127. A sync write (PostgREST upsert) that keeps the owner queues nothing; one that hands the task over queues once.
   await as(alice);
   const row = await one('select id, board_key, group_id, board_id, position, name, "values", done from items where id = $1', [forAlice]);
   const same = await postgrestUpsert('items', [{ ...row, values: row.values }]);
@@ -6330,13 +6554,13 @@ async function phase17(ctx) {
   await as(alice);
   const moved = await postgrestUpsert('items', [{ ...row, values: { ...row.values, people: [david] } }]);
   const afterMove = await queue();
-  check('123. a sync upsert that keeps the owner queues nothing; one handing the task to someone else queues one email for them',
+  check('127. a sync upsert that keeps the owner queues nothing; one handing the task to someone else queues one email for them',
     same === null && moved === null && afterSame === 3 && afterMove.length === 4 && afterMove[3].recipient === david && afterMove[3].actor === alice,
     { same, moved, afterSame, last: afterMove[3] });
   await as(alice);
   await postgrestUpsert('items', [{ ...row, values: { ...row.values, people: [alice] } }]); // she takes it back: nothing queued
 
-  // 124. Only the database and the function touch the queue: staff and admins can't read it or claim; the status and
+  // 128. Only the database and the function touch the queue: staff and admins can't read it or claim; the status and
   // sender settings are admins'.
   await as(alice);
   const staffRead = await error('select * from private.task_mail');
@@ -6347,12 +6571,12 @@ async function phase17(ctx) {
   const adminClaim = await error('select task_mail_claim()');
   const adminDone = await error("select task_mail_done('{1}', '')");
   const adminStatus = await one('select task_mail_status() as s');
-  check('124. nobody signed in reads the queue or claims it; only admins read the status or change the sender',
+  check('128. nobody signed in reads the queue or claims it; only admins read the status or change the sender',
     staffRead !== null && staffClaim !== null && staffStatus !== null && staffUse !== null && adminClaim !== null && adminDone !== null
       && adminStatus.s.sender_id === null && adminStatus.s.ready === false && adminStatus.s.waiting === 4,
     { staffRead, staffClaim, staffStatus, staffUse, adminClaim, adminDone, adminStatus });
 
-  // 125. No sender: nothing is claimed. An admin without Gmail send can't be the sender; with it they can.
+  // 129. No sender: nothing is claimed. An admin without Gmail send can't be the sender; with it they can.
   await svc();
   const idle = await one('select task_mail_claim() as c');
   await as(null);
@@ -6368,12 +6592,12 @@ async function phase17(ctx) {
   const ready = (await one('select task_mail_status() as s')).s;
   await as(null);
   const unclaimed = (await one('select count(*)::int as n from private.task_mail where claimed_at is not null')).n;
-  check('125. without a sender nothing is claimed; an admin needs Gmail send to become the sender, then the status shows it ready',
+  check('129. without a sender nothing is claimed; an admin needs Gmail send to become the sender, then the status shows it ready',
     idle.c.sender === null && idle.c.mails.length === 0 && unclaimed === 0 && noGoogle !== null && chosen.ok === true
       && ready.ready === true && ready.sender_id === boss && ready.sender_email === 'boss@example.com',
     { idle: idle.c, noGoogle, ready });
 
-  // 126. A claim: one entry per person with what each email needs; what's no longer theirs (Council landing page went to
+  // 130. A claim: one entry per person with what each email needs; what's no longer theirs (Council landing page went to
   // David, then Alice took it back) is dropped unsent; a second claim straight after gets nothing.
   await svc();
   const claim = (await one('select task_mail_claim() as c')).c;
@@ -6384,7 +6608,7 @@ async function phase17(ctx) {
   const aliceMail = byTo['alice@assetstackai.com'] || claim.mails.find((m) => m.events.some((e) => e.item === 'Council landing page'));
   const helloMail = claim.mails.find((m) => m.events.some((e) => e.item === 'Tender pack'));
   const kinds = (m) => (m?.events || []).map((e) => `${e.kind}:${e.item}`).join();
-  check('126. a claim groups by person (Alice: assigned and an update; Hello: Tender pack), with board, values, author and update text; David’s, no longer his, is dropped; a second claim gets nothing',
+  check('130. a claim groups by person (Alice: assigned and an update; Hello: Tender pack), with board, values, author and update text; David’s, no longer his, is dropped; a second claim gets nothing',
     claim.sender === boss && claim.mails.length === 2
       && kinds(aliceMail) === 'assigned:Council landing page,update:Council landing page'
       && kinds(helloMail) === 'assigned:Tender pack'
@@ -6393,7 +6617,7 @@ async function phase17(ctx) {
       && dropped.length === 1 && dropped[0] === david && again.mails.length === 0,
     { mails: claim.mails.map((m) => ({ to: m.to, kinds: kinds(m) })), dropped, again: again.mails.length });
 
-  // 127. Done: sent rows are kept as sent; a failure frees them for a later claim (five tries at most) and shows in the status.
+  // 131. Done: sent rows are kept as sent; a failure frees them for a later claim (five tries at most) and shows in the status.
   await svc();
   await db.query("select task_mail_done($1, '')", [aliceMail.ids]);
   await db.query("select task_mail_done($1, 'Gmail said no')", [helloMail.ids]);
@@ -6409,12 +6633,12 @@ async function phase17(ctx) {
   const exhausted = (await one('select task_mail_claim() as c')).c;
   await as(null);
   const sent = (await one('select count(*)::int as n from private.task_mail where id = any($1) and sent_at is not null', [aliceMail.ids])).n;
-  check('127. done marks rows sent (and the status’s last send); a failure is claimed again later, five tries at most, and shows as the last error',
+  check('131. done marks rows sent (and the status’s last send); a failure is claimed again later, five tries at most, and shows as the last error',
     sent === aliceMail.ids.length && afterDone.error === 'Gmail said no' && Boolean(afterDone.sent_at) && afterDone.waiting === 1
       && retry.mails.length === 1 && retry.mails[0].ids.join() === helloMail.ids.join() && exhausted.mails.length === 0,
     { sent, afterDone, retry: retry.mails.length, exhausted: exhausted.mails.length });
 
-  // 128. Checked as the person when sent: someone who can no longer see the board, or who isn't active, gets nothing;
+  // 132. Checked as the person when sent: someone who can no longer see the board, or who isn't active, gets nothing;
   // a deleted update takes its email with it; the claim leaves the caller's identity as it was.
   await as(null);
   await db.query('delete from private.task_mail');
@@ -6433,12 +6657,12 @@ async function phase17(ctx) {
   const helloRow = await one('select sent_at, error from private.task_mail where item_id = $1', [forHello]);
   await as(david);
   await db.query("delete from module_access where user_id = $1 and module = 'projects'", [hello]);
-  check('128. someone who can no longer see the board gets nothing (closed unsent); a deleted update’s email goes with it; the claim leaves the caller as it was',
+  check('132. someone who can no longer see the board gets nothing (closed unsent); a deleted update’s email goes with it; the claim leaves the caller as it was',
     blocked.mails.length === 1 && blocked.mails[0].events.every((e) => e.item === 'Short lived' && e.kind === 'assigned')
       && Boolean(helloRow?.sent_at) && helloRow.error === 'not sent: no longer theirs' && who === '',
     { mails: blocked.mails.map((m) => kinds(m)), helloRow, who });
 
-  // 129. Stop: admins only; then nothing is claimed.
+  // 133. Stop: admins only; then nothing is claimed.
   await as(alice);
   const staffOff = await error('select task_mail_off()');
   await as(boss);
@@ -6447,7 +6671,7 @@ async function phase17(ctx) {
   const afterOff = (await one('select task_mail_claim() as c')).c;
   await as(null);
   await db.query('delete from private.task_mail');
-  check('129. only admins stop task emails; stopped, nothing is claimed',
+  check('133. only admins stop task emails; stopped, nothing is claimed',
     staffOff !== null && off.ok === true && afterOff.sender === null && afterOff.mails.length === 0, { staffOff, afterOff });
   for (const a of access) {
     await db.query("insert into module_access (user_id, module, level) values ($1, 'projects', $2) on conflict (user_id, module) do update set level = excluded.level", [a.user_id, a.level]);
@@ -6455,12 +6679,12 @@ async function phase17(ctx) {
   return ctx;
 }
 
-// ── 0018: the CRM (accounts, crm_contacts, the new deal columns and stages) ───────────────────────────────────────
+// ── 0019: the CRM (accounts, crm_contacts, the new deal columns and stages) ───────────────────────────────────────
 
-async function phase18(ctx) {
+async function phase19(ctx) {
   const { alice, boss, david, hello, carol } = ctx;
 
-  // Data from before 0018: a client and its deal, deals on the old stages (two with one name), one from an outreach contact.
+  // Data from before 0019: a client and its deal, deals on the old stages (two with one name), one from an outreach contact.
   await as(boss);
   const client = (await one("insert into clients (name, sector, contact_id) values ('Example Fourteen', 'Government', $1) returning id", [boss])).id;
   const old = {};
@@ -6477,28 +6701,28 @@ async function phase18(ctx) {
   const outreach = (await one("insert into contacts (name, org, email, status, owner_id) values ('Pat Example', 'Example Harbour', 'Pat@Example.com', 'Sent', $1) returning id", [boss])).id;
   old.fromContact = (await one("insert into deals (name, stage, contact_id) values ('Example Harbour', 'Contacted', $1) returning id", [outreach])).id;
 
-  // 130. Runs on top of 0017, whole, again, and statement by statement; ends with its done row; both tables RLS and realtime.
+  // 134. Runs on top of 0018, whole, again, and statement by statement; ends with its done row; both tables RLS and realtime.
   await as(null);
-  const run = async () => db.exec(migration18).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const run = async () => db.exec(migration19).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
   const first = await run();
   const counts = async () => one(`select (select count(*)::int from accounts) as accounts, (select count(*)::int from crm_contacts) as people,
     (select count(*)::int from deals where account_id is null) as unlinked`);
   const afterFirst = await counts();
   const second = await run();
   await as(null);
-  const splitErrors = await runSplit(db, migration18, { continueOnError: true });
+  const splitErrors = await runSplit(db, migration19, { continueOnError: true });
   const afterAgain = await counts();
-  const body = migration18.replace(/--.*$/gm, '').trim();
+  const body = migration19.replace(/--.*$/gm, '').trim();
   const published = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime' and tablename in ('accounts', 'crm_contacts')")).n;
   const rls = (await rows("select relrowsecurity as on from pg_class where oid in ('public.accounts'::regclass, 'public.crm_contacts'::regclass)")).every((r) => r.on);
-  check('130. 0018 runs on top of 0017, re-runs whole and statement by statement (adding nothing), never mentions module_level, ends with its done row; accounts and crm_contacts have RLS and realtime',
-    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0018 applied' && Array.isArray(second) && !splitErrors.length
-      && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0018 applied' as done;$/i.test(body) && !migration18.includes('module_level')
+  check('134. 0019 runs on top of 0018, re-runs whole and statement by statement (adding nothing), never mentions module_level, ends with its done row; accounts and crm_contacts have RLS and realtime',
+    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0019 applied' && Array.isArray(second) && !splitErrors.length
+      && /^begin;/i.test(body) && /commit;\s*select 'Cortex 0019 applied' as done;$/i.test(body) && !migration19.includes('module_level')
       && published === 2 && rls && JSON.stringify(afterFirst) === JSON.stringify(afterAgain) && afterFirst.unlinked === 0,
     { first: Array.isArray(first) ? 'ok' : first, second: Array.isArray(second) ? 'ok' : second, splitErrors, published, rls, afterFirst, afterAgain });
   if (!Array.isArray(first)) return null;
 
-  // 131. The existing data: stages kept, every client a customer account, every deal its
+  // 135. The existing data: stages kept, every client a customer account, every deal its
   // account (its client's; one account for one name), the outreach contact's person on its deal.
   const deal = async (id) => one('select stage, waiting_on, account_id, contact_ids, currency, probability, stage_at from deals where id = $1', [id]);
   const d = Object.fromEntries(await Promise.all(Object.entries(old).map(async ([k, id]) => [k, await deal(id)])));
@@ -6507,7 +6731,7 @@ async function phase18(ctx) {
   const basin = await acc(d.opp.account_id);
   const person = await one('select name, email, account_id from crm_contacts where id = $1', [d.fromContact.contact_ids[0]]);
   const everyClient = (await one('select count(*)::int as n from clients c where not exists (select 1 from accounts a where a.client_id = c.id)')).n;
-  check('131. existing deals: stages kept, each on its account (a client’s is its customer account; one name, one account); every client has an account; an outreach contact’s person is on its deal',
+  check('135. existing deals: stages kept, each on its account (a client’s is its customer account; one name, one account); every client has an account; an outreach contact’s person is on its deal',
     d.opp.stage === 'Opportunities' && d.contacted.stage === 'Contacted' && d.contacted.waiting_on === '' && d.opp.waiting_on === ''
       && d.meeting.stage === 'First meetings' && d.won.stage === 'Demos' && d.opp.currency === 'AUD' && d.opp.probability === null
       && clientAccount.kind === 'customer' && clientAccount.lifecycle === 'customer' && clientAccount.client_id === client && clientAccount.owner_id === boss
@@ -6515,7 +6739,7 @@ async function phase18(ctx) {
       && person?.name === 'Pat Example' && person.email === 'pat@example.com' && person.account_id === d.fromContact.account_id,
     { d, clientAccount, basin, person, everyClient });
 
-  // 132. Pipeline access: staff at the default (View) read accounts and people and change none; with Edit they add,
+  // 136. Pipeline access: staff at the default (View) read accounts and people and change none; with Edit they add,
   // change and delete; inactive or with Pipeline none, nothing.
   await as(david);
   await db.query("delete from module_access where user_id = any($1) and module = 'pipeline'", [[alice, hello]]);
@@ -6537,11 +6761,11 @@ async function phase18(ctx) {
   const none = (await rows('select id from accounts')).length;
   await as(david);
   await db.query("delete from module_access where user_id = $1 and module = 'pipeline'", [alice]);
-  check('132. Pipeline View reads accounts and contacts but changes none; Pipeline Edit adds and changes them; inactive or Pipeline None sees none',
+  check('136. Pipeline View reads accounts and contacts but changes none; Pipeline Edit adds and changes them; inactive or Pipeline None sees none',
     viewReads > 0 && viewAdd !== null && viewEdit === 0 && viewPerson !== null && Boolean(account) && Boolean(jo) && editUpdate === 1
       && inactive === 0 && none === 0, { viewReads, viewAdd, viewEdit, viewPerson, editUpdate, inactive, none });
 
-  // 133. The new deal columns: checked values; stage_at is the database's (a stage change stamps it, nothing else does,
+  // 137. The new deal columns: checked values; stage_at is the database's (a stage change stamps it, nothing else does,
   // an insert keeps a time given); a sync upsert with the new columns.
   await as(hello);
   const badCurrency = await error("insert into deals (name, currency) values ('X', 'XYZ')");
@@ -6559,12 +6783,12 @@ async function phase18(ctx) {
   const row = await one('select id, name, stage, account_id, contact_ids, currency, close_on, probability, waiting_on, lost_reason, stage_at, position from deals where id = $1', [fresh.id]);
   const upsert = await postgrestUpsert('deals', [{ ...row, stage: 'Lost', lost_reason: 'Timing', probability: null }]);
   const lost = await one('select stage, lost_reason, probability from deals where id = $1', [fresh.id]);
-  check('133. deals: currency, waiting on and probability are checked (and a contact’s role, an account’s lifecycle); stage_at is kept on insert and on other edits, stamped when the stage changes; the app’s upsert writes the new columns',
+  check('137. deals: currency, waiting on and probability are checked (and a contact’s role, an account’s lifecycle); stage_at is kept on insert and on other edits, stamped when the stage changes; the app’s upsert writes the new columns',
     [badCurrency, badWaiting, badProbability, badRole, badLifecycle].every((e) => e !== null) && kept && unchanged && moved && upsert === null
       && lost.stage === 'Lost' && lost.lost_reason === 'Timing' && lost.probability === null,
     { badCurrency, badWaiting, badProbability, badRole, badLifecycle, kept, unchanged, moved, upsert, lost });
 
-  // 134. Timeline entries on an account or a contact: Pipeline Edit adds, View reads, never moved by an edit; deleting a
+  // 138. Timeline entries on an account or a contact: Pipeline Edit adds, View reads, never moved by an edit; deleting a
   // contact or an account takes theirs; an account deleted leaves its deals, without it.
   await as(hello);
   const onAccount = (await one("insert into crm_entries (account_id, kind, body) values ($1, 'note', 'Budget in Feb') returning id, user_id", [account]));
@@ -6583,12 +6807,12 @@ async function phase18(ctx) {
   await as(null);
   const afterAccount = await one(`select (select count(*)::int from crm_entries where id = $1) as entries,
     (select account_id from deals where id = $2) as account`, [onAccount.id, fresh.id]);
-  check('134. entries on an account or a contact: Pipeline Edit adds (as themselves), View reads but adds none; an edit never moves one; deleting the contact or the account takes theirs, and leaves the account’s deals without it',
+  check('138. entries on an account or a contact: Pipeline Edit adds (as themselves), View reads but adds none; an edit never moves one; deleting the contact or the account takes theirs, and leaves the account’s deals without it',
     onAccount.user_id === hello && viewerReads === 2 && viewerAdds !== null && stays.account_id === account && stays.contact_id === null
       && goneWithPerson === 1 && personEntries === 0 && afterAccount.entries === 0 && afterAccount.account === null,
     { onAccount, viewerReads, viewerAdds, stays, personEntries, afterAccount });
 
-  // 135. The outreach automation: a reply files the organisation as an (engaged) account and the person as its contact,
+  // 139. The outreach automation: a reply files the organisation as an (engaged) account and the person as its contact,
   // on a new Opportunities deal waiting on us; a booking moves the deal to First meetings and the account to meeting; another
   // reply from the same person adds nobody; an account set aside keeps its lifecycle.
   await as(boss);
@@ -6605,7 +6829,7 @@ async function phase18(ctx) {
   await as(boss);
   await db.query("insert into contacts (name, org, email, status, owner_id) values ('Kim Example', 'Example Quiet', '', 'Replied', $1)", [boss]);
   const quiet = await one("select count(*)::int as n, min(lifecycle) as lifecycle from accounts where name = 'Example Quiet'");
-  check('135. the outreach automation files the account (engaged, then meeting) and the person, on an Opportunities deal waiting on us that a booking moves to First meetings; the same person again adds nobody; a suppressed account stays so',
+  check('139. the outreach automation files the account (engaged, then meeting) and the person, on an Opportunities deal waiting on us that a booking moves to First meetings; the same person again adds nobody; a suppressed account stays so',
     made.stage === 'Opportunities' && made.waiting_on === 'us' && lakes.kind === 'prospect' && lakes.lifecycle === 'engaged' && lakes.owner_id === boss
       && lee.name === 'Lee Example' && lee.email === 'lee@example.com' && booked.stage === 'First meetings' && booked.lifecycle === 'meeting'
       && twinDeal.account_id === made.account_id && twinDeal.contact_ids[0] === made.contact_ids[0] && quiet.n === 1 && quiet.lifecycle === 'suppressed',
@@ -6616,35 +6840,35 @@ async function phase18(ctx) {
   return ctx;
 }
 
-// ── 0019: deal stage history ──────────────────────────────────────────────────────────────────────────────────────
+// ── 0020: deal stage history ──────────────────────────────────────────────────────────────────────────────────────
 
-async function phase19(ctx) {
+async function phase20(ctx) {
   const { alice, boss, david, hello, carol } = ctx;
 
-  // 136. Runs on top of 0018, whole, again, and statement by statement; ends with its done row; RLS and realtime; every
+  // 140. Runs on top of 0019, whole, again, and statement by statement; ends with its done row; RLS and realtime; every
   // existing deal gets one starting row (Won for one made a client), and a re-run adds none.
   await as(null);
-  const run = async () => db.exec(migration19).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const run = async () => db.exec(migration20).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
   const first = await run();
   const rowsNow = async () => (await one('select count(*)::int as n from deal_stage_history')).n;
   const afterFirst = await rowsNow();
   const second = await run();
   await as(null);
-  const splitErrors = await runSplit(db, migration19, { continueOnError: true });
+  const splitErrors = await runSplit(db, migration20, { continueOnError: true });
   const afterAgain = await rowsNow();
   const deals = (await one('select count(*)::int as n from deals')).n;
   const won = await one(`select h.to_stage, h.from_stage from deal_stage_history h join deals d on d.id = h.deal_id
     where d.client_id is not null limit 1`);
-  const body = migration19.replace(/--.*$/gm, '').trim();
+  const body = migration20.replace(/--.*$/gm, '').trim();
   const published = (await one("select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'deal_stage_history'")).n;
-  check('136. 0019 runs on top of 0018, re-runs whole and statement by statement, never mentions module_level, ends with its done row; one starting row per existing deal (Won once made a client), none added on a re-run',
-    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0019 applied' && Array.isArray(second) && !splitErrors.length
-      && /commit;\s*select 'Cortex 0019 applied' as done;$/i.test(body) && !migration19.includes('module_level') && published === 1
+  check('140. 0020 runs on top of 0019, re-runs whole and statement by statement, never mentions module_level, ends with its done row; one starting row per existing deal (Won once made a client), none added on a re-run',
+    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0020 applied' && Array.isArray(second) && !splitErrors.length
+      && /commit;\s*select 'Cortex 0020 applied' as done;$/i.test(body) && !migration20.includes('module_level') && published === 1
       && afterFirst === deals && afterAgain === afterFirst && won?.to_stage === 'Won' && won.from_stage === '',
     { first: Array.isArray(first) ? 'ok' : first, second: Array.isArray(second) ? 'ok' : second, splitErrors, afterFirst, afterAgain, deals, won });
   if (!Array.isArray(first)) return null;
 
-  // 137. The trigger: a new deal (from ''), each stage move, Make client (Won) — with who; other edits add nothing.
+  // 141. The trigger: a new deal (from ''), each stage move, Make client (Won) — with who; other edits add nothing.
   await as(boss);
   const id = (await one("insert into deals (name, stage) values ('Example History', 'Opportunities') returning id")).id;
   await db.query("update deals set next_step = 'Call', value = 10 where id = $1", [id]);
@@ -6652,11 +6876,11 @@ async function phase19(ctx) {
   const cl = (await one("insert into clients (name) values ('Example History') returning id")).id;
   await db.query('update deals set client_id = $2 where id = $1', [id, cl]);
   const history = (await rows('select from_stage, to_stage, changed_by from deal_stage_history where deal_id = $1 order by changed_at, from_stage', [id]));
-  check('137. the history: added (from nothing), moved, made a client (Won), each by who did it; other edits add nothing',
+  check('141. the history: added (from nothing), moved, made a client (Won), each by who did it; other edits add nothing',
     JSON.stringify(history.map((h) => [h.from_stage, h.to_stage])) === JSON.stringify([['', 'Opportunities'], ['Opportunities', 'Demos'], ['Demos', 'Won']])
       && history.every((h) => h.changed_by === boss), history);
 
-  // 138. Read only: Pipeline View reads it; nobody signed in writes it; inactive or Pipeline None sees none; it goes with
+  // 142. Read only: Pipeline View reads it; nobody signed in writes it; inactive or Pipeline None sees none; it goes with
   // its deal.
   await as(alice);
   const viewReads = (await rows('select id from deal_stage_history where deal_id = $1', [id])).length;
@@ -6670,32 +6894,32 @@ async function phase19(ctx) {
   await db.query('delete from deals where id = $1', [id]);
   await as(null);
   const left = (await one('select count(*)::int as n from deal_stage_history where deal_id = $1', [id])).n;
-  check('138. the history is read only (no insert, update or delete, even for admins), read with Pipeline view, none for an inactive profile; it goes with its deal',
+  check('142. the history is read only (no insert, update or delete, even for admins), read with Pipeline view, none for an inactive profile; it goes with its deal',
     viewReads === 3 && insert !== null && update !== null && adminDelete !== null && inactive === 0 && left === 0,
     { viewReads, insert, update, adminDelete, inactive, left });
   await db.query('delete from clients where id = $1', [cl]);
   return ctx;
 }
 
-async function phase20(ctx) {
+async function phase21(ctx) {
   const { alice, boss, hello, carol } = ctx;
 
-  // 139. Runs on top of 0019, whole, again, and statement by statement; ends with its done row; RLS on and realtime for
+  // 143. Runs on top of 0020, whole, again, and statement by statement; ends with its done row; RLS on and realtime for
   // all three tables.
   await as(null);
-  const run = async () => db.exec(migration20).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
+  const run = async () => db.exec(migration21).then((r) => r, async (e) => { await db.exec('rollback').catch(() => {}); return e.message; });
   const first = await run();
   const second = await run();
   await as(null);
-  const splitErrors = await runSplit(db, migration20, { continueOnError: true });
-  const body = migration20.replace(/--.*$/gm, '').trim();
+  const splitErrors = await runSplit(db, migration21, { continueOnError: true });
+  const body = migration21.replace(/--.*$/gm, '').trim();
   const tables = ['lead_lists', 'leads', 'suppressions'];
   const published = (await one(`select count(*)::int as n from pg_publication_tables where pubname = 'supabase_realtime'
     and tablename = any($1::text[])`, [tables])).n;
   const rls = (await one(`select count(*)::int as n from pg_class where relrowsecurity and relname = any($1::text[])`, [tables])).n;
-  check('139. 0020 runs on top of 0019, re-runs whole and statement by statement, never mentions module_level, ends with its done row; RLS on and realtime for its three tables',
-    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0020 applied' && Array.isArray(second) && !splitErrors.length
-      && /commit;\s*select 'Cortex 0020 applied' as done;$/i.test(body) && !migration20.includes('module_level') && published === 3 && rls === 3,
+  check('143. 0021 runs on top of 0020, re-runs whole and statement by statement, never mentions module_level, ends with its done row; RLS on and realtime for its three tables',
+    Array.isArray(first) && first.at(-1)?.rows?.[0]?.done === 'Cortex 0021 applied' && Array.isArray(second) && !splitErrors.length
+      && /commit;\s*select 'Cortex 0021 applied' as done;$/i.test(body) && !migration21.includes('module_level') && published === 3 && rls === 3,
     { first: Array.isArray(first) ? 'ok' : first, second: Array.isArray(second) ? 'ok' : second, splitErrors, published, rls });
   if (!Array.isArray(first)) return null;
 
@@ -6704,7 +6928,7 @@ async function phase20(ctx) {
   await db.query(`insert into module_access (user_id, module, level) values ($1, 'outreach', 'view'), ($2, 'outreach', 'none')
     on conflict (user_id, module) do update set level = excluded.level`, [alice, hello]);
 
-  // 140. Outreach Edit writes lists, leads and suppressions (who added a list is whoever did); a lead goes with its list;
+  // 144. Outreach Edit writes lists, leads and suppressions (who added a list is whoever did); a lead goes with its list;
   // a suppression is stored trimmed and lower case once per kind; a converted lead keeps its account and contact, cleared
   // when they go.
   await as(boss);
@@ -6720,12 +6944,12 @@ async function phase20(ctx) {
   await db.query("update leads set status = 'converted', account_id = $2, person_id = $3 where id = $1", [lead, acct, person]);
   await db.query('delete from accounts where id = $1', [acct]);
   const cleared = await one('select status, account_id, person_id from leads where id = $1', [lead]);
-  check('140. Outreach Edit writes lists, leads and suppressions (a list is added by whoever added it); one suppression per value, stored lower case; a lead keeps its status but loses a deleted account and contact',
+  check('144. Outreach Edit writes lists, leads and suppressions (a list is added by whoever added it); one suppression per value, stored lower case; a lead keeps its status but loses a deleted account and contact',
     list.created_by === boss && sup === 1 && dupSup !== null && upper !== null && badStatus !== null
       && cleared.status === 'converted' && cleared.account_id === null && cleared.person_id === null,
     { list, sup, dupSup, upper, badStatus, cleared });
 
-  // 141. Outreach View reads but never writes; Outreach None and an inactive profile see nothing.
+  // 145. Outreach View reads but never writes; Outreach None and an inactive profile see nothing.
   await as(alice);
   const viewLists = (await rows('select id from lead_lists')).length;
   const viewLeads = (await rows('select id from leads')).length;
@@ -6737,17 +6961,17 @@ async function phase20(ctx) {
   const noneSees = (await rows('select id from leads')).length + (await rows('select id from lead_lists')).length + (await rows('select id from suppressions')).length;
   await as(carol);
   const inactiveSees = (await rows('select id from leads')).length + (await rows('select id from suppressions')).length;
-  check('141. Outreach View reads lists, leads and the suppress list but changes none; Outreach None and an inactive profile see none',
+  check('145. Outreach View reads lists, leads and the suppress list but changes none; Outreach None and an inactive profile see none',
     viewLists >= 1 && viewLeads >= 1 && viewSup >= 1 && viewInsert !== null && viewUpdate === 0 && viewSupInsert !== null
       && noneSees === 0 && inactiveSees === 0,
     { viewLists, viewLeads, viewSup, viewInsert, viewUpdate, viewSupInsert, noneSees, inactiveSees });
 
-  // 142. Deleting a list deletes its leads.
+  // 146. Deleting a list deletes its leads.
   await as(boss);
   await db.query('delete from lead_lists where id = $1', [list.id]);
   const gone = (await one('select count(*)::int as n from leads where id = $1', [lead])).n;
   await db.query("delete from suppressions where value = 'example.net'");
-  check('142. deleting a list deletes its leads', gone === 0, { gone });
+  check('146. deleting a list deletes its leads', gone === 0, { gone });
 
   await as(null);
   await db.query("delete from module_access where module = 'outreach' and user_id = any($1::uuid[])", [[alice, hello]]);
@@ -6879,7 +7103,8 @@ try {
   const ctx18 = ctx17 && await phase18(ctx17);
   const ctx19 = ctx18 && await phase19(ctx18);
   const ctx20 = ctx19 && await phase20(ctx19);
-  if (ctx20) await syncWriteCheck(ctx20);
+  const ctx21 = ctx20 && await phase21(ctx20);
+  if (ctx21) await syncWriteCheck(ctx21);
   if (ctx6) await editorRunCheck();
 } catch (e) {
   check('the run finished without an unexpected error', false, e.message);

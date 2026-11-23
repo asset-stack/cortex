@@ -123,7 +123,7 @@ export default function Board({ board, embedded = false, title: named = '' }) {
   const showPerson = (id) => { const b = personalBoard(state, id); if (b) window.location.hash = boardHref(b); };
 
   // Team board options (admins). A menu choice moves focus to the options button first, so it gets focus back after.
-  // Not on Pipeline › Demos (§25, §26): it's in no Operations menu, so it has no place in their order, and isn't renamed or deleted here.
+  // Not on Pipeline › Demos (§25, §26): it's in no Projects menu, so it has no place in their order, and isn't renamed or deleted here.
   const options = !board.owner && !isDealTasks(board) && access.isAdmin;
   const team = teamBoards(state, board.module).filter((b) => !isDealTasks(b));
   const at = team.findIndex((b) => b.id === board.id);
@@ -217,7 +217,7 @@ export default function Board({ board, embedded = false, title: named = '' }) {
         <Popover anchor={optionsAnchor} open={popover === 'options'} onClose={() => setPopover(null)} width={190} align="right">
           <div className="flex flex-col">
             <button type="button" className={MENU_ITEM} onClick={fromMenu(() => setRenaming(true))}><Pencil className="h-4 w-4 dim" />Rename</button>
-            {/* The 3-month calendar above its tasks (0009; on for Posting schedule to start). */}
+            {/* The calendar of this month above its tasks (0009; on for Posting schedule to start; one month since §27). */}
             {dated && (
               <button type="button" className={MENU_ITEM} onClick={fromMenu(() => actions.setBoardCalendar(board.id, !board.calendar))}>
                 {board.calendar ? <CalendarOff className="h-4 w-4 dim" /> : <CalendarDays className="h-4 w-4 dim" />}

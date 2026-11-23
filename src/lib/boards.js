@@ -7,8 +7,8 @@ import { isDealTasks } from '../data/boards.js';
 
 export const BOARD_MODULES = ['projects', 'marketing', 'outreach', 'clients', 'pipeline'];
 // What each board module is called on screen (its menu, a task's breadcrumb, Settings → Team). Projects is shown as
-// Operations since §18 (its key, database and timesheet category stay 'projects' / Projects).
-export const MODULE_LABELS = { projects: 'Operations', marketing: 'Marketing', outreach: 'Outreach', clients: 'Clients', pipeline: 'Pipeline' };
+// Projects again since §29 (it was Operations from §18; its key, database and timesheet category stay 'projects').
+export const MODULE_LABELS = { projects: 'Projects', marketing: 'Marketing', outreach: 'Outreach', clients: 'Clients', pipeline: 'Pipeline' };
 // Modules whose boards sit on the module's own page, under its main content (Pipeline: Work in Progress under the
 // deals), rather than in the sidebar; the others list theirs as sub-menus.
 export const PAGE_BOARD_MODULES = ['pipeline'];
@@ -99,7 +99,7 @@ export function dropPlace(groups, itemId, spot = {}) {
 }
 
 // ── Department (docs/PHASE2.md §20): which part of the business a task belongs to, a board module ──
-// The colour of each department's pill (Operations, Marketing, Outreach and Clients as their work categories).
+// The colour of each department's pill (Projects, Marketing, Outreach and Clients as their work categories).
 export const DEPARTMENTS = { projects: '#579bfc', marketing: '#ff5ac4', outreach: '#fdab3d', clients: '#00c875', pipeline: '#784bd1' };
 /** A task's department (a board module): the one set on it, else its board's. */
 export const departmentOf = (board, item) => {
@@ -107,7 +107,7 @@ export const departmentOf = (board, item) => {
   return BOARD_MODULES.includes(v) ? v : areaOf(board); // Pipeline › Demos' own is Pipeline (§25)
 };
 /** The module a board shows under (its menu label in a breadcrumb or a card title): its own, but Pipeline for Deal tasks
- *  (an Operations board underneath, §25). */
+ *  (a Projects board underneath, §25). */
 export const areaOf = (board) => (isDealTasks(board) ? 'pipeline' : board?.module || '');
 /** What `values.department` keeps for department `key` on `board`: '' for the board's own (or an unknown one), so the
  *  stored value only says where a task differs from its board. */

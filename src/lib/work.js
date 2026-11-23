@@ -26,7 +26,7 @@ export const hasOwner = (board) => columns(board).some((c) => c.type === 'owner'
 export const hasPriority = (board) => columns(board).some((c) => c.key === 'priority');
 /** Whether a board's tasks can be linked to a client (a `client` column: the Clients boards). */
 export const hasClient = (board) => columns(board).some((c) => c.type === 'client');
-/** Whether a board's tasks can be linked to a deal (a `deal` column: Operations', Outreach's and Clients' team boards). */
+/** Whether a board's tasks can be linked to a deal (a `deal` column: Projects', Outreach's and Clients' team boards). */
 export const hasDeal = (board) => columns(board).some((c) => c.type === 'deal');
 /** Whether a board's tasks can have other people on them besides the owner (Also on: team boards with an owner). */
 export const hasAlso = (board) => columns(board).some((c) => c.type === 'also');
@@ -41,7 +41,7 @@ export const ownerOf = (item) => (Array.isArray(item?.values?.people) ? item.val
 // Also on: a clean list of user ids, each once, never the owner.
 const cleanAlso = (list, owner) => [...new Set((Array.isArray(list) ? list : []).filter((id) => id && typeof id === 'string'))]
   .filter((id) => id !== owner);
-/** Whether saving a task may email its owner (0017's triggers decide; this only says when to ask the google function
+/** Whether saving a task may email its owner (0018's triggers decide; this only says when to ask the google function
  *  to send): the task has an owner who isn't `me`, and either it's an update (`update`) or the owner is new (`before`,
  *  the owner before the save; undefined for a new task). Never for a done task being handed over, or Work in Progress. */
 export function mailsOwner(item, { me = '', before, update = false, module = '' } = {}) {
@@ -129,7 +129,7 @@ export const acceptedValues = (values, { me = '', now = new Date().toISOString()
 export const newTaskValues = (values = {}, { me = '', now = new Date().toISOString() } = {}) => nextValues(
   withPeople({ status: 'Not started', people: me ? [me] : [] }), values, { me, now });
 
-/** Where a task lives, for its breadcrumb: its department (the menu it's under: Operations, Marketing …) and board
+/** Where a task lives, for its breadcrumb: its department (the menu it's under: Projects, Marketing …) and board
  *  ("David’s notes" alone for a personal page), then its client when linked. */
 export function whereOf(state, board, item) {
   if (!board) return [];
@@ -212,7 +212,7 @@ export const topTasks = (rows, n = 3) => byStage(rows || [])
   .filter((g) => g.stage !== 'No priority').flatMap((g) => g.rows).slice(0, n);
 
 /**
- * Someone's task list by board (§20: My tasks): a card per board, Operations first (BOARD_MODULES order; within a
+ * Someone's task list by board (§20: My tasks): a card per board, Projects first (BOARD_MODULES order; within a
  * module, team boards in their order (`boards`: state.boards), then personal pages), each with its rows in the board's
  * own order (its groups in order, each group's tasks in order), split by group. Boards and groups with none of the rows
  * are left out. → [{ board, rows, groups: [{ group, rows }] }]
@@ -250,7 +250,7 @@ export function itemMatches(board, item, { q = '', person = '', status = '', dep
 }
 
 /**
- * Needs attention (admins, Dashboard): open tasks on the team boards with an owner column (Operations, Marketing,
+ * Needs attention (admins, Dashboard): open tasks on the team boards with an owner column (Projects, Marketing,
  * Outreach, Clients) that are overdue (due before `today`), Stuck, not accepted ACCEPT_WITHIN after being handed over
  * (by `now`), have no owner (nobody, or only people who can't edit the board: deactivated, or without access, so nobody
  * can take it on) or several people, or no priority. The ones with the most pressing reason first, then board order.
@@ -305,7 +305,7 @@ export function clientTasks(state, clientId, { viewer = state?.me } = {}) {
 }
 
 /** A deal's tasks (its profile's Tasks): its open tasks (`values.deal`) on Pipeline › Demos (§25, §26), and older ones on
- *  Operations or Outreach, on the boards the viewer sees, in board order. Clients boards have no Deal column (§26). → [{ item, board }]. */
+ *  Projects or Outreach, on the boards the viewer sees, in board order. Clients boards have no Deal column (§26). → [{ item, board }]. */
 export function dealTasks(state, dealId, { viewer = state?.me } = {}) {
   if (!dealId) return [];
   return (state?.boards || []).filter((b) => hasDeal(b) && b.module !== 'clients' && canViewBoard(state, b, viewer)).flatMap((board) => board.groups

@@ -1,4 +1,4 @@
-// Pipeline → Opportunities (docs/PHASE2.md §28): open deals on a board by stage (drag, or the stage select, to move one)
+// Pipeline → Opportunities (docs/PHASE2.md §31): open deals on a board by stage (drag, or the stage select, to move one)
 // or as a table, with search, owner, the Lead (LYCO or AssetStack, §21) and quick filters (needs me, waiting on us, stalled, lost),
 // and the numbers: open deals, the pipeline and its weighted value per currency, and deals made clients.
 import { useState } from 'react';

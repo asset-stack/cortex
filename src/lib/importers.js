@@ -57,13 +57,13 @@ export const FIELDS = {
     field('stage', 'Stage', 'text', ['stage', 'status', 'deal stage', 'pipeline stage', 'lead status']), // 'Lead Status' (CRM exports) is the stage, not the Lead
     field('contact', 'Owner', 'user', ['owner', 'contact', 'deal owner', 'assigned to', 'assignee', 'account manager']),
     field('next', 'Next step', 'text', ['next step', 'next steps', 'next action', 'next']),
-    // 0018: the deal's currency, expected close and account (else the account named like the deal).
+    // 0019: the deal's currency, expected close and account (else the account named like the deal).
     field('currency', 'Currency', 'text', ['currency', 'deal currency', 'currency code']),
     field('closeOn', 'Close date', 'date', ['close date', 'expected close', 'expected close date', 'closing date', 'close']),
     field('account', 'Account', 'text', ['account', 'account name', 'company', 'company name', 'organisation', 'organization'], { secondary: true }),
     field('source', 'Lead', 'text', ['lead', 'lead source', 'source', 'partner', 'channel']),
   ],
-  // The CRM (0018): organisations, then the people at them (by their account's name).
+  // The CRM (0019): organisations, then the people at them (by their account's name).
   accounts: [
     field('name', 'Name', 'text', ['name', 'account', 'account name', 'company', 'company name', 'organisation', 'organization', 'organisation name'], NAME),
     field('kind', 'Type', 'text', ['type', 'account type', 'company type', 'kind', 'relationship']),
@@ -89,7 +89,7 @@ export const FIELDS = {
     field('timezone', 'Time zone', 'text', ['time zone', 'timezone']),
     field('contact', 'Owner', 'user', ['owner', 'contact owner', 'assigned to']),
   ],
-  // Leads (0020): a prospect list from Apollo, LinkedIn or HubSpot (first and last name columns become Full name).
+  // Leads (0021): a prospect list from Apollo, LinkedIn or HubSpot (first and last name columns become Full name).
   leads: [
     field('name', 'Name', 'text', ['full name', 'name', 'contact name', 'contact', 'person'], NAME),
     field('title', 'Title', 'text', ['title', 'job title', 'position']),
@@ -323,7 +323,7 @@ function priority(v, allowP3) {
 // By name, so a stage added or moved can't shift them. Make client is on the last column; there's no Won.
 const [OPPORTUNITIES, CONTACTED, MEETINGS, DEMOS, PROPOSALS] = ['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Proposal sent'];
 const LAST = DEAL_STAGES[DEAL_STAGES.length - 1];
-// Lost or dead is Lost (0018). Negated ("Won't proceed", "Not signed", "Uncontacted") is back to Opportunities. Won, signed or client wording is the last
+// Lost or dead is Lost (0019). Negated ("Won't proceed", "Not signed", "Uncontacted") is back to Opportunities. Won, signed or client wording is the last
 // stage, where Make client is; a client or onboarding mention only once proposal, demo and meeting wording is ruled out ("Client
 // demo", "Onboarding call"). Proposal, quote, tender or contract wording is Proposal sent ("Quote sent" before Contacted's "sent");
 // demo, pilot or trial is Demos. Contacted, emailed or reached out is Contacted.

@@ -1,4 +1,4 @@
-// New deal and Edit deal (docs/PHASE2.md §14, §28): the account (one there is, or a new one by its name), the deal's
+// New deal and Edit deal (docs/PHASE2.md §14, §31): the account (one there is, or a new one by its name), the deal's
 // name (its account's unless it has its own), the people at that account on it, value and currency, close date,
 // probability (the stage's unless set), owner, priority, who it waits on, next step, stage (Lost with a reason), and on
 // editing Delete and Make client. Editing saves only what changed, so a change someone else (or the booking automation)

@@ -10,7 +10,7 @@ import LeadIcon from '@/components/LeadIcon';
 import { Links, NextSteps, Timeline } from './Profile';
 import { DaysInStage, Detail, Guardrails, OpenLink, PRIORITY_BG, TheirTime, WaitingPill } from './bits';
 
-/** A deal's profile (docs/PHASE2.md §19, §28): its stage, Lead (§21), owner, value and priority (Edit for Pipeline editors),
+/** A deal's profile (docs/PHASE2.md §19, §31): its stage, Lead (§21), owner, value and priority (Edit for Pipeline editors),
  *  its account (with its guardrails) and the people on it, close date, probability, who it waits on and for how long, then
  *  its tasks, timeline and links. Pipeline view reads it; Pipeline edit adds to it. Made a client, it all carries to the
  *  client. */

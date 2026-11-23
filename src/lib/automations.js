@@ -115,6 +115,13 @@ const adminRole = (state, userId) => {
   const u = (state.users || []).find((x) => x.id === userId);
   return Boolean(u) && u.active !== false && ['superadmin', 'admin'].includes(u.role); // isAdmin() in access.js
 };
+// The week a bank screenshot reminder is for, when it isn't the week of its day: one moved on from an earlier week
+// (0017) says so on the Dashboard ("week of 9 Nov"). → 'YYYY-MM-DD' (that Monday) or ''.
+export const bankWeekOf = (todo) => {
+  const week = todo?.source === 'automation' && String(todo.ref || '').startsWith('bank:') ? todo.ref.slice(5) : '';
+  return isYmd(week) && isYmd(todo.day) && week !== mondayOf(todo.day) ? week : '';
+};
+
 const hasAutomation = (state, assignee, ref, day) => state.todos
   .some((t) => t.source === 'automation' && t.assignee === assignee && t.ref === ref && t.day === day);
 
@@ -125,7 +132,8 @@ const RUNS_KEPT_DAYS = 14;
 // a Monday the bank screenshot reminder until that week's statement is in, and "Approve invoices" while any invoice
 // awaits approval (0004). A routine runs once per person and day
 // (state.routineRuns, '<day>|<routine id>|<user id>', as the routine_runs table does in the database), so a to-do
-// deleted or moved to another day doesn't come back. → to-dos added.
+// deleted or moved to another day doesn't come back. Reminders follow the day (0017, docs/PHASE2.md §27): their undone
+// automation to-dos from earlier days move to `day`, after its to-dos. → to-dos added or moved.
 export function ensureTodosLocal(state, day = localYmd(), { me = state.me, uid: newId = uid } = {}) {
   const user = (state.users || []).find((u) => u.id === me);
   if (!isYmd(day) || !user || user.active === false) return 0;
@@ -160,7 +168,7 @@ export function ensureTodosLocal(state, day = localYmd(), { me = state.me, uid: 
     added++;
   }
 
-  // One undone reminder at a time: it carries over (My Work's carried-over list) instead of a new one each day.
+  // One undone reminder at a time: an undone one moves on to the day (below) instead of a new one each day.
   const approve = `approve:${day}`;
   if (adminRole(state, me) && (state.clients || []).some((c) => (c.invoices || []).some((i) => i.status === 'Awaiting approval'))
     && !hasAutomation(state, me, approve, day)
@@ -170,6 +178,27 @@ export function ensureTodosLocal(state, day = localYmd(), { me = state.me, uid: 
     }, newId));
     added++;
   }
+
+  // Reminders follow the day (0017): the Dashboard lists only the day's to-dos, so an undone automation to-do from an
+  // earlier day (Approve invoices, the bank screenshot, Prepare contract, a follow-up) moves to `day`, at the end of its
+  // list, oldest first, keeping its ref. One per ref (the newest: a contact can have follow-ups on several days, and a
+  // person has one to-do per ref and day), none when that ref already has a to-do on `day` or later. Routine and other
+  // to-dos stay put.
+  const ahead = new Set(state.todos.filter((t) => t.source === 'automation' && t.assignee === me && t.day >= day).map((t) => t.ref));
+  const newest = new Map(); // ref → { t, position }
+  state.todos.forEach((t, position) => {
+    if (t.source !== 'automation' || t.assignee !== me || t.done || !isYmd(t.day) || t.day >= day || ahead.has(t.ref)) return;
+    const was = newest.get(t.ref);
+    if (!was || t.day > was.t.day || (t.day === was.t.day && position > was.position)) newest.set(t.ref, { t, position });
+  });
+  [...newest.values()]
+    .sort((a, b) => cmp(a.t.day, b.t.day) || a.position - b.position)
+    .forEach(({ t }) => {
+      state.todos.splice(state.todos.indexOf(t), 1);
+      t.day = day;
+      state.todos.push(t);
+      added++;
+    });
   return added;
 }
 
@@ -199,15 +228,15 @@ export const PIPELINE_STATUSES = ['Replied', 'Meeting booked'];
 // No automatic row for a deal reaching Demos any more (§26: 0016 drops 0014's deal_demo_row); a deal's tasks are added
 // on it (Add task) and live on Pipeline › Demos.
 
-// The stages a booking moves a deal on from (0008's contact_pipeline(), kept by 0018's).
+// The stages a booking moves a deal on from (0008's contact_pipeline(), kept by 0019's).
 const EARLY_STAGES = ['Opportunities', 'Contacted'];
 const norm = (s) => String(s ?? '').trim().toLowerCase();
 
-/** A deal's fields from 0018 on, as a new deal starts (the database's defaults; reached its stage `at`). */
+/** A deal's fields from 0019 on, as a new deal starts (the database's defaults; reached its stage `at`). */
 export const dealDefaults = (at = new Date().toISOString()) => ({
   accountId: '', contactIds: [], currency: 'AUD', closeOn: '', probability: null, waitingOn: '', lostReason: '', stageAt: at,
 });
-/** An account's fields as a new one starts (0018's defaults). */
+/** An account's fields as a new one starts (0019's defaults). */
 export const accountDefaults = (at = new Date().toISOString()) => ({
   kind: 'prospect', lifecycle: 'new', lifecycleNote: '', revisitOn: '', sector: '', country: '', region: '', timezone: '', domain: '',
   website: '', size: '', guardrails: '', prepUrl: '', referredBy: '', owner: '', clientId: '', createdAt: at,
@@ -240,13 +269,14 @@ function personFor(state, account, { name = '', email = '', owner = '' }, newId)
   return c;
 }
 
-// The contact_pipeline trigger (0018), for a contact whose status was `prevStatus` ('' for a new contact). When it
+// The contact_pipeline trigger (0019), for a contact whose status was `prevStatus` ('' for a new contact). When it
 // becomes Replied or Meeting booked: its organisation's account (found by name, or a new prospect; its lifecycle moves
 // on as lifecycleAfter() says) and the person as its contact; a deal for it (named after the organisation, owned by the
-// contact's owner or `me`, waiting on us, with the person on it), or its deal moves from Opportunities or Contacted to First meetings on
-// a booking (never back from later on); and the owner gets a follow-up to-do for `day`, by default the owner's own today
-// (user_today()), once per contact and day. → { deal, todo } (todo null when it already existed), or null when nothing
-// applies.
+// contact's owner or `me`, waiting on us, with the person on it), or its deal moves from Opportunities or Contacted to
+// First meetings on a booking (never back from later on); and the owner gets a follow-up to-do for `day`, by default the
+// owner's own today (user_today()), once per contact, stage and day: "Follow up: … replied" is contact:<id>, "Prepare:
+// meeting with …" meeting:<id> (0017), so a follow-up already on the day doesn't stop the booking's. An existing to-do is
+// never changed. → { deal, todo } (todo null when it already existed), or null when nothing applies.
 export function contactPipelineLocal(state, contactId, prevStatus = '', { day, me = state.me, uid: newId = uid } = {}) {
   const c = (state.contacts || []).find((x) => x.id === contactId);
   if (!c || !PIPELINE_STATUSES.includes(c.status) || c.status === prevStatus) return null;
@@ -279,7 +309,7 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day, m
   }
 
   let todo = null;
-  const ref = `contact:${c.id}`;
+  const ref = `${booked ? 'meeting' : 'contact'}:${c.id}`;
   if (owner && !hasAutomation(state, owner, ref, day)) {
     todo = makeTodo({
       assignee: owner, createdBy: me, title: booked ? `Prepare: meeting with ${name}` : `Follow up: ${name} replied`,
@@ -290,7 +320,7 @@ export function contactPipelineLocal(state, contactId, prevStatus = '', { day, m
   return { deal, todo };
 }
 
-// ── Deal stage history (0019) ───────────────────────────────────────────────────────────────────────────────────
+// ── Deal stage history (0020) ───────────────────────────────────────────────────────────────────────────────────
 
 /** Demo mode's log_deal_stage trigger: a row when a deal is added (from ''), moves stage, or is made a client (to 'Won').
  *  → the row, or null when nothing moved. */
@@ -301,7 +331,7 @@ export function logStageLocal(state, deal, from, to, { by = state.me || '', at =
   return h;
 }
 
-/** 0019's one-off step: a starting row for each deal with none (its stage, or Won once made a client, when it reached it). */
+/** 0020's one-off step: a starting row for each deal with none (its stage, or Won once made a client, when it reached it). */
 export function historyBackfillLocal(state, { uid: newId = uid } = {}) {
   state.dealHistory ||= [];
   const has = new Set(state.dealHistory.map((h) => h.dealId));
@@ -312,7 +342,7 @@ export function historyBackfillLocal(state, { uid: newId = uid } = {}) {
   return state;
 }
 
-/** 0018's one-off steps for demo data saved before it: every client a customer account, every deal its account (its client's, else the one with its name, else a new one), and
+/** 0019's one-off steps for demo data saved before it: every client a customer account, every deal its account (its client's, else the one with its name, else a new one), and
  *  a deal from an outreach contact that person as its contact. Safe to run again (nothing is left to do). */
 export function crmBackfillLocal(state, { uid: newId = uid } = {}) {
   state.accounts ||= [];

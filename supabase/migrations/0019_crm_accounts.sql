@@ -1,5 +1,5 @@
--- Cortex 0018: the CRM: accounts, their contacts, and more on each deal (docs/PHASE2.md §28). Run in the Supabase SQL
--- editor after 0017, BEFORE the app version that uses it goes live (it writes the new
+-- Cortex 0019: the CRM: accounts, their contacts, and more on each deal (docs/PHASE2.md §31). Run in the Supabase SQL
+-- editor after 0018 (0017 live), BEFORE the app version that uses it goes live (it writes the new
 -- deal columns; the app now live keeps working with it). Safe to re-run, also statement by statement (the SQL editor may
 -- run it that way): no statement relies on another having run in the same transaction or session.
 --
@@ -221,7 +221,7 @@ create policy crm_select on public.crm_entries for select to authenticated
 
 -- 6. The outreach automation: the account and the person too ------------------------------------
 
--- As 0008, plus: the contact's organisation is found (by name) or added as an account (a prospect, engaged or meeting),
+-- As 0008 (with 0017's to-do refs: a booking's Prepare to-do is meeting:<id>, a reply's follow-up contact:<id>), plus: the contact's organisation is found (by name) or added as an account (a prospect, engaged or meeting),
 -- an earlier lifecycle moves on (never back, never over customer, nurture, an RFP, not now or suppressed), and the person
 -- is found (by email, else by name) or added as its contact and put on the deal. A reply makes an Opportunities deal waiting
 -- on us; a booking moves Opportunities or Contacted on to First meetings (never back from later on), as 0008.
@@ -288,7 +288,7 @@ begin
     values (
       v_owner,
       case when v_booked then 'Prepare: meeting with ' || v_name else 'Follow up: ' || v_name || ' replied' end,
-      v_day, 'Outreach', 'automation', 'contact:' || new.id,
+      v_day, 'Outreach', 'automation', case when v_booked then 'meeting:' else 'contact:' end || new.id, -- as 0017
       public.next_todo_position(v_owner, v_day))
     on conflict do nothing;
   end if;
@@ -357,4 +357,4 @@ end $$;
 
 commit;
 
-select 'Cortex 0018 applied' as done;
+select 'Cortex 0019 applied' as done;

@@ -38,7 +38,7 @@ const item = (name, values, extra = {}) => ({
 
 // Projects: everyone's own page, then the team boards; Marketing, Outreach, Clients and Pipeline: their team boards
 // (docs/PHASE2.md §11).
-// calendar (0009): Posting schedule starts with its 3-month calendar above its tasks, as 0009 sets it once in the database.
+// calendar (0009): Posting schedule starts with its calendar of this month above its tasks, as 0009 sets it once in the database.
 const board = (module, name, groups, owner = '') => ({
   id: id('b'), module, name: owner ? '' : name, owner, calendar: !owner && module === 'marketing' && name === 'Posting schedule', groups,
 });
@@ -102,7 +102,7 @@ function boards(clientId = () => '', dealId = () => '') {
         item('Outsource time logger', { people: ['david'], status: 'Done', priority: 'Low', due: '2026-10-09' }),
       ]),
     ]),
-    // Pipeline › Demos (§25, §26): the deals' tasks; an Operations board underneath, with its fixed id, under Pipeline in
+    // Pipeline › Demos (§25, §26): the deals' tasks; a Projects board underneath, with its fixed id, under Pipeline in
     // the sidebar. Clients › Demos' groups came here (0016).
     { ...board('projects', 'Demos', [
       group('Next steps', '#c9ffe6', [
@@ -127,33 +127,33 @@ function boards(clientId = () => '', dealId = () => '') {
     board('marketing', 'Posting schedule', [
       group('October', '#bfe9ff', [
         item('LinkedIn weekly engagement', { people: ['hello'], status: 'Not started', priority: 'Medium', type: 'Industry', channel: 'LinkedIn', approval: '', due: '2026-10-31' }),
-        item('Golf Day promotion', { people: [], status: 'In progress', priority: 'High', type: 'Sponsorship', channel: 'LinkedIn', approval: '', due: '2026-10-12' }),
+        item('Golf Day promotion', { people: [], status: 'In progress', priority: 'High', type: 'Industry', channel: 'LinkedIn', approval: '', due: '2026-10-12' }),
         item('Team on site', { people: ['david'], status: 'Done', priority: 'Medium', type: 'Industry', channel: 'LinkedIn', approval: 'No', due: '2026-10-15' }),
         item('Golf Day content', { people: ['hello'], status: 'Done', priority: 'High', type: 'Industry', channel: 'Content', approval: '', due: '2026-10-16' }),
-        item('Bridge project spotlight', { people: ['david'], status: 'Not started', type: 'Projects', channel: 'Website', approval: '', due: '2026-10-20' }),
-        item('Monthly award', { people: ['josh'], status: 'Stuck', priority: 'Low', type: 'Staff internal', channel: 'LinkedIn', approval: 'No', due: '2026-10-28' }),
-        item('Sponsorship announcement', { people: ['david'], status: 'Not started', priority: 'High', type: 'Sponsorship', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-24' }),
+        item('Bridge project spotlight', { people: ['david'], status: 'Not started', type: 'Clients', channel: 'Website', approval: '', due: '2026-10-20' }),
+        item('Monthly award', { people: ['josh'], status: 'Stuck', priority: 'Low', type: 'Internal', channel: 'LinkedIn', approval: 'No', due: '2026-10-28' }),
+        item('Sponsorship announcement', { people: ['david'], status: 'Not started', priority: 'High', type: 'Industry', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-24' }),
       ]),
       group('November', '#ead9ff', [
-        item('LinkedIn weekly engagement', { people: [], status: 'Not started', priority: 'Medium', type: 'Projects', channel: 'LinkedIn', approval: '', due: '2026-11-30' }),
-        item('Westbay case study', { people: ['hello'], status: 'Not started', priority: 'High', type: 'Projects', channel: 'Website', approval: 'Pending', due: '2026-11-14' },
+        item('LinkedIn weekly engagement', { people: [], status: 'Not started', priority: 'Medium', type: 'Other', channel: 'LinkedIn', approval: '', due: '2026-11-30' }),
+        item('Westbay case study', { people: ['hello'], status: 'Not started', priority: 'High', type: 'Clients', channel: 'Website', approval: 'Pending', due: '2026-11-14' },
           { updates: [{ id: id('u'), user: 'david', text: '@Hello can you add the October usage numbers?', ts: hoursAgo(5) }] }),
         item('G2 + Google reviews', { people: ['david'], status: 'Not started', priority: 'Low', type: 'Industry', channel: 'Reviews', approval: '', due: '2026-11-21' }),
         item('Council landing page', {
-          people: ['hello'], status: 'Not started', priority: 'Medium', type: 'Projects', channel: 'Content', approval: '', due: '2026-11-25',
+          people: ['hello'], status: 'Not started', priority: 'Medium', type: 'Clients', channel: 'Content', approval: '', due: '2026-11-25',
           assignedBy: 'david', assignedAt: hoursAgo(4),
         }),
       ]),
     ]),
     board('marketing', 'Campaigns', [
       group('This quarter', '#ead9ff', [
-        item('Council digital twin campaign', { people: ['david'], status: 'Not started', priority: 'High', type: 'Projects', channel: 'LinkedIn', approval: 'Pending', due: '2026-11-28' }),
+        item('Council digital twin campaign', { people: ['david'], status: 'Not started', priority: 'High', type: 'Features', channel: 'LinkedIn', approval: 'Pending', due: '2026-11-28' }),
         item('Utilities email campaign', { people: ['josh'], status: 'Not started', priority: 'Medium', type: 'Industry', channel: 'Content', approval: '', due: '2026-12-05' }),
       ]),
     ]),
     board('marketing', 'Events', [
       group('Upcoming', '#ffe6b0', [
-        item('Golf Day', { people: ['hello'], status: 'Done', priority: 'High', type: 'Sponsorship', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-12' }),
+        item('Golf Day', { people: ['hello'], status: 'Done', priority: 'High', type: 'Industry', channel: 'LinkedIn', approval: 'Yes', due: '2026-10-12' }),
         item('Local government conference stand', { people: ['david'], status: 'Not started', priority: 'Medium', type: 'Industry', channel: 'Website', approval: '', due: '2026-11-19' }),
       ]),
     ]),
@@ -222,7 +222,7 @@ function crmDemo(deals, clients) {
   ];
 }
 
-// A deal; `days` in its stage so far (0018: the board flags 14 and more as stalled); `source` its Lead (0013).
+// A deal; `days` in its stage so far (0019: the board flags 14 and more as stalled); `source` its Lead (0013).
 // The demo CRM's accounts and people (placeholders only), on the accounts crmBackfillLocal() made from the deals and
 // clients: kinds, lifecycles, time zones, guardrails, a partner who referred one, a nurture and a suppressed account.
 function crmAccountsDemo(state, today) {
@@ -287,7 +287,7 @@ function crmAccountsDemo(state, today) {
   }
 }
 
-// Where the demo deals have been (0019's history): each came in at Opportunities and moved a stage every week or so to
+// Where the demo deals have been (0020's history): each came in at Opportunities and moved a stage every week or so to
 // where it is now (reached at its stageAt); the lost ones from earlier stages, the one made a client then Won.
 const LOST_FROM = { 'Lakeview Shire': 'Demos', 'Pinecrest Council': 'Opportunities', 'Hillcrest Shire': 'First meetings' };
 function demoHistory(deals) {
@@ -650,7 +650,7 @@ export function demoMeetings(today) {
     const start = new Date(`${day}T${utc}:00Z`);
     const end = new Date(start.getTime() + minutes * 60e3);
     return {
-      id: `gm-${key}`, user_id: user, title: busy ? '' : title, busy, all_day: false, start_date: start.toISOString().slice(0, 10),
+      id: `gm-${key}`, user_id: user, google_id: `g-${key}`, title: busy ? '' : title, busy, all_day: false, start_date: start.toISOString().slice(0, 10),
       end_date: end.toISOString().slice(0, 10), start_at: start.toISOString(), end_at: end.toISOString(),
     };
   };
@@ -660,13 +660,14 @@ export function demoMeetings(today) {
     timed('3', 'david', 'Westbay onboarding call', addDays(monday, 1), '23:00', 60), // Wednesday 10:00 Sydney
     timed('4', 'josh', 'Dentist', addDays(monday, 2), '08:00', 60, true),
     timed('5', 'hello', 'Content shoot', addDays(monday, 3), '01:00', 120),
-    { id: 'gm-6', user_id: 'hello', title: 'Leave', busy: false, all_day: true, start_date: addDays(nextMonth, 6), end_date: addDays(nextMonth, 8),
+    { id: 'gm-6', user_id: 'hello', google_id: 'g-6', title: 'Leave', busy: false, all_day: true, start_date: addDays(nextMonth, 6), end_date: addDays(nextMonth, 8),
       start_at: null, end_at: null },
     timed('7', 'david', 'Harbour Construction demo', addDays(nextMonth, 12), '00:30', 60),
+    timed('8', 'josh', 'Weekly pipeline review', today, '03:00', 45), // today, so the Dashboard's meetings show one (§27)
   ];
 }
 
-// Leads (0020) for demo mode: a list pulled from Apollo whose first leads the agent has already emailed (their outreach
+// Leads (0021) for demo mode: a list pulled from Apollo whose first leads the agent has already emailed (their outreach
 // rows give the contact history), new ones not yet sent, one at a suppressed domain, one at an account suppressed in the
 // CRM, one already a CRM contact, and a second, smaller list with a repeat. Fictional people and organisations.
 export function leadsDemo(state, today, idf = (p) => `${p}_${uid()}`) {
@@ -787,6 +788,12 @@ export function createSeed() {
     org: { ...ORG },
     boards: boards((name) => seedClients.find((c) => c.name === name)?.id || '', (name) => deals.find((dl) => dl.name === name)?.id || ''),
     crmEntries: crmDemo(deals, seedClients),
+    // My list (0017, §27): David's own lines at the top of his Dashboard (each person sees only theirs).
+    myList: [
+      { id: id('ml'), user: 'david', text: 'Call Stu about the cement demo', done: false, position: 0, createdAt: hoursAgo(26) },
+      { id: id('ml'), user: 'david', text: 'Ideas for the webinar deck', done: false, position: 1, createdAt: hoursAgo(20) },
+      { id: id('ml'), user: 'david', text: 'Send Josh the meeting notes', done: true, position: 2, createdAt: hoursAgo(5) },
+    ],
     deals,
     clients: seedClients,
     contacts,
@@ -808,8 +815,8 @@ export function createSeed() {
     routineRuns: [], // demo only: the routine runs ensureTodosLocal has made (routine_runs in the database)
     seededBoards: [...BOARD_MODULES, 'dealTasks', 'pipelineDemos'], // demo only: modules whose starting boards this demo has (migrate() adds new ones once; 'dealTasks' §25, 'pipelineDemos' §26)
     calendarSeeded: true, // demo only: Posting schedule's calendar was switched on (migrate() does it once for older data)
-    crmSeeded: true, // demo only: 0018's one-off steps are done (migrate() does them once for older data)
-    historySeeded: true, // demo only: 0019's starting rows are done (migrate() does them once for older data)
+    crmSeeded: true, // demo only: 0019's one-off steps are done (migrate() does them once for older data)
+    historySeeded: true, // demo only: 0020's starting rows are done (migrate() does them once for older data)
     calendarEvents: demoCalendarEvents(today, id),
     payments: [
       { id: id('pay'), invoiceId: invoiceNo(westbay, 'INV-1012'), clientId: westbay.id, amount: 5000, receivedOn: '2026-10-07', reference: 'Part payment INV-1012', statementId: statement.id },
@@ -838,7 +845,7 @@ export function createSeed() {
     }),
   };
 
-  // The CRM (0018): every client and deal its account, then the demo accounts' details and people.
+  // The CRM (0019): every client and deal its account, then the demo accounts' details and people.
   crmBackfillLocal(state, { uid: () => id('ac') });
   crmAccountsDemo(state, today);
   state.dealHistory = demoHistory(state.deals);
@@ -850,7 +857,7 @@ export function createSeed() {
   generateDueInvoicesLocal(state, today, { uid: () => id('i') }); // Westbay's licence for this month: Awaiting approval
   contactPipelineLocal(state, contactId('Quinn Avery'), 'Sent', { ...opts, day: today, me: 'josh', uid: () => id('d') });
 
-  // Hello's last working day: routines done except one, which carries over.
+  // Hello's last working day: routines done except one, left undone (the Dashboard lists only the day's to-dos, §27).
   ensureTodosLocal(state, lastWorkday, { ...opts, me: 'hello' });
   state.todos.forEach((t) => {
     if (t.day === lastWorkday && t.title !== 'Check outreach replies') Object.assign(t, { done: true, doneAt: `${lastWorkday}T07:00:00.000Z` });
@@ -869,7 +876,7 @@ export function createSeed() {
 }
 
 const COLLECTIONS = ['moduleAccess', 'todos', 'routines', 'payments', 'bankStatements', 'expenses', 'subscriptions', 'timeEntries', 'tools',
-  'crmEntries', 'accounts', 'crmContacts', 'dealHistory', 'leadLists', 'leads', 'suppressions'];
+  'crmEntries', 'myList', 'accounts', 'crmContacts', 'dealHistory', 'leadLists', 'leads', 'suppressions'];
 
 // Brings demo data saved by older builds (localStorage) up to the current shape. Safe to run more than once.
 export function migrate(data) {
@@ -929,7 +936,7 @@ export function migrate(data) {
     }
     data.seededBoards.push(module);
   });
-  // Pipeline › Deal tasks (§25, 0015): older demo data gets the board once, after Operations' team boards.
+  // Pipeline › Deal tasks (§25, 0015): older demo data gets the board once, after Projects' team boards.
   if (!data.boards.some((b) => b.id === DEAL_TASKS_BOARD) && !data.seededBoards.includes('dealTasks')) {
     const at = data.boards.findLastIndex((b) => b.module === 'projects' && !b.owner) + 1;
     data.boards.splice(at, 0, { id: DEAL_TASKS_BOARD, module: 'projects', name: 'Deal tasks', owner: '', calendar: false,
@@ -993,7 +1000,7 @@ export function migrate(data) {
   if (!data.outreachGmail || typeof data.outreachGmail !== 'object') Object.assign(data, outreachGmailDemo(data.outreachEmails, data.mailboxes, localYmd()));
   data.outreachThreads ??= [];
   data.outreachMessages ??= [];
-  // Calendar (0009): Posting schedule's 3-month calendar is switched on once (as 0009 does), so switching it off stays off;
+  // Calendar (0009): Posting schedule's calendar is switched on once (as 0009 does), so switching it off stays off;
   // older demo data gets the demo team events.
   if (!data.calendarSeeded) {
     data.boards.filter((b) => b.module === 'marketing' && !b.owner && b.name === 'Posting schedule').forEach((b) => { b.calendar = true; });
@@ -1001,19 +1008,19 @@ export function migrate(data) {
   }
   if (!Array.isArray(data.calendarEvents)) data.calendarEvents = demoCalendarEvents(localYmd());
   if (typeof data.outreachSheet !== 'string') data.outreachSheet = '';
-  // The CRM (0018), once (as its migration does): stages renamed, every client and deal its account, a deal's outreach
+  // The CRM (0019), once (as its migration does): stages renamed, every client and deal its account, a deal's outreach
   // contact on it. Once only, so a deal taken off its account stays off.
   if (!data.crmSeeded) {
     crmBackfillLocal(data);
     data.crmSeeded = true;
   }
   (data.crmEntries || []).forEach((e) => { e.accountId ??= ''; e.contactId ??= ''; });
-  // Stage history (0019), once: where each deal stands.
+  // Stage history (0020), once: where each deal stands.
   if (!data.historySeeded) {
     historyBackfillLocal(data);
     data.historySeeded = true;
   }
-  // Leads (0020): older demo data gets the demo lists once.
+  // Leads (0021): older demo data gets the demo lists once.
   if (!data.leadsSeeded) {
     if (!(data.leadLists || []).length) Object.assign(data, leadsDemo(data, localYmd()));
     data.leadsSeeded = true;

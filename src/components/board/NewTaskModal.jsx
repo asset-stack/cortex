@@ -12,7 +12,7 @@ import { ClientPicker, DealPicker, LabelPicker, Modal, OwnerPicker, PeoplePicker
  * board who else is on it and its department (§20: the board's unless picked). A task made for someone else waits on
  * them to accept it. `owner` / `clientId` / `dealId` preset those (a Team page, a client, a deal's
  * next step); `modules` narrows where it can go (a client: Clients boards; a deal: Pipeline › Demos, §25/§26, or without
- * it the Operations and Outreach boards with a Deal column). Pipeline › Demos takes only a deal's tasks. `title`: the
+ * it the Projects and Outreach boards with a Deal column). Pipeline › Demos takes only a deal's tasks. `title`: the
  * dialog's. Closes when it's added.
  */
 export default function NewTaskModal({ onClose, owner: forOwner = '', clientId = '', dealId = '', modules = null, title = 'New task' }) {

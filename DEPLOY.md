@@ -75,7 +75,7 @@ then `0006_boards.sql` (the boards under Projects and Marketing, and each person
 `0007_outreach.sql` (Outreach, read from the outreach agent's Google Sheet, see section 12; and the boards under
 Outreach and Clients, `docs/PHASE2.md` §13), then `0008_pipeline_stages.sql` (Pipeline's stages: Opportunities →
 Contacted → First meetings → Demos, and Work in Progress under the deals; `docs/PHASE2.md` §14), then
-`0009_calendar.sql` (the team Calendar and the boards' 3-month calendar; Google meetings need section 13;
+`0009_calendar.sql` (the team Calendar and the boards' calendar, of this month since `docs/PHASE2.md` §27; Google meetings need section 13;
 `docs/PHASE2.md` §15), then `0010_outreach_gmail.sql` (Outreach counted from each mailbox's Gmail; section 14;
 `docs/PHASE2.md` §16), then `0011_team_access_read.sql` (everyone reads everyone's access levels, for the Team pages;
 `docs/PHASE2.md` §18), then `0012_crm_profile.sql` (a deal's and a client's profile: meetings, notes and links;
@@ -84,15 +84,20 @@ Contacted → First meetings → Demos, and Work in Progress under the deals; `d
 Demos by itself; no table or column, so it can run before or after its release; check it with
 `select tgname from pg_trigger where tgname = 'deal_demo_row';`; `docs/PHASE2.md` §23), then `0015_deal_tasks_board.sql`
 (Pipeline › Deal tasks, where a deal's next steps live; no table or column, so the new app opens without it; run it
-**after** its release is live, because the app before it would show Deal tasks as an ordinary Operations board, in the
+**after** its release is live, because the app before it would show Deal tasks as an ordinary Projects board, in the
 menu and in every New task;
 check it with `select name from public.boards where id = 'dea15000-0000-4000-8000-000000000001';`, one row `Deal tasks`;
 `docs/PHASE2.md` §25), then `0016_pipeline_demos.sql` (Pipeline › Demos: 0015's board renamed Demos, Clients › Demos'
 groups and tasks moved onto it, and 0014's automatic row dropped; run it after its release is live; no table or column;
 check it with the same query, now one row `Demos`, and
-`select count(*) from public.boards where module = 'clients' and name = 'Demos';`, 0; `docs/PHASE2.md` §26). 0014 then
-has nothing left to do: a project that hasn't run it can skip it (running it after 0016 would bring the automatic row
-back).
+`select count(*) from public.boards where module = 'clients' and name = 'Demos';`, 0; `docs/PHASE2.md` §26), then
+`0017_my_list.sql` (My list, each person's own list at the top of their Dashboard, and reminders that follow the day:
+`ensure_todos` moves an unticked Approve invoices or follow-up to-do to today, and `contact_pipeline` gives a booking
+its own Prepare to-do; run it **before** publishing its release, and publish straight after the check (the app live
+before it copes with it; the new app without it opens, hides My list and tells admins to run it, but keeps unticked
+reminders out of sight); check it with `select to_regclass('public.my_list');`, which gives `my_list`;
+`docs/PHASE2.md` §27). 0014 then has nothing left to do: a project that hasn't run it can skip it (running it
+after 0016 would bring the automatic row back).
 
 **0013 must run before the release that needs it is published.** It adds a column (`source`) to `deals` and
 `clients`, and that release saves it with every deal and client: until the file has run, those saves fail. Run it, check
@@ -100,13 +105,14 @@ it, then publish:
 `select table_name from information_schema.columns where table_schema = 'public' and column_name = 'source' and table_name in ('deals', 'clients');`
 must return two rows (`clients`, `deals`).
 
-Then `0017_task_emails.sql` (a task's owner is emailed when a task is handed to them or an update
-is posted on it; section 15; `docs/PHASE2.md` §27), then `0018_crm_accounts.sql` (the CRM: accounts, contacts, and currencies, close dates and
-Lost on deals; `docs/PHASE2.md` §28), then `0019_deal_history.sql` (every deal's stage history, for its timeline and
-the Pipeline reports; `docs/PHASE2.md` §28), then `0020_leads.sql` (Leads: prospect lists and the suppress list;
-`docs/PHASE2.md` §29).
+Then `0018_task_emails.sql` (a task's owner is emailed when a task is handed to them or an update
+is posted on it; section 15; `docs/PHASE2.md` §30), then `0019_crm_accounts.sql` (the CRM: accounts, contacts, and currencies, close dates and
+Lost on deals; `docs/PHASE2.md` §31), then `0020_deal_history.sql` (every deal's stage history, for its timeline and
+the Pipeline reports; `docs/PHASE2.md` §31), then `0021_leads.sql` (Leads: prospect lists and the suppress list;
+`docs/PHASE2.md` §32).
 
-Later schema changes arrive as new numbered files in `supabase/migrations/` (`0015_…`). Run each new file
+
+Later schema changes arrive as new numbered files in `supabase/migrations/` (`0018_…`). Run each new file
 once, in order, the same way. Never run an older file after a newer one. From `0013`, each file ends with a line that
 prints `Cortex 00NN applied`: if the SQL editor doesn't show that row, the file didn't finish (look for the error above
 it). To check that a file with a new table ran, `select to_regclass('public.<table>');` shows the table's name, or
@@ -208,27 +214,27 @@ with a link to their notes, and links), and gives a deal's entries to its client
 existing changes: a client's older notes show in its timeline as they are. Run it **before** the new app goes live (the
 app that's live now works with it). Nobody needs to close Cortex, and it is safe to run again.
 
-**0017 on an existing database**: run it after `0012`, the same way (`supabase/migrations/0017_task_emails.sql`;
-until merged, take it from its branch on GitHub). The last row shows `Cortex 0017 applied`. It adds the task email queue
+**0018 on an existing database**: run it after `0012`, the same way (`supabase/migrations/0018_task_emails.sql`;
+until merged, take it from its branch on GitHub). The last row shows `Cortex 0018 applied`. It adds the task email queue
 and its rules (section 15). Nothing existing changes and nobody is emailed until an admin turns task emails on. It can
 run before or after the new app goes live. Nobody needs to close Cortex, and it is safe to run again.
 
-**0018 on an existing database**: run it after `0017`, the same way (`supabase/migrations/0018_crm_accounts.sql`;
-until merged, take it from its branch on GitHub). The last row shows `Cortex 0018 applied`. It adds accounts and their
+**0019 on an existing database**: run it after `0018`, the same way (`supabase/migrations/0019_crm_accounts.sql`;
+until merged, take it from its branch on GitHub). The last row shows `Cortex 0019 applied`. It adds accounts and their
 contacts, adds currencies, close dates, probability, waiting on and Lost to deals (the stages stay as they are), and files
 every existing client and deal under an account. To check it ran:
 `select to_regclass('public.accounts');` shows `accounts`. Run it **before** the new app goes live: the new app works
 without it, but Accounts and Contacts stay hidden and a deal's new fields don't save until it has run. The app that's live
 now works with it. Nobody needs to close Cortex, and it is safe to run again.
 
-**0019 on an existing database**: run it after `0018`, the same way (`supabase/migrations/0019_deal_history.sql`;
-until merged, take it from its branch on GitHub). The last row shows `Cortex 0019 applied`; to check,
+**0020 on an existing database**: run it after `0019`, the same way (`supabase/migrations/0020_deal_history.sql`;
+until merged, take it from its branch on GitHub). The last row shows `Cortex 0020 applied`; to check,
 `select to_regclass('public.deal_stage_history');` shows `deal_stage_history`. It starts every deal's stage history
 (one row each, where it stands now) and records each move from then on. The app works without it (the history and the
 reports that need it stay empty). Nobody needs to close Cortex, and it is safe to run again.
 
-**0020 on an existing database**: run it after `0019`, the same way (`supabase/migrations/0020_leads.sql`; until
-merged, take it from its branch on GitHub). The last row shows `Cortex 0020 applied`; to check,
+**0021 on an existing database**: run it after `0020`, the same way (`supabase/migrations/0021_leads.sql`; until
+merged, take it from its branch on GitHub). The last row shows `Cortex 0021 applied`; to check,
 `select to_regclass('public.leads');` shows `leads`. It adds the Leads page's lists, leads and suppress list (nothing
 existing changes). The app works without it (Leads stays out of the menu until it has run). Nobody needs to close
 Cortex, and it is safe to run again.
@@ -391,12 +397,12 @@ There are no invitations to send.
 2. On first sign-in Cortex creates their profile as **Staff** and adds them to #general. Addresses from
    `setup-admins.sql` come in with the role listed there (**SuperAdmin** or **Admin**).
 3. The SuperAdmin manages people in **Settings** → **Team**: the **Role** menu (SuperAdmin / Admin / Staff),
-   the **Active** switch, and each staff member's access to **Operations** (the Projects module), **Marketing**,
-   **Outreach**, **Pipeline** and **Clients** (None / View / Edit). Staff start with Operations and Marketing on Edit,
+   the **Active** switch, and each staff member's access to **Projects**, **Marketing**,
+   **Outreach**, **Pipeline** and **Clients** (None / View / Edit). Staff start with Projects and Marketing on Edit,
    Pipeline and Clients on View, and Outreach on None; admins always have Edit. Admins see the page read-only.
    Give staff **Edit** on Clients so they can own, accept and update client work (Demos, Previews).
    Each person also gets their own page (**My notes** on their Dashboard), which they can always edit (unless
-   Operations is None for them).
+   Projects is None for them).
    Switching Active off removes all of that person's access at once, because every database policy checks it.
    Your own row is locked, and the last active SuperAdmin can't be demoted or deactivated.
 4. Admins set each person's daily routines in **Settings** → **Routines**; they appear on that person's
@@ -676,12 +682,12 @@ section 12 done. Contract: `docs/PHASE2.md` §16.
 A task's **owner** gets an email when someone else **hands them the task** (or makes a new task for them) or **posts an
 update** on it, with a link straight to the task. Several at once go as one email. Nobody is emailed about what they
 did themselves. The emails come from one admin's Google account (the one connected in **Settings** → **Business**),
-named *Cortex*; replies go to that admin. Contract: `docs/PHASE2.md` §27.
+named *Cortex*; replies go to that admin. Contract: `docs/PHASE2.md` §30.
 
 This needs section 11 steps 1–3 done (the Google client, the Supabase secrets and the `google` function).
 
-1. **Database**: run `0017_task_emails.sql` (section 2, *0017 on an existing database*). The last row says
-   `Cortex 0017 applied`.
+1. **Database**: run `0018_task_emails.sql` (section 2, *0018 on an existing database*). The last row says
+   `Cortex 0018 applied`.
 2. **Redeploy the `google` function**: Supabase → **Edge Functions** → `google` → **Code**. Replace all of it with the
    new `supabase/functions/google/index.ts` (GitHub → **Raw**, copy all; before the merge, from the change's branch or
    pull request) → **Deploy**. **Enforce JWT verification** stays **off**; the secrets don't change.
@@ -727,15 +733,15 @@ This needs section 11 steps 1–3 done (the Google client, the Supabase secrets 
 | "Couldn't load your workspace … client_contacts" after an update | `0004_clients_google.sql` hasn't run yet (section 2). |
 | "Couldn't load your workspace … work_tools" after an update | `0005_work_tools.sql` hasn't run yet (section 2). |
 | "Couldn't load your workspace … boards", Projects shows nothing, or "Not saved" mentions `board_id` | `0006_boards.sql` hasn't run yet (section 2). |
-| A staff member can edit their own notes but not **Landing Page** or another team board | Their **Operations** (Projects) level is **View** in **Settings** → **Team** (an override; the default after 0006 is Edit). The SuperAdmin sets it back to **Edit**. |
+| A staff member can edit their own notes but not **Landing Page** or another team board | Their **Projects** level is **View** in **Settings** → **Team** (an override; the default after 0006 is Edit). The SuperAdmin sets it back to **Edit**. |
 | A task's drawer on someone's own page offers no **Board** to move it to | By design: tasks move between team boards, or between groups of one page, never onto or off a personal page. |
 | An admin can't see another admin's notes (*Name’s notes*, once called *Name’s Projects*) | By design: admins see their own and staff's pages; only the SuperAdmin sees everyone's. |
 | No rename or delete on someone's notes page | Personal pages come and go with their person. Only team boards are renamed or deleted (by admins). |
-| Task emails don't arrive | **Settings** → **Business** → **Task emails**: *Run 0017_task_emails.sql* means section 15 step 1; *Off* means nobody turned them on (step 4); *needs to reconnect Google* or *Last send failed* says what went wrong. Nothing at all after an hour: check the `google` function is the new one (step 2). Also check the recipient's spam folder. |
+| Task emails don't arrive | **Settings** → **Business** → **Task emails**: *Run 0018_task_emails.sql* means section 15 step 1; *Off* means nobody turned them on (step 4); *needs to reconnect Google* or *Last send failed* says what went wrong. Nothing at all after an hour: check the `google` function is the new one (step 2). Also check the recipient's spam folder. |
 | "Couldn't load your workspace … crm_entries" after an update (before this was handled: now Cortex opens with a *Database update needed* notice instead) | `0012_crm_profile.sql` hasn't run. In the SQL editor, `select to_regclass('public.crm_entries');`: NULL means run the file (section 2) and look for an error if it doesn't finish; `crm_entries` means the table is there and PostgREST hasn't noticed: run `notify pgrst, 'reload schema';`. Then **Retry**. |
 | **Database update needed: run 00NN_….sql** at the top of Cortex (admins) | That migration hasn't run on this database: run it (section 2), then reload. Until then what it adds is off; everything else works. If `select to_regclass('public.<its table>');` already shows the table, PostgREST hasn't noticed it yet: run `notify pgrst, 'reload schema';`, then reload. Still there? Check that the SQL editor's project is the one in Cloudflare's `VITE_SUPABASE_URL`. |
 | A staff member reads a deal's or a client's profile but has no **Note**, **Meeting** or **Add link** | Expected with View: adding to a deal's profile needs **Pipeline** Edit, to a client's **Clients** Edit (**Settings** → **Team**). Someone else's entry is changed only by its author or an admin. |
-| A deal's profile has no **Tasks**, or no **Add task** | A deal's tasks live on Pipeline › Demos, an Operations board underneath: seeing them needs **Operations** View and adding them Operations Edit (staff have Edit by default). Before 0015 runs, Add task uses Operations' and Outreach's boards. |
+| A deal's profile has no **Tasks**, or no **Add task** | A deal's tasks live on Pipeline › Demos, a Projects board underneath: seeing them needs **Projects** View and adding them Projects Edit (staff have Edit by default). Before 0015 runs, Add task uses Projects' and Outreach's boards. |
 | On **Team**, a staff member sees fewer of a teammate's tasks than an admin does, or **New task** says a teammate can't edit a board they can | `0011_team_access_read.sql` hasn't run yet (section 2): until then staff read only their own access levels. |
 | **Projects** / **Marketing** look empty after running 0006, or it showed an error | The run stopped part-way, so tasks aren't linked to a board yet (nothing is deleted). Run the current `0006_boards.sql` again; it links them to **General** / **Posting schedule** and finishes the rest. |
 | A new group turned up on **General** or **Posting schedule** after the 0006 update | An old open tab (the app from before 0006) added it. Move its tasks where they belong, delete it, and reload that tab. |

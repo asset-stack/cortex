@@ -20,18 +20,18 @@ export const PRIORITY_HINTS = { Urgent: 'Today: drop other work. One at a time.'
 const OWNER = { key: 'people', label: 'Owner', type: 'owner' };
 const ALSO = { key: 'also', label: 'Also on', type: 'also', team: true };
 const PRIORITY_COLUMN = { key: 'priority', label: 'Priority', type: 'label', options: PRIORITY, hints: PRIORITY_HINTS };
-// Which department a task belongs to (§20): Operations, Marketing, Outreach, Clients or Pipeline. Last on every team board
+// Which department a task belongs to (§20): Projects, Marketing, Outreach, Clients or Pipeline. Last on every team board
 // (a sparse Deal link may follow it).
 const DEPARTMENT = { key: 'department', label: 'Department', type: 'department', team: true };
 // The deal a task is for (§19, §22, §26): a task on Pipeline › Demos (last), and older next steps (first on Outreach's
-// boards, after Department on Operations' team boards).
+// boards, after Department on Projects' team boards).
 const DEAL = { key: 'deal', label: 'Deal', type: 'deal' };
 
 // The board modules' columns (BOARD_MODULES): Projects (with the former Admin board merged in), Marketing, Outreach and
 // Clients. All are modules in src/lib/access.js.
 export const BOARD_SCHEMAS = {
   projects: {
-    title: 'Operations', // shown as Operations since §18; the key stays 'projects'
+    title: 'Projects', // Projects again since §29 (Operations §18–§28); the key stays 'projects'
     icon: 'FolderKanban',
     columns: [
       OWNER,
@@ -55,7 +55,7 @@ export const BOARD_SCHEMAS = {
       PRIORITY_COLUMN,
       {
         key: 'type', label: 'Type', type: 'label',
-        options: { Industry: '#d9a800', Sponsorship: '#21b8b0', Projects: '#7d8fa3', 'Staff internal': '#ff5ac4' },
+        options: { Features: '#784bd1', Industry: '#d9a800', Internal: '#ff5ac4', Clients: '#21b8b0', Other: '#7d8fa3' }, // §28
       },
       {
         key: 'channel', label: 'Channel', type: 'label',
@@ -67,7 +67,7 @@ export const BOARD_SCHEMAS = {
     ],
   },
   // Outreach's boards (Sales Tasks …) have the standard task columns, as Projects, and say which deal a task is for (a
-  // next step on its profile, as Operations' can); Clients' (Demos, Previews …) say which client.
+  // next step on its profile, as Projects' can); Clients' (Demos, Previews …) say which client.
   outreach: {
     title: 'Outreach',
     icon: 'Mail',
@@ -109,8 +109,8 @@ export const BOARD_SCHEMAS = {
   },
 };
 // Pipeline › Demos (§25, §26; made by 0015 as Deal tasks, renamed and given Clients › Demos' rows by 0016; in the demo by
-// the seed and migrate()): the deals' tasks, one board with a fixed id. Underneath it is an Operations team board, so it
-// has Operations' access (staff edit) and its tasks can move to and from Operations' boards; on screen it is Pipeline's
+// the seed and migrate()): the deals' tasks, one board with a fixed id. Underneath it is a Projects team board, so it
+// has Projects' access (staff edit) and its tasks can move to and from Projects' boards; on screen it is Pipeline's
 // (`areaOf()`), listed under Pipeline in the sidebar: its tasks show on their deal's profile and in their owners' lists.
 export const DEAL_TASKS_BOARD = 'dea15000-0000-4000-8000-000000000001';
 export const isDealTasks = (board) => board?.id === DEAL_TASKS_BOARD;
@@ -128,7 +128,7 @@ const DEAL_TASKS = {
   ],
 };
 // A board's schema: its module's, less the `team` columns (Also on, Department) on a personal page (`owner` set: notes
-// nobody else is on, all in Operations); Deal tasks' own. The same object every time, so it can be compared and memoised.
+// nobody else is on, all in Projects); Deal tasks' own. The same object every time, so it can be compared and memoised.
 const PERSONAL = Object.fromEntries(Object.entries(BOARD_SCHEMAS)
   .map(([m, s]) => [m, { ...s, columns: s.columns.filter((c) => !c.team) }]));
 export const schemaOf = (board) => (isDealTasks(board) ? DEAL_TASKS : (board?.owner ? PERSONAL : BOARD_SCHEMAS)[board?.module]);
@@ -145,7 +145,7 @@ export function withPeople(values) {
 }
 
 // Pipeline's open stages, the board's columns in order (0008, Proposal sent §21; kept by the CRM, §22). A deal made a
-// client leaves the board (it lives in Clients): Make client sits on the last column. Lost (0018) is a closed stage, off
+// client leaves the board (it lives in Clients): Make client sits on the last column. Lost (0019) is a closed stage, off
 // the board.
 export const DEAL_STAGES = ['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Proposal sent'];
 export const LOST = 'Lost';

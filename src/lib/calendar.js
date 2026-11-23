@@ -1,4 +1,4 @@
-// The team Calendar and the boards' 3-month calendar (docs/PHASE2.md §15): what goes on them and on which day. Pure,
+// The team Calendar and the boards' calendar of this month (docs/PHASE2.md §15, §27): what goes on them and on which day. Pure,
 // with relative imports, so scripts/test-sync.mjs runs it in Node. Dates are 'YYYY-MM-DD'; a week starts on Monday.
 import { addDays, addMonths, isoDow, isYmd, mondayOf } from './automations.js';
 import { canView, canViewBoard } from './access.js';
@@ -23,6 +23,11 @@ export const EVENT_KINDS = { meeting: 'Meeting', event: 'Event', reminder: 'Remi
 export const CLIENT_KINDS = ['invoice', 'contract'];
 // Things at a time or on a day (meetings and events) rather than due dates.
 const SCHEDULED = ['meeting', 'event', 'reminder', 'google'];
+// Opening the Calendar or the Dashboard syncs Google when the last sync is older than this (live mode, §15, §27).
+export const SYNC_STALE = 10 * 60e3;
+// Whether a calendar status ({ syncedAt, people }) calls for a sync now: stale (or never synced) and someone connected.
+export const syncDue = (status, now = Date.now()) => Boolean(status?.people?.some((p) => p.connected))
+  && (!status.syncedAt || !(now - new Date(status.syncedAt).getTime() <= SYNC_STALE));
 
 export const monthKey = (ymd) => String(ymd || '').slice(0, 7);
 const firstOf = (month) => `${month}-01`;
@@ -144,6 +149,28 @@ export function collectEntries(state, { meetings = [], tz, userId = state?.me } 
   const rank = (e) => (SCHEDULED.includes(e.kind) ? 0 : 1);
   return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0) || rank(a) - rank(b)
     || (a.time ? 1 : 0) - (b.time ? 1 : 0) || a.time.localeCompare(b.time) || a.title.localeCompare(b.title) || a.key.localeCompare(b.key));
+}
+
+/** The Dashboard's meetings for `day` (§27): everyone's Google meetings and the team's meetings, events and reminders on
+ *  it (an all-day one over several days counts on each), all-day first, then by time (collectEntries' order). A Google
+ *  meeting several teammates share (one row each in calendar_meetings, same google_id) is one entry with all of them;
+ *  Busy copies (Private or Confidential) are never merged, so nobody sees who shares one, and copies at different times
+ *  (one not synced since a move) stay apart. */
+export function meetingsOn(entries, day) {
+  const out = [];
+  const shared = new Map(); // google_id, busy, date and times → the entry kept
+  (entries || []).forEach((e) => {
+    if (!SCHEDULED.includes(e.kind) || e.date > day || (e.endDate || e.date) < day) return;
+    const id = e.kind === 'google' && !e.busy ? e.meeting?.google_id : '';
+    if (!id) { out.push(e); return; }
+    const key = JSON.stringify([id, e.date, e.endDate, e.time, e.endTime]);
+    const kept = shared.get(key);
+    if (kept) { kept.people = [...new Set([...kept.people, ...e.people])]; return; }
+    const copy = { ...e, people: [...e.people] };
+    shared.set(key, copy);
+    out.push(copy);
+  });
+  return out;
 }
 
 // Entries for each day of a month ('YYYY-MM' → Map of 'YYYY-MM-DD' → entries). A multi-day all-day entry is on every

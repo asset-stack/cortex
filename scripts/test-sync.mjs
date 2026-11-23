@@ -101,12 +101,12 @@ const fixture = () => ({
       accountId: '', contactIds: [], currency: 'AUD', closeOn: '', probability: null, waitingOn: '', lostReason: '', stageAt: '',
     },
   ],
-  // 0019: the deals' stage history, oldest first (written by the database).
+  // 0020: the deals' stage history, oldest first (written by the database).
   dealHistory: [
     { id: 'h-1', dealId: 'd-1', from: '', to: 'Opportunities', at: '2026-10-10T00:00:00.000Z', by: U1 },
     { id: 'h-2', dealId: 'd-2', from: 'Demos', to: 'Won', at: '2026-10-12T00:00:00.000Z', by: '' },
   ],
-  // Leads (0020): lists in order, leads in the order they were added, suppressions by kind and value.
+  // Leads (0021): lists in order, leads in the order they were added, suppressions by kind and value.
   leadLists: [
     { id: 'll-1', name: 'Councils', source: 'apollo', notes: 'Apollo search', createdBy: U1, createdAt: '2026-10-02T00:00:00.000Z' },
     { id: 'll-2', name: 'UK housing', source: 'csv', notes: '', createdBy: '', createdAt: '2026-10-03T00:00:00.000Z' },
@@ -128,7 +128,7 @@ const fixture = () => ({
     { id: 'sp-1', kind: 'domain', value: 'example.net', reason: 'Asked us to stop', createdBy: U1, createdAt: '2026-10-01T00:00:00.000Z' },
     { id: 'sp-2', kind: 'email', value: 'no@example.com', reason: '', createdBy: '', createdAt: '2026-10-01T00:00:00.000Z' },
   ],
-  // The CRM (0018): accounts in order, then the people at them.
+  // The CRM (0019): accounts in order, then the people at them.
   accounts: [
     {
       id: 'ac-1', name: 'Example Shire', kind: 'prospect', lifecycle: 'opportunity', lifecycleNote: '', revisitOn: '', sector: 'Government',
@@ -268,6 +268,11 @@ const fixture = () => ({
     { id: 'ce-n1', dealId: 'd-1', clientId: '', kind: 'note', title: '', body: 'Call back Friday', url: '', label: '', happenedOn: '',
       attendees: '', user: U1, createdAt: '2026-10-19T01:00:00.000Z', accountId: '', contactId: '' },
   ],
+  // My list (0017): in its order (position, then when added).
+  myList: [
+    { id: 'ml-1', user: U1, text: 'Call the printer', done: false, position: 0, createdAt: '2026-10-21T01:00:00.000Z' },
+    { id: 'ml-2', user: U1, text: 'Ideas for the deck', done: true, position: 1, createdAt: '2026-10-21T02:00:00.000Z' },
+  ],
   // Calendar (0009): by day, then start (all-day first).
   calendarEvents: [
     { id: 'ce-1', kind: 'meeting', title: 'Planning', day: '2026-10-19', endDay: '', startsAt: '2026-10-18T23:00:00.000Z',
@@ -372,9 +377,10 @@ await check('assemble: order and state fields', () => {
   const back = assemble(flatten(s), { me: U1 });
   assert.deepEqual(Object.keys(back).sort(), ['approvals', 'boards', 'channels', 'clients', 'contacts', 'deals', 'emails', 'lastRead',
     'messages', 'org', 'sequences', 'users', 'moduleAccess', 'routines', 'todos', 'timeEntries', 'payments', 'bankStatements',
-    'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'calendarEvents', 'crmEntries', 'accounts',
+    'expenses', 'subscriptions', 'tools', 'mailboxes', 'outreachNotes', 'outreachSheet', 'calendarEvents', 'crmEntries', 'myList', 'accounts',
     'crmContacts', 'dealHistory', 'leadLists', 'leads', 'suppressions'].sort());
   assert.deepEqual(back.crmEntries, s.crmEntries, 'CRM entries newest first, every field back');
+  assert.deepEqual(back.myList, s.myList, 'My list in its order, every field back');
   assert.deepEqual(back.boards.map((b) => b.id), ['b-ana', 'b-ben', 'b-web', 'b-gen', 'b-post', 'b-events']);
   const web = back.boards.find((b) => b.id === 'b-web');
   assert.deepEqual(web.groups.map((g) => g.id), ['g-1', 'g-2', 'g-3']);
@@ -435,7 +441,7 @@ await check('flatten: boards, and the board on every group and task (0006)', () 
   const rows = flatten(s);
   assert.deepEqual(rows.boards.get('b-ana'), { id: 'b-ana', module: 'projects', name: '', owner_id: U1, position: 0, calendar: false });
   assert.deepEqual(rows.boards.get('b-gen'), { id: 'b-gen', module: 'projects', name: 'General', owner_id: null, position: 1, calendar: false });
-  // The 3-month calendar flag (0009) is a team board's: a personal page never sends one.
+  // The board calendar flag (0009) is a team board's: a personal page never sends one.
   assert.equal(rows.boards.get('b-post').calendar, true);
   assert.equal(flatten({ ...s, boards: [{ ...s.boards[0], calendar: true }] }).boards.get('b-ana').calendar, false);
   // Team boards are numbered within their module, in array order; a personal board is always 0.
@@ -1491,14 +1497,15 @@ await check('sync: loadAll pages every table and normalises rows', async () => {
 const NOT_FOUND = { code: 'PGRST205', message: "Could not find the table 'public.crm_entries' in the schema cache" };
 await check('sync: a table whose migration hasn’t run (TABLES since) is left out — no rows, no realtime, no writes — and the rest loads', async () => {
   assert.deepEqual(TABLES.filter((t) => t.since).map((t) => [t.name, t.since]),
-    [['accounts', '0018_crm_accounts.sql'], ['crm_contacts', '0018_crm_accounts.sql'], ['deal_stage_history', '0019_deal_history.sql'],
-      ['lead_lists', '0020_leads.sql'], ['leads', '0020_leads.sql'], ['suppressions', '0020_leads.sql'], ['crm_entries', '0012_crm_profile.sql']]);
+    [['accounts', '0019_crm_accounts.sql'], ['crm_contacts', '0019_crm_accounts.sql'], ['deal_stage_history', '0020_deal_history.sql'],
+      ['lead_lists', '0021_leads.sql'], ['leads', '0021_leads.sql'], ['suppressions', '0021_leads.sql'], ['crm_entries', '0012_crm_profile.sql'],
+      ['my_list', '0017_my_list.sql']]);
   const { sb, sync } = setup({ deals: [{ id: 'd1', name: 'D', value: 0, position: 0 }] });
   sb.failures.push({ table: 'crm_entries', method: 'select', ...NOT_FOUND, sticky: true });
   assert.deepEqual(await sync.probe(), ['crm_entries']);
   assert.deepEqual(sb.calls.map((c) => [c.table, c.columns, c.range]),
     [['accounts', 'id', [0, 0]], ['crm_contacts', 'id', [0, 0]], ['deal_stage_history', 'id', [0, 0]], ['lead_lists', 'id', [0, 0]],
-      ['leads', 'id', [0, 0]], ['suppressions', 'id', [0, 0]], ['crm_entries', 'id', [0, 0]]],
+      ['leads', 'id', [0, 0]], ['suppressions', 'id', [0, 0]], ['crm_entries', 'id', [0, 0]], ['my_list', 'id', [0, 0]]],
     'one small select per since table');
   sb.calls.length = 0;
   sync.subscribe(() => {});
@@ -1530,10 +1537,10 @@ await check('sync: columns a migration adds to an existing table (TABLES later) 
   await sync.flush();
   const sent = Object.fromEntries(sb.calls.filter((c) => c.method === 'upsert').map((c) => [c.table, c.rows[0]]));
   assert.deepEqual(Object.keys(sent).sort(), ['crm_entries', 'deals'], 'the missing table takes no writes');
-  assert.deepEqual(sent.deals, { id: 'd1', name: 'D', stage: 'Opportunities', position: 0 }, 'the deal without 0018’s columns');
+  assert.deepEqual(sent.deals, { id: 'd1', name: 'D', stage: 'Opportunities', position: 0 }, 'the deal without 0019’s columns');
   assert.deepEqual(sent.crm_entries, { id: 'e1', deal_id: 'd1', kind: 'note', body: 'x' });
   sb.failures.length = 0;
-  assert.deepEqual(await sync.probe(), [], '0018 has run');
+  assert.deepEqual(await sync.probe(), [], '0019 has run');
   sb.calls.length = 0;
   sync.queue([up('deals', 'd1', deal)]);
   await sync.flush();
@@ -1947,7 +1954,7 @@ const { BOARD_SCHEMAS: SCHEMAS, PRIORITY: PRIO, PRIORITY_HINTS } = await import(
 
 await check('owners: Projects, Marketing, Outreach and Clients boards have one Owner and Priority (Urgent → Low, each with a meaning); Work in Progress keeps its people', () => {
   const cols = (m) => SCHEMAS[m].columns.map((c) => `${c.key}:${c.type}`).join(' ');
-  // §20: Also on after the Owner, and the Department last, on every team board (Operations then has the Deal, §22).
+  // §20: Also on after the Owner, and the Department last, on every team board (Projects then has the Deal, §22).
   assert.equal(cols('projects'), 'people:owner also:also status:status priority:label due:date department:department deal:deal');
   assert.equal(cols('outreach'), 'deal:deal people:owner also:also status:status priority:label due:date department:department', 'Outreach boards link a task to its deal');
   assert.equal(cols('clients'), 'client:client people:owner also:also status:status priority:label due:date department:department', 'Clients boards say which client (their Deal column went with Demos, §26)');
@@ -2050,12 +2057,12 @@ await check('new task: starts Not started with you as owner; made for someone el
   assert.equal(work.newTaskValues({ owner: 'ben', acceptedAt: 'x' }, { me: 'ana', now }).acceptedAt, undefined);
 });
 
-await check('where a task lives: department (Operations for Projects) › board › client; a personal page is its notes', () => {
+await check('where a task lives: department (Projects, §29) › board › client; a personal page is its notes', () => {
   const { MODULE_LABELS } = boardsLib;
-  assert.deepEqual(MODULE_LABELS, { projects: 'Operations', marketing: 'Marketing', outreach: 'Outreach', clients: 'Clients', pipeline: 'Pipeline' });
+  assert.deepEqual(MODULE_LABELS, { projects: 'Projects', marketing: 'Marketing', outreach: 'Outreach', clients: 'Clients', pipeline: 'Pipeline' });
   const st = { users: [{ id: 'dv', name: 'David' }], clients: [{ id: 'c-1', name: 'Example Council' }] };
   const it = (values = {}) => ({ id: 'i', values });
-  assert.deepEqual(work.whereOf(st, { module: 'projects', name: 'BAU', owner: '' }, it()), ['Operations', 'BAU']);
+  assert.deepEqual(work.whereOf(st, { module: 'projects', name: 'BAU', owner: '' }, it()), ['Projects', 'BAU']);
   assert.deepEqual(work.whereOf(st, { module: 'clients', name: 'Previews', owner: '' }, it({ client: 'c-1' })), ['Clients', 'Previews', 'Example Council']);
   assert.deepEqual(work.whereOf(st, { module: 'clients', name: 'Previews', owner: '' }, it({ client: 'gone' })), ['Clients', 'Previews']);
   assert.deepEqual(work.whereOf(st, { module: 'projects', name: '', owner: 'dv' }, it()), ['David’s notes']);
@@ -2176,7 +2183,7 @@ await check('§20 columns: Also on and Department on team boards only (a persona
   assert.equal(schemaOf(mine), schemaOf({ module: 'projects', owner: 'stu' }), 'personal pages: one shared copy');
   assert.deepEqual(schemaOf(mine).columns.map((c) => c.key), ['people', 'status', 'priority', 'due'], 'no Also on or Department on notes');
   assert.ok(['marketing', 'outreach', 'clients', 'pipeline'].every((m) => SCHEMAS[m].columns.at(-1).key === 'department'), 'Department last everywhere');
-  assert.deepEqual(SCHEMAS.projects.columns.slice(-2).map((c) => c.key), ['department', 'deal'], 'Operations: then the Deal (§22)');
+  assert.deepEqual(SCHEMAS.projects.columns.slice(-2).map((c) => c.key), ['department', 'deal'], 'Projects: then the Deal (§22)');
   assert.deepEqual(['projects', 'marketing', 'outreach', 'clients', 'pipeline'].map((m) => work.hasAlso({ module: m })), [true, true, true, true, false],
     'Also on wherever there is an owner (not Work in Progress)');
   assert.deepEqual([work.hasDepartment(team), work.hasDepartment(mine), work.hasAlso(mine), work.hasOwner(mine)], [true, false, false, true]);
@@ -2220,7 +2227,7 @@ await check('§20 Also on: nextValues keeps it clean (each once, never the owner
   const web = st.boards.find((b) => b.id === 'web');
   assert.deepEqual(work.taggable(st, web, { values: { people: ['stu'] } }).sort(), ['ann', 'sue']);
   st.moduleAccess = [{ userId: 'stu', module: 'projects', level: 'none' }];
-  assert.deepEqual(work.taggable(st, web, { values: { people: ['ann'] } }).sort(), ['sue'], 'no Operations access: not offered');
+  assert.deepEqual(work.taggable(st, web, { values: { people: ['ann'] } }).sort(), ['sue'], 'no Projects access: not offered');
 });
 
 await check('§24 passing a task on: whoever had it falls back to Also on (handed on, or taken back); not when you give away one you haven’t started, a new task, a clear or a people list', () => {
@@ -2288,7 +2295,7 @@ await check('§25 a person’s lists are what they own: Also on, or second on a 
     work.ownedBy(web, { values: { people: ['stu'] } }, ''), work.ownedBy(web, null, 'stu')], [true, false, false, true, false, false]);
 });
 
-await check('§20 by board: a card per board in menu order (Operations first; within a module, team boards in their order, then personal pages), its rows in the board’s own order, split by group', () => {
+await check('§20 by board: a card per board in menu order (Projects first; within a module, team boards in their order, then personal pages), its rows in the board’s own order, split by group', () => {
   const st = taskState();
   const web = st.boards.find((b) => b.id === 'web');
   web.groups.push({ id: 'g-web-2', name: 'Backlog', items: [{ id: 'w-back', name: 'w-back', values: { people: ['stu'] }, done: false, updates: [], subtasks: [] }] });
@@ -2582,7 +2589,7 @@ await check('§26 no automatic Demos row: a deal reaching Demos or Proposal sent
   assert.equal(/dealDemoRow/.test(store), false, 'nothing in the store adds one');
 });
 
-await check('§22 deal next steps on Operations: a Team Tasks task linked to a deal shows on its profile and for its owner (§25: not for Also on); personal pages have no Deal', () => {
+await check('§22 deal next steps on Projects: a Team Tasks task linked to a deal shows on its profile and for its owner (§25: not for Also on); personal pages have no Deal', () => {
   const st = taskState();
   st.deals = [{ id: 'd-9', name: 'Example deal', clientId: '' }];
   const web = st.boards.find((b) => b.id === 'web');
@@ -2590,7 +2597,7 @@ await check('§22 deal next steps on Operations: a Team Tasks task linked to a d
     done: false, updates: [], subtasks: [] });
   st.boards.find((b) => b.id === 'sales').groups[0].items.push({ id: 'sales-deal', name: 'Call back', values: { people: ['ann'], deal: 'd-9' }, done: false, updates: [], subtasks: [] });
   assert.deepEqual([work.hasDeal({ module: 'projects', owner: '' }), work.hasDeal({ module: 'projects', owner: 'ann' })], [true, false]);
-  assert.deepEqual(work.dealTasks(st, 'd-9').map((r) => r.item.id), ['ops-deal', 'sales-deal'], 'both homes, Operations first');
+  assert.deepEqual(work.dealTasks(st, 'd-9').map((r) => r.item.id), ['ops-deal', 'sales-deal'], 'both homes, Projects first');
   assert.ok(!work.prioritiesFor(st, 'stu', { today: '2026-10-25', teamOnly: true }).some((r) => r.item.id === 'ops-deal'), 'not on the Also-on person’s Team view (§25)');
   assert.ok(work.prioritiesFor(st, 'ann', { today: '2026-10-25', teamOnly: true }).some((r) => r.item.id === 'ops-deal'), 'the owner’s');
 });
@@ -2602,7 +2609,7 @@ await check('crm: the demo seed — Northside’s deal has a meeting with its no
   const westbay = s.clients.find((c) => c.name === 'Westbay Council');
   const tl = crm.timelineOf(s, { dealId: northside.id });
   assert.deepEqual(tl.filter((e) => e.kind !== 'stage').map((e) => e.kind), ['meeting', 'note']);
-  // 0019: its stage moves too (not its being added), read only, oldest last.
+  // 0020: its stage moves too (not its being added), read only, oldest last.
   assert.deepEqual(tl.filter((e) => e.kind === 'stage').map((e) => `${e.from}→${e.to}`), ['First meetings→Demos', 'Contacted→First meetings', 'Opportunities→Contacted']);
   assert.ok(tl.filter((e) => e.kind === 'stage').every((e) => e.legacy && !e.deal), 'not editable; no deal name on the deal’s own');
   assert.ok(/docs\.google\.com/.test(tl[0].url) && tl[0].body && tl[0].attendees);
@@ -2621,7 +2628,7 @@ const migrationFile = (prefix) => {
   const f = existsSync(migrationsDir) && readdirSync(migrationsDir).find((x) => x.startsWith(prefix) && x.endsWith('.sql'));
   return f ? [f, readFileSync(new URL(f, migrationsDir), 'utf8')] : null;
 };
-await check('§25/§26 Pipeline › Demos: one fixed board (Operations underneath, shown as Pipeline), its own columns; a deal’s tasks live there; 0015 makes it, 0016 names it', async () => {
+await check('§25/§26 Pipeline › Demos: one fixed board (Projects underneath, shown as Pipeline), its own columns; a deal’s tasks live there; 0015 makes it, 0016 names it', async () => {
   const { DEAL_TASKS_BOARD, isDealTasks, schemaOf } = await import('../src/data/boards.js');
   const deal = { id: DEAL_TASKS_BOARD, module: 'projects', name: 'Demos', owner: '', groups: [{ id: 'g-dt', name: 'Next steps', items: [] }] };
   assert.deepEqual([isDealTasks(deal), isDealTasks({ id: 'x', module: 'projects' }), isDealTasks(null)], [true, false, false]);
@@ -2646,7 +2653,7 @@ await check('§25/§26 Pipeline › Demos: one fixed board (Operations underneat
   assert.ok(work.prioritiesFor(st, 'ann', { teamOnly: true }).some((r) => r.item.id === 'moved'), 'a moved row is its owner’s task');
   assert.ok(work.clientTasks(st, 'c-1').some((r) => r.item.id === 'moved'), 'a moved row keeps showing on its client’s Tasks (its Client value, §26)');
   const cards = work.byBoard(work.prioritiesFor(st, 'stu', { teamOnly: true }), st.boards).map((c) => c.board.id);
-  assert.equal(cards.indexOf(DEAL_TASKS_BOARD) > cards.indexOf('web'), true, 'its card comes with Pipeline’s, after Operations’');
+  assert.equal(cards.indexOf(DEAL_TASKS_BOARD) > cards.indexOf('web'), true, 'its card comes with Pipeline’s, after Projects’');
   // Never a module's default board; its own address opens it.
   const visible = st.boards.filter((b) => b.module === 'projects');
   assert.notEqual(boardsLib.resolveBoard(st, [deal, ...visible.filter((b) => b !== deal)], 'projects', '', '')?.id, DEAL_TASKS_BOARD);
@@ -2666,7 +2673,7 @@ await check('§25/§26 Pipeline › Demos: one fixed board (Operations underneat
     const b = s.boards.find(isDealTasks);
     assert.ok(b && b.module === 'projects' && !b.owner && b.name === 'Demos' && b.groups.map((g) => g.name).join('|') === 'Next steps|To do|Done');
     assert.equal(s.boards.some((x) => x.module === 'clients' && x.name === 'Demos'), false, 'no Clients › Demos in the demo');
-    // Older demo data gets it once, after Operations' team boards, called Demos, with Clients › Demos' groups; deleted, it
+    // Older demo data gets it once, after Projects' team boards, called Demos, with Clients › Demos' groups; deleted, it
     // stays deleted.
     const old = structuredClone(s);
     old.boards = old.boards.filter((x) => !isDealTasks(x));
@@ -2679,6 +2686,76 @@ await check('§25/§26 Pipeline › Demos: one fixed board (Operations underneat
     assert.ok(m.seededBoards.includes('pipelineDemos'));
     m.boards = m.boards.filter((x) => !isDealTasks(x));
     assert.equal(migrate(m).boards.some(isDealTasks), false, 'deleted: not again');
+  }
+});
+
+await check('§28 posting types: Features, Industry, Internal, Clients, Other (in that order, each coloured); the demo posts use only those', () => {
+  const type = SCHEMAS.marketing.columns.find((c) => c.key === 'type');
+  assert.deepEqual(Object.keys(type.options), ['Features', 'Industry', 'Internal', 'Clients', 'Other']);
+  assert.ok(Object.values(type.options).every((c) => /^#[0-9a-f]{6}$/i.test(c)), 'each has a colour');
+  if (createSeed) {
+    const used = createSeed().boards.filter((b) => b.module === 'marketing')
+      .flatMap((b) => b.groups.flatMap((g) => g.items.map((it) => it.values.type))).filter(Boolean);
+    assert.ok(used.length > 0 && used.every((t) => t in type.options), `seed types: ${[...new Set(used)].join(', ')}`);
+    assert.deepEqual([...new Set(used)].sort(), ['Clients', 'Features', 'Industry', 'Internal', 'Other'], 'every type shows in the demo');
+  }
+});
+
+await check('§27 My list: one clean line each (trimmed, one line, ≤ 500); a person’s own lines in order; the day’s meetings for the Dashboard', async () => {
+  const ml = await import('../src/lib/myList.js');
+  assert.deepEqual([ml.cleanListText('  Call   the\nprinter  '), ml.cleanListText(''), ml.cleanListText(null), ml.cleanListText('x'.repeat(600)).length], ['Call the printer', '', '', 500]);
+  const st = { me: 'ann', myList: [
+    { id: 'b', user: 'ann', text: 'Second', position: 1, createdAt: '2026-11-01T02:00:00Z' },
+    { id: 'z', user: 'stu', text: 'Stu’s', position: 0, createdAt: '2026-11-01T00:00:00Z' },
+    { id: 'a', user: 'ann', text: 'First', position: 0, createdAt: '2026-11-01T03:00:00Z' },
+    { id: 'c', user: 'ann', text: 'Same place, later', position: 1, createdAt: '2026-11-01T04:00:00Z' },
+  ] };
+  assert.deepEqual(ml.listOf(st).map((x) => x.id), ['a', 'b', 'c'], 'Ann’s only, by position then when added');
+  assert.deepEqual(ml.listOf(st, 'stu').map((x) => x.id), ['z']);
+  assert.deepEqual(ml.listOf({}), []);
+  // The day's meetings: Google meetings and the team's meetings, events and reminders on it (an all-day one over several
+  // days on each), never tasks, posts, invoices or contracts.
+  const cal = await import('../src/lib/calendar.js');
+  const e = (kind, date, endDate, time = '') => ({ kind, date, endDate, time, key: `${kind}:${date}:${time}` });
+  const entries = [e('google', '2026-11-15', '2026-11-15', '09:00'), e('event', '2026-11-14', '2026-11-16'), e('meeting', '2026-11-15', '2026-11-15', '14:00'),
+    e('reminder', '2026-11-16', '2026-11-16'), e('task', '2026-11-15', '2026-11-15'), e('post', '2026-11-15', '2026-11-15'), e('invoice', '2026-11-15', '2026-11-15')];
+  assert.deepEqual(cal.meetingsOn(entries, '2026-11-15').map((x) => x.kind), ['google', 'event', 'meeting']);
+  assert.deepEqual(cal.meetingsOn(entries, '2026-11-16').map((x) => x.kind), ['event', 'reminder']);
+  assert.deepEqual(cal.meetingsOn(null, '2026-11-15'), []);
+  // A Google meeting several teammates share (a calendar_meetings row each, same google_id) is one row with all of them.
+  // A Busy copy, a copy at another time (not synced since a move) and a row with no google_id each stay their own.
+  const gm = (id, user, gid, at, extra = {}) => ({ id, user_id: user, google_id: gid, title: 'Pipeline review', busy: false, all_day: false,
+    start_date: at.slice(0, 10), end_date: at.slice(0, 10), start_at: at, end_at: at.replace('T03', 'T04'), ...extra });
+  const shared = cal.meetingsOn(cal.collectEntries({ me: 'ann' }, { tz: 'UTC', meetings: [
+    gm('m1', 'ann', 'g1', '2026-11-15T03:00:00.000Z'), gm('m2', 'bob', 'g1', '2026-11-15T03:00:00.000Z'), gm('m3', 'cy', 'g1', '2026-11-15T03:00:00.000Z'),
+    gm('m4', 'dee', 'g1', '2026-11-15T03:00:00.000Z', { busy: true, title: '' }), gm('m5', 'eve', 'g1', '2026-11-15T03:30:00.000Z'),
+    gm('m6', 'fay', '', '2026-11-15T03:00:00.000Z'), gm('m7', 'gus', 'g2', '2026-11-16T03:00:00.000Z'),
+  ] }), '2026-11-15');
+  assert.deepEqual(shared.map((x) => [x.title, x.time, x.people]), [
+    ['Busy', '03:00', ['dee']], ['Pipeline review', '03:00', ['ann', 'bob', 'cy']], ['Pipeline review', '03:00', ['fay']], ['Pipeline review', '03:30', ['eve']],
+  ]);
+  // Busy copies of one Private meeting are never merged: nobody sees who shares it.
+  const busy = cal.meetingsOn(cal.collectEntries({ me: 'ann' }, { tz: 'UTC', meetings: [
+    gm('b1', 'dee', 'hr', '2026-11-15T03:00:00.000Z', { busy: true, title: '' }), gm('b2', 'ed', 'hr', '2026-11-15T03:00:00.000Z', { busy: true, title: '' }),
+  ] }), '2026-11-15');
+  assert.deepEqual(busy.map((x) => [x.title, x.people]), [['Busy', ['dee']], ['Busy', ['ed']]]);
+  const raw = cal.collectEntries({ me: 'ann' }, { tz: 'UTC', meetings: [gm('m1', 'ann', 'g1', '2026-11-15T03:00:00.000Z'), gm('m2', 'bob', 'g1', '2026-11-15T03:00:00.000Z')] });
+  cal.meetingsOn(raw, '2026-11-15');
+  assert.deepEqual(raw.map((x) => x.people), [['ann'], ['bob']], 'the entries passed in are not changed');
+  // Opening the Dashboard (or the Calendar) syncs Google when the last sync is over 10 minutes old and someone is connected.
+  const at = Date.parse('2026-11-15T03:00:00Z');
+  const status = (syncedAt, connected = true) => ({ syncedAt, people: [{ userId: 'ann', connected }] });
+  assert.deepEqual([
+    cal.syncDue(status(''), at), cal.syncDue(status('2026-11-15T02:55:00Z'), at), cal.syncDue(status('2026-11-15T02:50:00Z'), at),
+    cal.syncDue(status('2026-11-15T02:49:59Z'), at), cal.syncDue(status('not a date'), at), cal.syncDue(status('', false), at),
+    cal.syncDue({ syncedAt: '', people: [] }, at), cal.syncDue(null, at),
+  ], [true, false, false, true, true, false, false, false]);
+  if (createSeed) {
+    const s = createSeed();
+    assert.ok(ml.listOf(s, 'david').length >= 2 && ml.listOf(s, 'josh').length === 0, 'David has demo lines; nobody else');
+    const old = structuredClone(s);
+    delete old.myList;
+    assert.deepEqual(migrate(old).myList, [], 'older demo data gets an empty list');
   }
 });
 
@@ -2805,7 +2882,13 @@ await check('automations: ensureTodosLocal adds the Monday bank reminder for adm
     source: 'automation', routineId: '', ref: 'bank:2026-10-12', done: false, doneAt: '',
   });
   assert.equal(auto.ensureTodosLocal(st, '2026-10-12', { me: 'al' }), 0);
-  assert.equal(auto.ensureTodosLocal(st, '2026-10-19', { me: 'al' }), 1, 'statement uploaded for that week: routine only');
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-19', { me: 'al' }), 2, 'statement uploaded for that week: the routine, and last week’s undone reminder moves on (0017)');
+  assert.deepEqual(st.todos.filter((t) => t.ref.startsWith('bank:')).map((t) => [t.ref, t.day]), [['bank:2026-10-12', '2026-10-19']], 'no reminder of its own for that week');
+  // A reminder moved on from an earlier week says which week it's for (the Dashboard shows "week of 12 Oct").
+  const moved = st.todos.find((t) => t.ref === 'bank:2026-10-12');
+  assert.deepEqual([auto.bankWeekOf(moved), auto.bankWeekOf({ ...moved, day: '2026-10-12' }), auto.bankWeekOf({ ...moved, day: '2026-10-14' }),
+    auto.bankWeekOf({ ...moved, source: 'manual' }), auto.bankWeekOf({ ...moved, ref: 'approve:2026-10-12' }), auto.bankWeekOf(null)],
+    ['2026-10-12', '', '', '', '', '']);
   assert.equal(auto.ensureTodosLocal(st, '2026-10-13', { me: 'al' }), 0, 'Mondays only');
   assert.ok(!st.todos.some((t) => t.assignee === 'stu'));
   auto.ensureTodosLocal(st, '2026-10-26');
@@ -2824,8 +2907,9 @@ await check('automations: "Approve invoices" for admins while any invoice awaits
   assert.equal(auto.ensureTodosLocal(st, '2026-10-13', { me: 'al' }), 0, 'once a day');
   auto.ensureTodosLocal(st, '2026-10-13', { me: 'stu' });
   assert.ok(!st.todos.some((t) => t.assignee === 'stu' && t.ref.startsWith('approve:')), 'staff never get it');
-  auto.ensureTodosLocal(st, '2026-10-14', { me: 'al' });
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-14', { me: 'al' }), 1, 'the undone reminder moves on (0017)');
   assert.ok(!st.todos.some((t) => t.ref === 'approve:2026-10-14'), 'an undone reminder carries over: no new one each day');
+  assert.deepEqual([approve[0].day, st.todos.filter((t) => t.ref.startsWith('approve:')).length], ['2026-10-14', 1], 'it is on the new day now (§27)');
   approve[0].done = true;
   auto.ensureTodosLocal(st, '2026-10-15', { me: 'al' });
   assert.equal(st.todos.filter((t) => t.ref === 'approve:2026-10-15').length, 1, 'once ticked, a new one while invoices still wait');
@@ -2833,6 +2917,36 @@ await check('automations: "Approve invoices" for admins while any invoice awaits
   st.todos.forEach((t) => { t.done = true; });
   auto.ensureTodosLocal(st, '2026-10-16', { me: 'al' });
   assert.ok(!st.todos.some((t) => t.ref === 'approve:2026-10-16'), 'nothing awaiting: no to-do');
+});
+
+await check('automations: reminders follow the day (0017, §27): an undone automation to-do from an earlier day moves on, one per ref', () => {
+  const st = workState();
+  const todo = (id, assignee, day, source, ref, done = false) => auto.makeTodo({ id, assignee, createdBy: assignee, title: id, day, source, ref, done });
+  st.todos = [
+    todo('approve', 'al', '2026-10-13', 'automation', 'approve:2026-10-13'),
+    todo('follow-old', 'al', '2026-10-12', 'automation', 'contact:x'),
+    todo('follow-new', 'al', '2026-10-13', 'automation', 'contact:x'),
+    todo('contract-done', 'al', '2026-10-12', 'automation', 'contract:c', true),
+    todo('there-already', 'al', '2026-10-12', 'automation', 'contact:z'),
+    todo('today-z', 'al', '2026-10-15', 'automation', 'contact:z'),
+    todo('manual', 'al', '2026-10-12', 'manual', ''),
+    { ...todo('routine', 'al', '2026-10-12', 'routine', ''), routineId: 'r-al' },
+    todo('stus', 'stu', '2026-10-12', 'automation', 'contact:s'),
+    todo('later', 'al', '2026-10-20', 'automation', 'contact:later'),
+    todo('today-manual', 'al', '2026-10-15', 'manual', ''),
+  ];
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-15', { me: 'al' }), 2, 'Thursday: no routine; two reminders moved');
+  const dayOf = Object.fromEntries(st.todos.map((t) => [t.id, t.day]));
+  assert.deepEqual(dayOf, {
+    approve: '2026-10-15', 'follow-old': '2026-10-12', 'follow-new': '2026-10-15', 'contract-done': '2026-10-12', 'there-already': '2026-10-12',
+    'today-z': '2026-10-15', manual: '2026-10-12', routine: '2026-10-12', stus: '2026-10-12', later: '2026-10-20', 'today-manual': '2026-10-15',
+  }, 'the newest undone one per ref moves; done, routine, manual, someone else’s, later ones, and ones whose ref is on the day already stay');
+  assert.deepEqual(st.todos.filter((t) => t.assignee === 'al' && t.day === '2026-10-15').map((t) => t.id), ['today-z', 'today-manual', 'approve', 'follow-new'],
+    'after the day’s own to-dos, oldest first (the order is their position)');
+  assert.deepEqual([st.todos.find((t) => t.id === 'approve').ref, st.todos.find((t) => t.id === 'follow-new').ref], ['approve:2026-10-13', 'contact:x'], 'refs kept');
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-15', { me: 'al' }), 0, 'again: nothing');
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-14', { me: 'al' }), 0, 'never back to an earlier day, and an older copy stays while a later one exists');
+  assert.equal(st.todos.find((t) => t.id === 'approve').day, '2026-10-15');
 });
 
 await check('automations: clientCreatedLocal gives an admin owner a "Prepare contract" to-do on their own day (0004)', () => {
@@ -2910,7 +3024,7 @@ await check('automations: contactPipelineLocal creates the deal and the follow-u
     accountId: account.id, contactIds: [pat.id], currency: 'AUD', closeOn: '', probability: null, waitingOn: 'us', lostReason: '', stageAt: '',
   });
   assert.deepEqual([account.kind, account.lifecycle, account.owner, pat.accountId, pat.owner], ['prospect', 'engaged', 'stu', account.id, 'stu'],
-    '0018: the organisation as an engaged prospect, the person as its contact');
+    '0019: the organisation as an engaged prospect, the person as its contact');
   assert.equal(st.deals.at(-1), out.deal, 'at the end of the pipeline');
   assert.deepEqual({ ...out.todo, id: '' }, {
     id: '', assignee: 'stu', createdBy: 'al', title: 'Follow up: Pat Doe replied', notes: '', day: '2026-10-12', start: '', minutes: 30,
@@ -2923,14 +3037,43 @@ await check('automations: contactPipelineLocal creates the deal and the follow-u
   assert.equal(out.deal.stage, 'First meetings', 'a booking moves it on');
   assert.equal(account.lifecycle, 'meeting', 'and the account');
   assert.deepEqual([st.accounts.length, st.crmContacts.length], [1, 1], 'found again, not added twice');
-  assert.equal(again.todo, null, 'one follow-up per contact and day');
+  // The booking's to-do has its own ref (0017), so the day's follow-up doesn't stop it, and stays as it was.
+  assert.deepEqual([again.todo.title, again.todo.ref, again.todo.day], ['Prepare: meeting with Pat Doe', 'meeting:c1', '2026-10-12']);
+  assert.deepEqual([out.todo.title, out.todo.done], ['Follow up: Pat Doe replied', false]);
+  assert.equal(auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-12' }).todo, null, 'once per contact, stage and day');
   st.contacts[0].status = 'Replied';
   auto.contactPipelineLocal(st, 'c1', 'Meeting booked', { day: '2026-10-13' });
   assert.equal(out.deal.stage, 'First meetings', 'never moves back');
   assert.equal(account.lifecycle, 'meeting', 'nor does the account');
   assert.equal(st.todos.at(-1).title, 'Follow up: Pat Doe replied');
   assert.equal(st.deals.length, 2);
-  assert.equal(st.todos.length, 2);
+  assert.equal(st.todos.length, 3);
+  // A ticked to-do is never changed or reopened, whichever way the status goes.
+  const followUp = st.todos.at(-1);
+  Object.assign(followUp, { done: true, doneAt: '2026-10-13T01:00:00.000Z' });
+  assert.equal(auto.contactPipelineLocal(st, 'c1', 'Sent', { day: '2026-10-13' }).todo, null, 'Replied again: nothing new');
+  st.contacts[0].status = 'Meeting booked';
+  const prep = auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-13' }).todo;
+  assert.deepEqual([prep.ref, prep.done], ['meeting:c1', false], 'booked after a ticked follow-up: its own to-do');
+  Object.assign(prep, { done: true, doneAt: '2026-10-13T02:00:00.000Z' });
+  st.contacts[0].status = 'Replied';
+  assert.equal(auto.contactPipelineLocal(st, 'c1', 'Meeting booked', { day: '2026-10-13' }).todo, null);
+  st.contacts[0].status = 'Meeting booked';
+  assert.equal(auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-13' }).todo, null);
+  assert.deepEqual(st.todos.filter((t) => t.day === '2026-10-13').map((t) => [t.title, t.done, t.doneAt]),
+    [['Follow up: Pat Doe replied', true, '2026-10-13T01:00:00.000Z'], ['Prepare: meeting with Pat Doe', true, '2026-10-13T02:00:00.000Z']]);
+});
+
+await check('automations: a follow-up moved on to the day (0017) doesn’t stop the meeting booked that day', () => {
+  const st = outreachState();
+  auto.contactPipelineLocal(st, 'c1', 'Sent', { day: '2026-10-12' }); // Follow up, owner stu, left unticked
+  assert.equal(auto.ensureTodosLocal(st, '2026-10-15', { me: 'stu' }) >= 1, true, 'moved on to Thursday');
+  st.contacts[0].status = 'Meeting booked';
+  const out = auto.contactPipelineLocal(st, 'c1', 'Replied', { day: '2026-10-15' });
+  const mine = st.todos.filter((t) => t.ref.endsWith(':c1'));
+  assert.deepEqual(mine.map((t) => [t.day, t.ref, t.title, t.done]), [
+    ['2026-10-15', 'contact:c1', 'Follow up: Pat Doe replied', false], ['2026-10-15', 'meeting:c1', 'Prepare: meeting with Pat Doe', false]]);
+  assert.equal(out.todo, mine[1]);
 });
 
 await check('automations: contactPipelineLocal names, owners and stages', () => {
@@ -2963,13 +3106,13 @@ await check('automations: a booking moves a deal on from Opportunities or Contac
   };
   assert.deepEqual(['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Proposal sent', 'Lost'].map(at),
     ['First meetings', 'First meetings', 'First meetings', 'Demos', 'Proposal sent', 'Lost']);
-  // 0018's trigger keeps 0008's rule.
-  const sql18 = readFileSync(new URL('0018_crm_accounts.sql', migrationsDir), 'utf8');
+  // 0019's trigger keeps 0008's rule.
+  const sql18 = readFileSync(new URL('0019_crm_accounts.sql', migrationsDir), 'utf8');
   assert.match(sql18, /elsif v_booked and v_stage in \('Opportunities', 'Contacted'\) then/);
   assert.match(sql18, /case when v_booked then 'First meetings' else 'Opportunities' end/);
 });
 
-await check('pipeline: stages Opportunities → Contacted → First meetings → Demos → Proposal sent, and Lost (0018); dealStage() shows the old Won in the last', async () => {
+await check('pipeline: stages Opportunities → Contacted → First meetings → Demos → Proposal sent, and Lost (0019); dealStage() shows the old Won in the last', async () => {
   const data = await import('../src/data/boards.js');
   assert.deepEqual(data.DEAL_STAGES, ['Opportunities', 'Contacted', 'First meetings', 'Demos', 'Proposal sent']);
   assert.deepEqual(data.ALL_DEAL_STAGES, [...data.DEAL_STAGES, 'Lost']);
@@ -2986,8 +3129,8 @@ await check('pipeline: stages Opportunities → Contacted → First meetings →
   const now = Date.parse('2026-10-28T12:00:00Z');
   assert.deepEqual([data.daysInStage({ stageAt: '2026-10-14T13:00:00Z' }, now), data.daysInStage({ stageAt: '2026-10-28T11:00:00Z' }, now),
     data.daysInStage({ stageAt: '' }, now), data.daysInStage({ stageAt: '2026-11-01T00:00:00Z' }, now)], [13, 0, null, 0]);
-  // 0018 renames nothing: the stages the team uses stay.
-  const sql18 = readFileSync(new URL('0018_crm_accounts.sql', migrationsDir), 'utf8');
+  // 0019 renames nothing: the stages the team uses stay.
+  const sql18 = readFileSync(new URL('0019_crm_accounts.sql', migrationsDir), 'utf8');
   assert.ok(!/then 'Interested'|'Demo held'|'Contract sent'/.test(sql18));
   assert.deepEqual(Object.entries(data.OLD_DEAL_STAGES), [['Won', 'Proposal sent']]);
   // 0008 makes the same moves in the database: Won → Demos, the booking rule from Opportunities or Contacted.
@@ -3019,7 +3162,7 @@ await check('pipeline: Work in Progress has a row per client with Details (text)
   assert.deepEqual([rec.name, rec.values.details, rec.values.status, rec.values.people], ['Example Council', 'Onboarding call', 'In progress', ['u1']]);
 });
 
-// ── The CRM (0018): accounts, their contacts, the deals on them ─────────────────────────────────────────────────
+// ── The CRM (0019): accounts, their contacts, the deals on them ─────────────────────────────────────────────────
 
 const accounts = await import('../src/lib/accounts.js');
 
@@ -3046,15 +3189,15 @@ await check('accounts: cleanAccount and cleanPerson keep valid fields only — k
     ['shire.example.com', 'example.org', '', '']);
 });
 
-await check('accounts: lifecycleAfter moves forward only (as 0018’s contact_pipeline), never over a lifecycle set aside', () => {
+await check('accounts: lifecycleAfter moves forward only (as 0019’s contact_pipeline), never over a lifecycle set aside', () => {
   const { lifecycleAfter } = accounts;
   assert.deepEqual(['new', 'contacted', 'engaged', 'meeting', 'opportunity', 'customer'].map((l) => lifecycleAfter(l, 'replied')),
     ['engaged', 'engaged', 'engaged', 'meeting', 'opportunity', 'customer']);
   assert.deepEqual(['new', 'engaged', 'meeting', 'opportunity'].map((l) => lifecycleAfter(l, 'booked')), ['meeting', 'meeting', 'meeting', 'opportunity']);
   assert.deepEqual(['nurture', 'rfp', 'not_now', 'suppressed'].map((l) => lifecycleAfter(l, 'booked')), ['nurture', 'rfp', 'not_now', 'suppressed']);
   assert.deepEqual([lifecycleAfter('', 'replied'), lifecycleAfter('new', 'other')], ['engaged', 'new']);
-  // 0018 says the same.
-  const sql14 = readFileSync(new URL('0018_crm_accounts.sql', migrationsDir), 'utf8');
+  // 0019 says the same.
+  const sql14 = readFileSync(new URL('0019_crm_accounts.sql', migrationsDir), 'utf8');
   assert.match(sql14, /where id = v_account and \(lifecycle in \('new', 'contacted'\) or \(v_booked and lifecycle = 'engaged'\)\);/);
 });
 
@@ -3078,7 +3221,7 @@ await check('accounts: lookups — an account by name (any case), its people and
   assert.ok(accounts.personText(st, st.crmContacts[0]).includes('example shire'), 'a contact is found by their account’s name');
 });
 
-await check('crm: entries on an account or a contact (0018) — Pipeline’s rules; an account’s timeline has its own, its people’s, its deals’ and its client’s', () => {
+await check('crm: entries on an account or a contact (0019) — Pipeline’s rules; an account’s timeline has its own, its people’s, its deals’ and its client’s', () => {
   const st = {
     ...crmState(),
     accounts: [{ id: 'a1', name: 'Won deal', clientId: 'c-won' }, { id: 'a2', name: 'Other' }],
@@ -3099,12 +3242,12 @@ await check('crm: entries on an account or a contact (0018) — Pipeline’s rul
     'its own, Jo’s, both deals’ and its client’s (with its older notes); not Lee’s; links aside');
   assert.deepEqual(crm.linksOf(st, { accountId: 'a1' }).map((l) => l.id), ['fixed:Demo', 'e3'], 'the client’s Demo link, a deal’s link; never an unsafe one');
   assert.deepEqual(crm.timelineOf(st, { contactId: 'p1' }).map((e) => e.id), ['e8'], 'a contact’s own');
-  // 0018's read policy says the same.
-  const sql14 = readFileSync(new URL('0018_crm_accounts.sql', migrationsDir), 'utf8');
+  // 0019's read policy says the same.
+  const sql14 = readFileSync(new URL('0019_crm_accounts.sql', migrationsDir), 'utf8');
   assert.match(sql14, /or \(\(deal_id is not null or account_id is not null or contact_id is not null\) and public\.can_view\('pipeline'\)\)/);
 });
 
-await check('automations: crmBackfillLocal (0018’s one-off steps) — stages kept, every client and deal its account, a deal’s outreach contact on it; run again, nothing changes', () => {
+await check('automations: crmBackfillLocal (0019’s one-off steps) — stages kept, every client and deal its account, a deal’s outreach contact on it; run again, nothing changes', () => {
   let n = 0;
   const uid = () => `id-${++n}`;
   const st = {
@@ -3132,7 +3275,7 @@ await check('automations: crmBackfillLocal (0018’s one-off steps) — stages k
   assert.equal(JSON.stringify(st), before, 'nothing left to do');
 });
 
-await check('automations: logStageLocal and historyBackfillLocal (0019’s trigger and one-off step, demo mode)', () => {
+await check('automations: logStageLocal and historyBackfillLocal (0020’s trigger and one-off step, demo mode)', () => {
   let n = 0;
   const uid = () => `h-${++n}`;
   const st = { me: 'u1', deals: [{ id: 'd1', stage: 'Opportunities', stageAt: '2026-10-01T00:00:00.000Z' }, { id: 'd2', stage: 'Demos', clientId: 'c1', stageAt: '' }] };
@@ -3268,7 +3411,7 @@ await check('pipeline: cleanDealPatch keeps valid edits only (Edit deal)', async
   const users = ['u1', 'u2'];
   assert.deepEqual(cleanDealPatch({ name: '  Example Water ', sector: ' Utilities ', next: ' Call ', value: '250000', priority: 'P1', stage: 'Proposal sent', contact: 'u2' }, users),
     { name: 'Example Water', sector: 'Utilities', next: 'Call', value: 250000, priority: 'P1', stage: 'Proposal sent', contact: 'u2' });
-  // 0018's fields: a known currency and waiting on, a probability from 0 to 100 ('' is the stage's), a date, Lost and its
+  // 0019's fields: a known currency and waiting on, a probability from 0 to 100 ('' is the stage's), a date, Lost and its
   // reason, an account and contacts among those given (each once).
   const ids = { accountIds: ['a1'], contactIds: ['p1', 'p2'] };
   assert.deepEqual(cleanDealPatch({ currency: 'GBP', waitingOn: 'them', probability: '35', closeOn: '2026-12-01', stage: 'Lost', lostReason: ' Timing ',
@@ -3361,7 +3504,7 @@ await check('import: deal stages map to the columns (proposal, quote, tender or 
     'Demos', 'Demos', 'Demos', 'First meetings', 'Lost', 'Lost']);
 });
 
-await check('import: accounts and CRM contacts (0018) — HubSpot and Apollo headers map; type, lifecycle, role and time zone read from their wording', async () => {
+await check('import: accounts and CRM contacts (0019) — HubSpot and Apollo headers map; type, lifecycle, role and time zone read from their wording', async () => {
   const { autoMap, normalise, withFullName } = await import('../src/lib/importers.js');
   const users = [{ id: 'u1', name: 'Dale Example', email: 'dale@example.com' }];
   const headers = ['Company name', 'Type', 'Lifecycle Stage', 'Industry', 'Country/Region', 'State/Region', 'Website URL', 'Number of Employees', 'Company owner'];
@@ -3403,7 +3546,7 @@ await check('import: accounts and CRM contacts (0018) — HubSpot and Apollo hea
 
 const leadsLib = await import('../src/lib/leads.js');
 
-await check('leads: cleaning a lead, a list and a suppression (0020 limits; a lead\'s domain from its email, never a personal mailbox\'s)', () => {
+await check('leads: cleaning a lead, a list and a suppression (0021 limits; a lead\'s domain from its email, never a personal mailbox\'s)', () => {
   const { cleanLead, cleanLeadList, cleanSuppression, leadDomain } = leadsLib;
   assert.deepEqual(cleanLead({ name: '  Jo Example ', email: ' Jo@Shire.Example.com ', status: 'won', owner: 'nobody', linkedin: 'javascript:alert(1)' }, { userIds: ['u1'] }),
     { name: 'Jo Example', email: 'jo@shire.example.com', domain: 'shire.example.com', owner: '', linkedin: '' });
@@ -4702,6 +4845,7 @@ if (createSeed) {
     const m = demoMeetings(today);
     assert.ok(m.some((x) => x.busy && x.title === '') && m.some((x) => x.all_day));
     assert.ok(m.some((x) => x.start_date < '2026-10-01'), 'last month, for the Archive');
+    assert.ok(m.some((x) => x.start_date === today && !x.all_day), 'one today, for the Dashboard’s meetings (§27)');
     assert.ok(m.every((x) => ['david', 'josh', 'hello'].includes(x.user_id) && x.end_date >= x.start_date));
   });
 

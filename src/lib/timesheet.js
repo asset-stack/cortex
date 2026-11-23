@@ -11,7 +11,7 @@ export const EMAIL_MINUTES = 10; // per email sent → Email marketing
 export const ITEM_MINUTES = 30; // per board item worked on → its module's category (Projects, Marketing, …)
 export const BOARD_CATEGORY = { projects: 'Projects', marketing: 'Marketing', outreach: 'Outreach', clients: 'Clients', pipeline: 'Clients' };
 /** The work category a board task's time goes under: its department's (docs/PHASE2.md §20), so a marketing task kept
- *  on an Operations board counts as Marketing. */
+ *  on a Projects board counts as Marketing. */
 export const categoryOf = (board, item) => BOARD_CATEGORY[departmentOf(board, item)] || 'Other';
 
 const pad = (n) => String(n).padStart(2, '0');

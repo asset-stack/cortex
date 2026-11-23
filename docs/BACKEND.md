@@ -15,7 +15,7 @@ cold email the agent sends from each mailbox, read from its Google Sheet; and
 [§13](PHASE2.md#13-0007-boards-under-outreach-and-clients): boards under Outreach and Clients) and `0008_pipeline_stages.sql`
 ([PHASE2.md §14](PHASE2.md#14-0008-pipeline--opportunities--contacted--first-meetings--demos-editable-deals-work-in-progress): Pipeline's stages, editable deals and
 Work in Progress) and `0009_calendar.sql` ([PHASE2.md §15](PHASE2.md#15-0009-the-team-calendar-google-calendar-meetings-and-a-boards-3-month-calendar):
-the team Calendar, Google Calendar meetings and a board's 3-month calendar) and `0010_outreach_gmail.sql`
+the team Calendar, Google Calendar meetings and a board's calendar, of this month since §27) and `0010_outreach_gmail.sql`
 ([PHASE2.md §16](PHASE2.md#16-0010-outreach-from-gmail--cold-emails-counted-from-each-mailbox): Outreach counted from
 each mailbox's Gmail). The rest of this file is phase 1, corrected where 0002–0010 changed it.
 
@@ -39,7 +39,8 @@ each mailbox's Gmail). The rest of this file is phase 1, corrected where 0002–
   `routine_runs` (not synced, no policies) is `ensure_todos`' run log.
 - **New columns**: `contacts.owner_id`, `deals.contact_id`, `invoices.plan_id / sent_at / paid_on`;
   `billing_plans.anchor_day` (synced) and `billed_periods` (the database's own).
-- **Automation**: RPCs `ensure_todos(day)` (daily routines, Monday bank-screenshot reminder) and
+- **Automation**: RPCs `ensure_todos(day)` (daily routines, Monday bank-screenshot reminder; 0004 Approve invoices; 0017 moves
+  undone automation to-dos from earlier days to the day, docs/PHASE2.md §27) and
   `generate_due_invoices()` (admins); trigger `contact_pipeline` (Replied / Meeting booked → deal + follow-up
   to-do); triggers `protect_invoice_status` / `protect_invoice_insert` (only admins approve, send, void or mark
   paid). Business dates (invoices) use `team_today()`, Sydney's day (0003; was Perth); a follow-up to-do lands on
@@ -83,7 +84,7 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
   // 0006: an array (was { projects|marketing: { groups } }). Projects, Marketing, Outreach, then Clients; personal boards first (by
   // owner's name), then team boards in order. A personal board has name '' and owner set (title from boardTitle()).
   boards: [{ id, module: 'projects'|'marketing'|'outreach'|'clients'|'pipeline' /* 0007, 0008 add the last three */, name, owner /* '' | userId */,
-             calendar /* 0009: a team board shows its 3-month calendar */,
+             calendar /* 0009: a team board shows a calendar of this month above its tasks (§27) */,
              groups: [{ id, name, color,
                items: [{ id, name, values: { people /* [userId] */, status, ... }, done,
                          updates: [{ id, user, text, ts }], subtasks: [{ id, text, done }] }] }] }],
@@ -128,6 +129,9 @@ action ──▶ next state ──flatten()──▶ rows ──diff(prevRows)�
   // entries become its client's too at Make client (dealId kept).
   crmEntries: [{ id, dealId, clientId, kind /* note | meeting | link */, title, body, url, label, happenedOn /* meeting */,
                  attendees, user, createdAt }],
+  // 0017 (docs/PHASE2.md §27): each person's My list on their Dashboard, by position then createdAt. Private: live
+  // mode holds only your own lines.
+  myList: [{ id, user, text, done, position, createdAt }],
   // phase 2: moduleAccess, todos, routines, payments, bankStatements, expenses, subscriptions, timeEntries,
   // clients[].plans and clients[].usage (docs/PHASE2.md §2)
 }
@@ -160,6 +164,7 @@ maintained by a `touch()` trigger (the sync engine never sends these two columns
 | `deals` | `name, sector, priority, stage, next_step text`, `value numeric not null default 0`, `owner_id uuid null → profiles`, `client_id uuid null → clients on delete set null`, `contact_id uuid null → contacts on delete set null` (0002), `position int`; 0013: `source text not null default '' check in ('', 'lyco', 'assetstack')` | `deals[]` |
 | `client_notes` | `client_id → clients cascade`, `user_id → profiles`, `text text`, `created_at timestamptz` | `clients[].notes[]` (newest first) |
 | `crm_entries` (0012) | `deal_id uuid null → deals on delete set null`, `client_id uuid null → clients cascade` (one or both), `kind text check in ('note','meeting','link')`, `title, body, url, label, attendees text`, `happened_on date null`, `user_id → profiles on delete set null`, `created_at timestamptz` | `crmEntries[]` (newest first) |
+| `my_list` (0017) | `user_id uuid not null default auth.uid() → profiles cascade`, `text text not null default '' check (char_length(text) <= 500)`, `done bool`, `position int`, `created_at timestamptz` | `myList[]` (by position) |
 | `client_tasks` | `client_id cascade`, `position int`, `text text`, `done bool` | `clients[].tasks[]` |
 | `invoices` | `client_id cascade`, `number text not null unique`, `issued date`, `due date`, `status text`, `position int`; 0002: `plan_id uuid null → billing_plans on delete set null`, `sent_at timestamptz null`, `paid_on date null` | `clients[].invoices[]` |
 | `invoice_lines` | `invoice_id → invoices cascade`, `position int`, `description text`, `qty text`, `rate text` (kept as typed, e.g. `'1,000'`) | `invoices[].lines[]` |
@@ -226,6 +231,8 @@ Text columns default to `''` and are `not null` unless noted, so the state never
   date and the entry's deal and client, and give a new entry on a deal its deal's client (`protect_crm_entry`), give a
   deal's entries its client at Make client by a Clients editor (`crm_carry_to_client`) and delete those that never
   reached a client with their deal (`crm_drop_deal_entries`).
+- `my_list` (0017): every operation only when `is_staff()` and `user_id = auth.uid()` (admins too: a list is its owner's
+  alone); `protect_my_list` keeps `user_id` and `created_at` on update.
 - `read_state`: all operations only where `user_id = auth.uid()`.
 - `admin_emails`: no policies (not readable by clients).
 

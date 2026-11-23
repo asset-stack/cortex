@@ -21,6 +21,7 @@ import { TEAM_TIMEZONE, browserTimezone, daysBetween, invoiceTotals, localYmd, p
 import { acceptedValues, boardValues, itemRef, mailsOwner, newTaskValues, nextValues, ownerOf, todoForItem, todoItemId } from '@/lib/work';
 import { LEAD_STATUSES, cleanLead, cleanLeadList, cleanSuppression, crmMatch, leadKey } from '@/lib/leads';
 import { canAddEntry, canChangeEntry, carryDealEntriesLocal, cleanEntry, dropDealEntriesLocal } from '@/lib/crm';
+import { cleanListText, listOf } from '@/lib/myList';
 import { categoryOf } from '@/lib/timesheet';
 import { cleanTool } from '@/lib/tools';
 import { cleanCalendarEvent } from '@/lib/calendar';
@@ -245,7 +246,7 @@ function forgetGmail(d, mailboxId) {
   if (d.outreachMessages) d.outreachMessages = d.outreachMessages.filter((x) => x.mailbox !== mailboxId);
 }
 
-// A lead's fields before cleanLead() fills them in (0020's defaults).
+// A lead's fields before cleanLead() fills them in (0021's defaults).
 const LEAD_DEFAULTS = {
   name: '', title: '', email: '', phone: '', linkedin: '', company: '', domain: '', sector: '', country: '', region: '', timezone: '',
   size: '', status: 'new', accountId: '', personId: '', owner: '', note: '',
@@ -268,7 +269,7 @@ function createActions(mutate, mode) {
     const b = findBoard(d, boardId);
     return b && !b.owner ? fn(d, b) : false;
   });
-  // Task emails (0017, live mode): the database queues one when a task goes to someone else or someone else posts an
+  // Task emails (0018, live mode): the database queues one when a task goes to someone else or someone else posts an
   // update on it; this asks the google function to send once the save has landed. `fn` → whether it may have queued.
   const mailing = (fn) => {
     let queued = false;
@@ -276,7 +277,7 @@ function createActions(mutate, mode) {
     if (queued && result !== false) mode.taskMail?.();
     return result;
   };
-  // Demo mode's 0019 log_deal_stage trigger (live: the database writes the history; the app never does).
+  // Demo mode's 0020 log_deal_stage trigger (live: the database writes the history; the app never does).
   const logStage = (d, deal, from, to) => { if (!mode.live) logStageLocal(d, deal, from, to); };
   // Your own to-dos, or anyone's for admins.
   const mayTodo = (d, t) => Boolean(t) && (t.assignee === d.me || isAdmin(d));
@@ -335,7 +336,7 @@ function createActions(mutate, mode) {
       const result = { added: 0, skipped: 0 };
       const target = kind === 'tasks' ? findBoard(d, options.board) : null;
       const module = { clients: 'clients', contacts: 'outreach', deals: 'pipeline', accounts: 'pipeline', people: 'pipeline', tasks: target?.module }[kind];
-      if ((kind === 'accounts' || kind === 'people') && absent('accounts')) return false; // 0018 hasn't run
+      if ((kind === 'accounts' || kind === 'people') && absent('accounts')) return false; // 0019 hasn't run
       if (!module) {
         result.skipped = records?.length || 0;
         return result;
@@ -354,7 +355,7 @@ function createActions(mutate, mode) {
         // fills it in instead of being skipped as a duplicate. It stays linked to its contact.
         const made = new Map(d.deals.filter((x) => x.contactId && !toNum(x.value)).map((x) => [normName(x.name), x]));
         let filled = 0;
-        // 0018: an Account column names the deal's account (else its own name does).
+        // 0019: an Account column names the deal's account (else its own name does).
         const accountNames = new Map((records || []).map((r) => [normName(r?.name), String(r?.account || '').trim()]));
         records = (records || []).map((r) => { if (!r) return r; const { account: _a, ...x } = r; return x; });
         const rest = (records || []).filter((r) => {
@@ -370,7 +371,7 @@ function createActions(mutate, mode) {
         d.deals.push(...added);
         added.forEach((x) => logStage(d, x, '', x.stage));
         result.added += filled;
-        // 0018: each on its account (the one with its name, else a new one).
+        // 0019: each on its account (the one with its name, else a new one).
         if (!absent('accounts')) {
           added.forEach((x) => {
             const named = accountNames.get(normName(x.name)) || x.name;
@@ -454,7 +455,7 @@ function createActions(mutate, mode) {
       b.name = title;
       return true;
     }),
-    // Show or hide a team board's 3-month calendar above its tasks (0009; boards with a date column).
+    // Show or hide a team board's calendar of this month above its tasks (0009; boards with a date column).
     setBoardCalendar: (boardId, on) => onTeamBoard(boardId, (d, b) => {
       if (!hasDates(BOARD_SCHEMAS[b.module]) || Boolean(b.calendar) === Boolean(on)) return false;
       b.calendar = Boolean(on);
@@ -939,7 +940,7 @@ function createActions(mutate, mode) {
       return true;
     }),
 
-    // ── Accounts and their contacts (0018; Pipeline edit, as deals) ──
+    // ── Accounts and their contacts (0019; Pipeline edit, as deals) ──
 
     // → id
     addAccount: (fields = {}) => !absent('accounts') && editing('pipeline', (d) => {
@@ -1005,7 +1006,7 @@ function createActions(mutate, mode) {
     convertDeal: (dealId) => mutate((d) => {
       const deal = d.deals.find((v) => v.id === dealId);
       if (!deal || deal.clientId || !canEdit(d, 'pipeline') || !canEdit(d, 'clients')) return false;
-      // 0018: the deal's account becomes a customer, linked to its client (the account's own, when it has one).
+      // 0019: the deal's account becomes a customer, linked to its client (the account's own, when it has one).
       const account = deal.accountId ? (d.accounts || []).find((a) => a.id === deal.accountId) : null;
       const becomeCustomer = (clientId) => {
         if (!account) return;
@@ -1048,7 +1049,7 @@ function createActions(mutate, mode) {
       return client.id;
     }),
 
-    // ── Leads (0020; Outreach edit): lists of prospects, the suppress list, Convert to CRM (src/lib/leads.js) ──
+    // ── Leads (0021; Outreach edit): lists of prospects, the suppress list, Convert to CRM (src/lib/leads.js) ──
 
     // → id
     addLeadList: (fields = {}) => !absent('leads') && editing('outreach', (d) => {
@@ -1138,7 +1139,7 @@ function createActions(mutate, mode) {
       d.suppressions = d.suppressions.filter((x) => x.id !== id);
       return true;
     }),
-    // Into the CRM (needs Outreach edit and Pipeline edit, and 0018): its account (the one it matches, else a new prospect
+    // Into the CRM (needs Outreach edit and Pipeline edit, and 0019): its account (the one it matches, else a new prospect
     // from its company) and its contact there (the one it matches, else a new one), and, with { deal: true }, an
     // Interested deal on the account with the person on it. The lead is marked In CRM and linked to both.
     // → { accountId, personId, dealId } | false
@@ -1189,7 +1190,7 @@ function createActions(mutate, mode) {
       const deal = fields.dealId ? d.deals.find((x) => x.id === fields.dealId) : null;
       const dealId = deal?.id || '';
       const clientId = (fields.clientId && d.clients.some((x) => x.id === fields.clientId) ? fields.clientId : '') || deal?.clientId || '';
-      // 0018: on an account or one of its people instead (Pipeline edit).
+      // 0019: on an account or one of its people instead (Pipeline edit).
       const crm = !absent('accounts') && !dealId && !clientId;
       const accountId = crm && fields.accountId && (d.accounts || []).some((x) => x.id === fields.accountId) ? fields.accountId : '';
       const contactId = crm && !accountId && fields.contactId && (d.crmContacts || []).some((x) => x.id === fields.contactId) ? fields.contactId : '';
@@ -1212,6 +1213,35 @@ function createActions(mutate, mode) {
       const e = (d.crmEntries || []).find((x) => x.id === id);
       if (!canChangeEntry(d, e)) return false;
       d.crmEntries = d.crmEntries.filter((x) => x !== e);
+      return true;
+    }),
+
+    // ── My list (0017): your own lines, private (src/lib/myList.js ⇄ 0017's policies) ──
+
+    // At the end of your list. → id
+    addListItem: (text) => !absent('my_list') && mutate((d) => {
+      const clean = cleanListText(text);
+      if (!clean || !d.me) return false;
+      const mine = listOf(d, d.me);
+      const x = { id: uid(), user: d.me, text: clean, done: false, position: mine.length ? Math.max(...mine.map((i) => i.position ?? 0)) + 1 : 0, createdAt: nowIso() };
+      (d.myList ||= []).push(x);
+      return x.id;
+    }),
+    // Its text (an empty one is refused: removeListItem takes a line away) or whether it's done. Only your own.
+    updateListItem: (id, patch = {}) => !absent('my_list') && mutate((d) => {
+      const x = (d.myList || []).find((i) => i.id === id && i.user === d.me);
+      if (!x) return false;
+      const next = {};
+      if ('text' in patch) { const clean = cleanListText(patch.text); if (!clean) return false; if (clean !== x.text) next.text = clean; }
+      if ('done' in patch && Boolean(patch.done) !== Boolean(x.done)) next.done = Boolean(patch.done);
+      if (!Object.keys(next).length) return false;
+      Object.assign(x, next);
+      return true;
+    }),
+    removeListItem: (id) => !absent('my_list') && mutate((d) => {
+      const x = (d.myList || []).find((i) => i.id === id && i.user === d.me);
+      if (!x) return false;
+      d.myList = d.myList.filter((i) => i !== x);
       return true;
     }),
 
@@ -1566,7 +1596,7 @@ function createActions(mutate, mode) {
       return ok;
     },
     refreshGoogle: () => mode.refreshGoogle(),
-    // Task emails (0017; admins, live mode): who sends them (task_mail_status), sending them from my Google
+    // Task emails (0018; admins, live mode): who sends them (task_mail_status), sending them from my Google
     // (task_mail_use_me) or stopping them (task_mail_off). → { ok: true, data } | { ok: false, error, missing?, demo? }
     taskMailStatus: () => mode.taskMailRpc('task_mail_status'),
     taskMailUseMe: () => mode.taskMailRpc('task_mail_use_me'),
@@ -1811,7 +1841,9 @@ const DEMO_GOOGLE = { ready: true, demo: true, account: false, connected: false,
 // (never throws) to { ok, … } or { ok: false, error }.
 //   meetings(from, to) → { rows }: calendar_meetings rows touching from…to, a day wider each side for time zones
 //   status() → { people: [{ userId, connected, syncedAt, error, reconnect }], earliest, syncedAt }
-//   sync({ force }) → { claimed, synced, failed } (live only)
+//   sync({ force }) → { claimed, synced, failed } (live only; while one runs, a second call waits for it)
+//   pending() → the sync running in this tab, or null: a screen opened during it reads again after it (the status
+//     already looks fresh once its first person is saved, so it wouldn't ask for a sync itself)
 const touching = (rows, from, to) => rows.filter((m) => m.start_date <= addDays(to, 1) && m.end_date >= addDays(from, -1));
 function demoCalendar() {
   return {
@@ -1822,6 +1854,7 @@ function demoCalendar() {
       return { ok: true, people: [], earliest: rows.reduce((m, x) => (!m || x.start_date < m ? x.start_date : m), ''), syncedAt: '' };
     },
     sync: async () => ({ ok: false, error: 'Google works in live mode only.' }),
+    pending: () => null,
   };
 }
 
@@ -1837,9 +1870,12 @@ async function invokeFunction(name, body) {
   }
 }
 
-const MEETING_COLUMNS = 'id, user_id, title, busy, all_day, start_date, end_date, start_at, end_at';
+const MEETING_COLUMNS = 'id, user_id, google_id, title, busy, all_day, start_date, end_date, start_at, end_at';
 function liveCalendar(syncCalendar) {
   const failed = (error) => ({ ok: false, error: error?.message || String(error || 'Request failed') });
+  // The sync in flight: a screen opened during it (the Calendar after the Dashboard started one, or the other way round)
+  // waits for that run, which syncs everyone, and reads after it, instead of starting one that claims nobody.
+  let running = null;
   return {
     live: true,
     meetings: async (from, to) => {
@@ -1869,7 +1905,8 @@ function liveCalendar(syncCalendar) {
         };
       } catch (e) { return failed(e); }
     },
-    sync: (opts) => syncCalendar(opts),
+    sync: (opts) => (running ||= Promise.resolve(syncCalendar(opts)).finally(() => { running = null; })),
+    pending: () => running,
   };
 }
 
@@ -2371,10 +2408,10 @@ function LiveProvider({ userId, children }) {
   // Edits waiting for the 400 ms debounce go now (at most 3 s), for reads and calls that need them saved.
   const flushSoon = useCallback(() => Promise.race([engine.current?.flush(), wait(3000)]).catch(() => {}), []);
 
-  // Task emails (0017): the database queues them as tasks are handed over and updates posted; the google function sends
+  // Task emails (0018): the database queues them as tasks are handed over and updates posted; the google function sends
   // what is queued. Asked shortly after such a save (once it has landed), on opening Cortex and every 5 minutes while
   // it's open, so one that missed its turn (a closed tab, the function busy) still goes. Failures are quiet: the queue
-  // keeps them (before 0017 runs, the call just fails).
+  // keeps them (before 0018 runs, the call just fails).
   const mailTimer = useRef(null);
   const sendTaskMail = useCallback(() => {
     clearTimeout(mailTimer.current);
@@ -2488,7 +2525,7 @@ function LiveProvider({ userId, children }) {
         try {
           const { data, error } = await supabase.rpc(name);
           if (!error) return { ok: true, data };
-          // The function isn't there: 0017 hasn't run yet.
+          // The function isn't there: 0018 hasn't run yet.
           return { ok: false, missing: error.code === 'PGRST202' || /could not find the function/i.test(error.message || ''), error: error.message };
         } catch (e) {
           return { ok: false, error: e?.message || 'Request failed' };
