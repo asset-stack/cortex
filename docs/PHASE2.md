@@ -119,7 +119,8 @@ accounts:       [{ id, name, kind /* 'prospect'|'customer'|'partner'|'supplier' 
 crmContacts:    [{ id, accountId, name, title, email, phone, linkedin, timezone, role /* ''|CONTACT_ROLES */,
                    status /* 'active'|'left'|'do_not_contact' */, owner, createdAt }],
 //   deal: { ..., accountId, contactIds: [crm contact id], currency, closeOn, probability /* null = the stage's */,
-//           waitingOn /* ''|'us'|'them' */, lostReason, stageAt /* iso: when it reached its stage */ }
+//           waitingOn /* ''|'us'|'them' */, lostReason, stageAt /* iso: when it reached its stage */,
+//           productType /* '' | PRODUCT_TYPES */ }
 // 0020 (§31): each deal's stage history, oldest first. Written only by the database (read only in the app).
 dealHistory:    [{ id, dealId, from /* '' when added */, to /* a stage, or 'Won' */, at, by }],
 // 0021 (§32): Leads. Lists in order; leads in the order they were added; suppressions by kind, then value.
@@ -1558,6 +1559,16 @@ version that uses it. The `google` Edge Function (§9) gains the route `outreach
 - An account linked to a client shows the client's own people (read only, from Clients).
 - **Later, not built**: email history on the timeline (a summary of each sales email), stage exit checklists,
   merging the Outreach contact list into Contacts, saved views, and bulk edits.
+
+- **Product type and Deal notes** (owner, 2026-11-23): a deal says what it sells, `deals.product_type` (0019, in
+  `DEAL_0019` so it waits for the migration): one of `PRODUCT_TYPES` (Platform subscription, Asset capture (LiDAR / 3D
+  scanning), Condition assessment, Asset register build, Predictive maintenance, Digital twin, Forward works programme,
+  Advisory, Partnership; 0019's check lists the same, change both together) or '' (not set). Edit deal picks it; cards,
+  the table and the profile show it; imports read a Product column from its wording (`productOf()`). **Pipeline → Deal
+  notes** lists every open deal (or the lost ones) with its product type, owner, contacts, latest note or meeting
+  (`latestNote()` in `src/lib/crm.js`) and next step, latest note first or oldest first (to find the quiet ones), with
+  search, product and owner filters; a deal opens its profile. A deal's profile has **Add contact**: a new person at its
+  account, put on the deal.
 
 ## 32. 0021: Leads — prospect lists, the suppress list, contact history and Convert to CRM
 

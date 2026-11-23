@@ -159,6 +159,9 @@ export const dealStage = (deal) => (ALL_DEAL_STAGES.includes(deal?.stage) ? deal
 export const STAGE_PROBABILITY = { Opportunities: 10, Contacted: 15, 'First meetings': 25, Demos: 50, 'Proposal sent': 70, Lost: 0 };
 /** A deal's chance of winning, in %: its own, else its stage's. */
 export const dealProbability = (deal) => (Number.isInteger(deal?.probability) ? deal.probability : STAGE_PROBABILITY[dealStage(deal)]);
+// What a deal sells (0019's deals.product_type check; '' = not set). Change both together.
+export const PRODUCT_TYPES = ['Platform subscription', 'Asset capture (LiDAR / 3D scanning)', 'Condition assessment', 'Asset register build',
+  'Predictive maintenance', 'Digital twin', 'Forward works programme', 'Advisory', 'Partnership'];
 export const CURRENCIES = ['AUD', 'NZD', 'GBP', 'USD', 'EUR', 'CAD', 'AED', 'SAR'];
 export const WAITING_ON = { us: 'Us', them: 'Them' };
 export const LOST_REASONS = ['No budget', 'Existing system', 'Timing', 'Went to tender', 'Chose a competitor', 'No response', 'Not a fit', 'Other'];
@@ -197,6 +200,7 @@ export function cleanDealPatch(patch = {}, userIds = [], { accountIds = null, co
   if ('source' in patch && (patch.source === '' || isLead(patch.source))) out.source = patch.source;
   if ('contact' in patch) out.contact = userIds.includes(patch.contact) ? patch.contact : '';
   if ('currency' in patch && CURRENCIES.includes(patch.currency)) out.currency = patch.currency;
+  if ('productType' in patch && (patch.productType === '' || PRODUCT_TYPES.includes(patch.productType))) out.productType = patch.productType;
   if ('waitingOn' in patch && (patch.waitingOn === '' || patch.waitingOn in WAITING_ON)) out.waitingOn = patch.waitingOn;
   if ('probability' in patch) {
     const p = patch.probability;

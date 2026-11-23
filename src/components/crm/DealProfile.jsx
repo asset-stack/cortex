@@ -1,4 +1,4 @@
-import { Pencil } from 'lucide-react';
+import { Pencil, Plus } from 'lucide-react';
 import { useStore, useUsers } from '@/data/store';
 import { LEADS, LOST, dealProbability, dealStage, leadOf } from '@/data/boards';
 import { Avatar, Drawer } from '@/components/ui';
@@ -14,7 +14,7 @@ import { DaysInStage, Detail, Guardrails, OpenLink, PRIORITY_BG, TheirTime, Wait
  *  its account (with its guardrails) and the people on it, close date, probability, who it waits on and for how long, then
  *  its tasks, timeline and links. Pipeline view reads it; Pipeline edit adds to it. Made a client, it all carries to the
  *  client. */
-export default function DealProfile({ dealId, onClose, onEdit, onOpen }) {
+export default function DealProfile({ dealId, onClose, onEdit, onOpen, onNewPerson }) {
   const { state } = useStore();
   const users = useUsers();
   const access = useAccess();
@@ -23,6 +23,7 @@ export default function DealProfile({ dealId, onClose, onEdit, onOpen }) {
   const people = deal ? dealPeople(state, deal) : [];
   const contact = deal?.contactId && access.canView('outreach') ? state.contacts.find((c) => c.id === deal.contactId) : null;
   const stage = deal && dealStage(deal);
+  const canAddPerson = access.canEdit('pipeline') && Boolean(onNewPerson);
   return (
     <Drawer open={Boolean(deal)} onClose={onClose} title={deal?.name || ''} width={600}>
       {deal && (
@@ -44,6 +45,7 @@ export default function DealProfile({ dealId, onClose, onEdit, onOpen }) {
             )}
           </div>
           <dl className="grid grid-cols-[120px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[13.5px]">
+            <Detail label="Product">{deal.productType}</Detail>
             <Detail label="Account">{account && <OpenLink onClick={() => onOpen('account', account.id)}>{account.name}</OpenLink>}</Detail>
             <Detail label="Probability">{stage === LOST ? null : `${dealProbability(deal)}%`}</Detail>
             <Detail label="Expected close">{deal.closeOn && shortDate(deal.closeOn)}</Detail>
@@ -54,9 +56,17 @@ export default function DealProfile({ dealId, onClose, onEdit, onOpen }) {
             <Detail label="From contact">{contact && `${contact.name}${contact.email ? ` · ${contact.email}` : ''}`}</Detail>
           </dl>
           <Guardrails text={account?.guardrails} />
-          {people.length > 0 && (
+          {(people.length > 0 || (account && canAddPerson)) && (
             <section>
-              <h3 className="font-bold">Contacts</h3>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-bold">Contacts</h3>
+                {account && canAddPerson && (
+                  <button type="button" onClick={() => onNewPerson(account.id, deal.id)} className="inline-flex h-9 items-center gap-1.5 rounded-full chip px-3.5 text-[13px] font-semibold">
+                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />Add contact
+                  </button>
+                )}
+              </div>
+              {people.length === 0 && <p className="mt-1 dimmer">None yet.</p>}
               <ul className="mt-2 flex flex-col gap-1">
                 {people.map((p) => (
                   <li key={p.id} className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 rounded-xl px-2 py-1.5 hover:bg-white/5">

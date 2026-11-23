@@ -1,7 +1,7 @@
 // CSV import mapping (docs/BACKEND.md §4): which columns feed which fields, and one CSV row → one record in
 // state shape for actions.importRecords(), which adds ids and skips names that already exist. Pure functions.
 import {
-  ALL_DEAL_STAGES, BOARD_SCHEMAS, CLIENT_STATUSES, CONTACT_STATUSES, CURRENCIES, DEAL_STAGES, LEADS, LOST, PRIORITY, STATUS,
+  ALL_DEAL_STAGES, BOARD_SCHEMAS, CLIENT_STATUSES, CONTACT_STATUSES, CURRENCIES, DEAL_STAGES, LEADS, LOST, PRIORITY, PRODUCT_TYPES, STATUS,
 } from '@/data/boards';
 import { LIFECYCLES } from '@/lib/accounts';
 import { localYmd } from '@/lib/format';
@@ -62,6 +62,8 @@ export const FIELDS = {
     field('closeOn', 'Close date', 'date', ['close date', 'expected close', 'expected close date', 'closing date', 'close']),
     field('account', 'Account', 'text', ['account', 'account name', 'company', 'company name', 'organisation', 'organization'], { secondary: true }),
     field('source', 'Lead', 'text', ['lead', 'lead source', 'source', 'partner', 'channel']),
+    // 0019: what the deal sells (PRODUCT_TYPES), from the export's wording.
+    field('productType', 'Product', 'text', ['product type', 'product', 'service', 'offering', 'solution']),
   ],
   // The CRM (0019): organisations, then the people at them (by their account's name).
   accounts: [
@@ -377,6 +379,24 @@ function zoneOf(v) {
 }
 
 // A Lead as written ("LYCO", "Co-pitched", "Partner" → lyco; "AssetStack", "Direct" → assetstack), else none.
+// A product type from an export's wording ("LiDAR scan", "Condition audit", "SaaS licence" …); '' when blank or unknown.
+function productOf(v) {
+  const s = norm(v);
+  if (!s) return '';
+  const named = PRODUCT_TYPES.find((p) => norm(p) === s);
+  if (named) return named;
+  return (/partner|resell|white.?label|referr/.test(s) && 'Partnership')
+    || (/lidar|scan|photogramm|capture|survey/.test(s) && 'Asset capture (LiDAR / 3D scanning)')
+    || (/condition|inspect|audit|grading/.test(s) && 'Condition assessment')
+    || (/register|asset list|data clean/.test(s) && 'Asset register build')
+    || (/predict|maintenance|iot|sensor/.test(s) && 'Predictive maintenance')
+    || (/twin|3d model/.test(s) && 'Digital twin')
+    || (/forward works|capital works|sinking fund|lifecycle plan|amp\b|asset management plan/.test(s) && 'Forward works programme')
+    || (/advis|consult/.test(s) && 'Advisory')
+    || (/platform|subscription|licen[cs]e|saas|software/.test(s) && 'Platform subscription')
+    || '';
+}
+
 function leadSource(v) {
   const s = norm(v);
   const exact = Object.keys(LEADS).find((k) => k === s.replace(/\s/g, '') || norm(LEADS[k].label) === s);
@@ -495,7 +515,7 @@ export function normalise(kind, row, mapping, { users = [], me = '', board, now 
       const currency = get('currency').toUpperCase();
       return {
         name, sector: get('sector'), value: parseMoney(get('value')), priority: priority(get('priority'), true),
-        stage: dealStage(get('stage')), contact: owner('contact') || me, next: get('next'), source: leadSource(get('source')),
+        stage: dealStage(get('stage')), contact: owner('contact') || me, next: get('next'), source: leadSource(get('source')), productType: productOf(get('productType')),
         currency: CURRENCIES.includes(currency) ? currency : 'AUD', closeOn: toYmd(get('closeOn')), account: get('account').replace(/\s+/g, ' '),
       };
     }

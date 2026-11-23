@@ -70,7 +70,7 @@ const COLUMNS = {
     position: 'int', source: t, // the Lead (0013), as on clients
     // 0019 (DEAL_0019: left out of writes until it has run). stage_at is the database's (set when the stage changes).
     account_id: 'fk', contact_ids: 'uuids', currency: t, close_on: 'date', probability: 'nint', waiting_on: t, lost_reason: t,
-    stage_at: 'ts',
+    stage_at: 'ts', product_type: t,
   },
   // The CRM (0019): organisations and the people at them.
   accounts: {
@@ -160,7 +160,7 @@ const COLUMNS = {
 };
 
 const byId = (r) => String(r.id);
-const DEAL_0019 = ['account_id', 'contact_ids', 'currency', 'close_on', 'probability', 'waiting_on', 'lost_reason', 'stage_at'];
+const DEAL_0019 = ['account_id', 'contact_ids', 'currency', 'close_on', 'probability', 'waiting_on', 'lost_reason', 'stage_at', 'product_type'];
 
 // Parents before children (FK-safe insert order; deletes run in reverse).
 // update: the rows always exist (sign-up trigger, seeded org row), so the sync engine updates them in place. A
@@ -392,7 +392,7 @@ export function flatten(state) {
     id: d.id, name: d.name, sector: d.sector, priority: d.priority, stage: d.stage, next_step: d.next, value: d.value,
     owner_id: d.contact, client_id: d.clientId, contact_id: d.contactId, position: i, source: d.source, account_id: d.accountId,
     contact_ids: d.contactIds, currency: d.currency || 'AUD', close_on: d.closeOn, probability: d.probability, waiting_on: d.waitingOn,
-    lost_reason: d.lostReason, stage_at: d.stageAt,
+    lost_reason: d.lostReason, stage_at: d.stageAt, product_type: d.productType || '',
   }));
 
   (state.contacts || []).forEach((c, i) => put('contacts', {
@@ -589,7 +589,7 @@ export function assemble(rowsByTable, { me } = {}) {
       contact: d.owner_id ?? '', next: d.next_step, contactId: d.contact_id ?? '', source: d.source,
       ...(d.client_id ? { clientId: d.client_id } : {}),
       accountId: d.account_id ?? '', contactIds: [...d.contact_ids], currency: d.currency || 'AUD', closeOn: d.close_on ?? '',
-      probability: d.probability, waitingOn: d.waiting_on, lostReason: d.lost_reason, stageAt: d.stage_at ?? '',
+      probability: d.probability, waitingOn: d.waiting_on, lostReason: d.lost_reason, stageAt: d.stage_at ?? '', productType: d.product_type || '',
     })),
     accounts: all('accounts').sort(byPos).map((a) => ({
       id: a.id, name: a.name, kind: a.kind || 'prospect', lifecycle: a.lifecycle || 'new', lifecycleNote: a.lifecycle_note,

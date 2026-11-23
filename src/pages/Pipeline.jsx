@@ -3,7 +3,7 @@
 // board) under the deals. Pipeline view reads it all; Pipeline edit changes it; Make client also needs Clients edit.
 // Accounts and Contacts arrive with 0019: until it has run they're hidden and the deals work as before.
 import { useCallback, useEffect, useState } from 'react';
-import { BarChart3, Building2, Target, Users } from 'lucide-react';
+import { BarChart3, Building2, NotebookPen, Target, Users } from 'lucide-react';
 import { useStore } from '@/data/store';
 import { useAccess } from '@/lib/access';
 import { PageHeader, Segmented } from '@/components/ui';
@@ -17,9 +17,11 @@ import Opportunities from '@/components/crm/Opportunities';
 import { AccountForm, AccountProfile, AccountsTab } from '@/components/crm/Accounts';
 import { PeopleTab, PersonForm, PersonProfile } from '@/components/crm/People';
 import Reports from '@/components/crm/Reports';
+import DealNotes from '@/components/crm/DealNotes';
 
 const TABS = [
   { id: 'deals', label: 'Opportunities', icon: Target },
+  { id: 'notes', label: 'Deal notes', icon: NotebookPen, crm: true },
   { id: 'accounts', label: 'Accounts', icon: Building2, crm: true },
   { id: 'people', label: 'Contacts', icon: Users, crm: true },
   { id: 'reports', label: 'Reports', icon: BarChart3, crm: true },
@@ -86,10 +88,12 @@ export default function Pipeline() {
       )}
       {tab === 'accounts' && <AccountsTab onOpen={onOpen} />}
       {tab === 'people' && <PeopleTab onOpen={onOpen} />}
+      {tab === 'notes' && <DealNotes onOpen={onOpen} />}
       {tab === 'reports' && <Reports />}
 
       <DealProfile dealId={open?.kind === 'deal' ? open.id : null} onClose={() => setOpen(null)} onOpen={onOpen}
-        onEdit={(d) => setForm({ kind: 'deal', record: d })} />
+        onEdit={(d) => setForm({ kind: 'deal', record: d })}
+        onNewPerson={crm ? (accountId, dealId) => setForm({ kind: 'person', accountId, dealId }) : undefined} />
       {crm && (
         <>
           <AccountProfile accountId={open?.kind === 'account' ? open.id : null} onClose={() => setOpen(null)} onOpen={onOpen}
@@ -108,7 +112,13 @@ export default function Pipeline() {
       )}
       {editable && crm && form?.kind === 'person' && (
         <PersonForm key={form.record?.id || `new:${form.accountId || ''}`} person={form.record || null} accountId={form.accountId || ''}
-          onClose={closeForm} onSaved={(id) => { if (!form.accountId) onOpen('person', id); }} />
+          onClose={closeForm} onSaved={(id) => {
+            // Added from a deal (its Add contact): the person goes on that deal too.
+            if (form.dealId) {
+              const deal = state.deals.find((d) => d.id === form.dealId);
+              if (deal) actions.updateDeal(deal.id, { contactIds: [...(deal.contactIds || []), id] });
+            } else if (!form.accountId) onOpen('person', id);
+          }} />
       )}
       {makingDeal && (
         <ConfirmMakeClient name={makingDeal.name} open onClose={() => setMaking(null)}

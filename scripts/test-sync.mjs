@@ -94,11 +94,11 @@ const fixture = () => ({
     {
       id: 'd-1', name: 'Deal one', sector: 'Government', value: 70000, priority: 'P2', stage: 'Opportunities', contact: U1, next: 'Call', contactId: 'p-1', source: 'lyco',
       accountId: 'ac-1', contactIds: ['cc-1', 'cc-2'], currency: 'NZD', closeOn: '2026-12-15', probability: 25, waitingOn: 'us', lostReason: '',
-      stageAt: '2026-10-18T00:00:00.000Z',
+      stageAt: '2026-10-18T00:00:00.000Z', productType: 'Digital twin',
     },
     {
       id: 'd-2', name: 'Client one', sector: 'Utilities', value: '1,500', priority: 'P1', stage: 'Won', contact: '', next: '', contactId: '', source: '', clientId: 'c-1',
-      accountId: '', contactIds: [], currency: 'AUD', closeOn: '', probability: null, waitingOn: '', lostReason: '', stageAt: '',
+      accountId: '', contactIds: [], currency: 'AUD', closeOn: '', probability: null, waitingOn: '', lostReason: '', stageAt: '', productType: '',
     },
   ],
   // 0020: the deals' stage history, oldest first (written by the database).
@@ -346,7 +346,7 @@ await check('flatten: DB column shapes', () => {
   assert.deepEqual(rows.deals.get('d-2'), {
     id: 'd-2', name: 'Client one', sector: 'Utilities', priority: 'P1', stage: 'Won', next_step: '', value: 1500,
     owner_id: null, client_id: 'c-1', contact_id: null, position: 1, source: '', account_id: null, contact_ids: [], currency: 'AUD', close_on: null,
-    probability: null, waiting_on: '', lost_reason: '', stage_at: null,
+    probability: null, waiting_on: '', lost_reason: '', stage_at: null, product_type: '',
   });
   assert.deepEqual(rows.deals.get('d-1').contact_ids, ['cc-1', 'cc-2']);
   assert.equal(rows.deals.get('d-1').probability, 25);
@@ -3021,7 +3021,7 @@ await check('automations: contactPipelineLocal creates the deal and the follow-u
   const pat = st.crmContacts.find((c) => c.name === 'Pat Doe');
   assert.deepEqual({ ...out.deal, id: '', stageAt: '' }, {
     id: '', name: 'Example Water', sector: '', value: 0, priority: 'P2', stage: 'Opportunities', contact: 'stu', next: 'Reply to Pat Doe', contactId: 'c1', source: '',
-    accountId: account.id, contactIds: [pat.id], currency: 'AUD', closeOn: '', probability: null, waitingOn: 'us', lostReason: '', stageAt: '',
+    accountId: account.id, contactIds: [pat.id], currency: 'AUD', closeOn: '', probability: null, waitingOn: 'us', lostReason: '', stageAt: '', productType: '',
   });
   assert.deepEqual([account.kind, account.lifecycle, account.owner, pat.accountId, pat.owner], ['prospect', 'engaged', 'stu', account.id, 'stu'],
     '0019: the organisation as an engaged prospect, the person as its contact');
@@ -4865,6 +4865,29 @@ if (createSeed) {
     assert.ok(twice.boards.every((b) => typeof b.calendar === 'boolean'));
   });
 }
+
+await check('deals: a product type is one of PRODUCT_TYPES or blank (cleanDealPatch); imports read it from the wording; Deal notes shows each deal’s latest note or meeting', async () => {
+  const { cleanDealPatch, PRODUCT_TYPES } = await import('../src/data/boards.js');
+  assert.deepEqual(cleanDealPatch({ productType: 'Digital twin' }), { productType: 'Digital twin' });
+  assert.deepEqual(cleanDealPatch({ productType: '' }), { productType: '' });
+  assert.deepEqual(cleanDealPatch({ productType: 'Widgets' }), {}, 'an unknown one is left out');
+  const sql = readFileSync(new URL('0019_crm_accounts.sql', migrationsDir), 'utf8');
+  PRODUCT_TYPES.forEach((p) => assert.ok(sql.includes(`'${p}'`), `0019's check lists ${p}`));
+  const { autoMap, normalise } = await import('../src/lib/importers.js');
+  const map = autoMap(['Deal name', 'Product'], 'deals');
+  assert.equal(map.productType, 1);
+  const pt = (v) => normalise('deals', ['Example', v], map, { users: [], me: 'u-me' }).productType;
+  assert.deepEqual(['Digital twin', 'LiDAR scan of 3 sites', 'Condition audit', 'SaaS licence', 'White-label reseller', 'Asset management plan', 'Mystery', ''].map(pt),
+    ['Digital twin', 'Asset capture (LiDAR / 3D scanning)', 'Condition assessment', 'Platform subscription', 'Partnership', 'Forward works programme', '', '']);
+  const { latestNote } = await import('../src/lib/crm.js');
+  const state = { me: 'u1', users: [{ id: 'u1', role: 'superadmin', active: true }], deals: [{ id: 'd1' }], deals2: [], dealHistory: [
+    { id: 'h', dealId: 'd1', from: 'Opportunities', to: 'Demos', at: '2026-11-20T00:00:00Z' }], crmEntries: [
+    { id: 'n1', dealId: 'd1', kind: 'note', body: 'Older', createdAt: '2026-11-01T00:00:00Z' },
+    { id: 'm1', dealId: 'd1', kind: 'meeting', title: 'Demo', happenedOn: '2026-11-10', createdAt: '2026-11-02T00:00:00Z' },
+    { id: 'l1', dealId: 'd1', kind: 'link', url: 'https://example.com', createdAt: '2026-11-21T00:00:00Z' }] };
+  assert.equal(latestNote(state, 'd1')?.id, 'm1', 'the newest note or meeting; links and stage moves aside');
+  assert.equal(latestNote(state, 'nope'), null);
+});
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);

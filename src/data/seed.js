@@ -747,25 +747,25 @@ export function createSeed() {
 
   // Deals that came from an outreach contact keep the link, so a later reply or booking moves them on.
   const deals = [
-    deal('City of Lakeside', 'Government', 70000, 'P2', 'Opportunities', 'josh', 'Intro call', '', { days: 2, waitingOn: 'us' }),
+    deal('City of Lakeside', 'Government', 70000, 'P2', 'Opportunities', 'josh', 'Intro call', '', { productType: 'Platform subscription', days: 2, waitingOn: 'us' }),
     deal('Riverbend Water', 'Utilities', 220000, 'P1', 'Opportunities', 'david', 'Send digital twin brief', contactId('Riley Shaw'),
-      { days: 1, waitingOn: 'us', closeOn: addMonths(today, 4), source: 'assetstack' }),
+      { productType: 'Digital twin', days: 1, waitingOn: 'us', closeOn: addMonths(today, 4), source: 'assetstack' }),
     deal('Coastal Rail', 'Transport', 160000, 'P2', 'Contacted', 'hello', 'PDF walkthrough', contactId('Casey Ng'),
-      { days: 20, waitingOn: 'them', closeOn: addDays(today, -6), source: 'lyco' }),
+      { productType: 'Asset capture (LiDAR / 3D scanning)', days: 20, waitingOn: 'them', closeOn: addDays(today, -6), source: 'lyco' }),
     deal('Shire of Southcliff', 'Government', 55000, 'P2', 'First meetings', 'josh', 'Thursday 10am walkthrough', contactId('Morgan Hale'),
-      { days: 1, closeOn: addMonths(today, 3), source: 'assetstack' }),
-    deal('Eastgate University Facilities', 'Education', 90000, 'P3', 'First meetings', 'david', 'Confirm campus list', '', { days: 35, waitingOn: 'them', closeOn: addMonths(today, 2) }),
+      { productType: 'Condition assessment', days: 1, closeOn: addMonths(today, 3), source: 'assetstack' }),
+    deal('Eastgate University Facilities', 'Education', 90000, 'P3', 'First meetings', 'david', 'Confirm campus list', '', { productType: 'Asset register build', days: 35, waitingOn: 'them', closeOn: addMonths(today, 2) }),
     deal('Harbourside District Council', 'Government', 85000, 'P2', 'First meetings', 'josh', 'Send the asset plan example', '',
-      { days: 6, currency: 'NZD', waitingOn: 'us', closeOn: addMonths(today, 3) }),
+      { productType: 'Forward works programme', days: 6, currency: 'NZD', waitingOn: 'us', closeOn: addMonths(today, 3) }),
     deal('Northside Diocese', 'Healthcare', 110000, 'P1', 'Demos', 'josh', 'Scope document', contactId('Jordan Price'),
-      { days: 4, closeOn: addMonths(today, 1), waitingOn: 'us', source: 'assetstack' }),
+      { productType: 'Asset register build', days: 4, closeOn: addMonths(today, 1), waitingOn: 'us', source: 'assetstack' }),
     deal('Kingsford Housing Trust', 'Community housing', 60000, 'P1', 'Proposal sent', 'josh', 'Non-profit pricing in the proposal', '',
-      { days: 9, currency: 'GBP', closeOn: addMonths(today, 2), probability: 70, waitingOn: 'them' }),
-    deal('Harbour Construction', 'Construction', 190000, 'P1', 'Proposal sent', 'david', 'Pilot review', '', { days: 5, waitingOn: 'them', closeOn: addDays(today, 10), source: 'lyco' }),
-    deal('Westbay Council', 'Government', 130000, 'P1', 'Demos', 'david', 'Onboarding', contactId('Alex Taylor'), { days: 30, source: 'lyco' }),
-    deal('Lakeview Shire', 'Government', 40000, 'P3', 'Lost', 'josh', '', '', { days: 12, lostReason: 'Existing system' }),
-    deal('Pinecrest Council', 'Government', 65000, 'P2', 'Lost', 'hello', '', '', { days: 40, lostReason: 'Existing system' }),
-    deal('Hillcrest Shire', 'Government', 50000, 'P3', 'Lost', 'josh', '', '', { days: 25, lostReason: 'Timing' }),
+      { productType: 'Forward works programme', days: 9, currency: 'GBP', closeOn: addMonths(today, 2), probability: 70, waitingOn: 'them' }),
+    deal('Harbour Construction', 'Construction', 190000, 'P1', 'Proposal sent', 'david', 'Pilot review', '', { productType: 'Predictive maintenance', days: 5, waitingOn: 'them', closeOn: addDays(today, 10), source: 'lyco' }),
+    deal('Westbay Council', 'Government', 130000, 'P1', 'Demos', 'david', 'Onboarding', contactId('Alex Taylor'), { productType: 'Platform subscription', days: 30, source: 'lyco' }),
+    deal('Lakeview Shire', 'Government', 40000, 'P3', 'Lost', 'josh', '', '', { productType: 'Platform subscription', days: 12, lostReason: 'Existing system' }),
+    deal('Pinecrest Council', 'Government', 65000, 'P2', 'Lost', 'hello', '', '', { productType: 'Condition assessment', days: 40, lostReason: 'Existing system' }),
+    deal('Hillcrest Shire', 'Government', 50000, 'P3', 'Lost', 'josh', '', '', { productType: 'Asset register build', days: 25, lostReason: 'Timing' }),
   ];
   // Westbay was made a client: its deal is linked, so it has left the board and counts in Made clients.
   deals.forEach((dl) => {
@@ -968,7 +968,7 @@ export function migrate(data) {
   });
 
   (data.contacts || []).forEach((c) => { c.owner ??= ''; });
-  (data.deals || []).forEach((dl) => { dl.contactId ??= ''; dl.source ??= ''; }); // source: the Lead (0013)
+  (data.deals || []).forEach((dl) => { dl.contactId ??= ''; dl.source ??= ''; dl.productType ??= ''; }); // source: the Lead (0013); productType 0019
   // Won is no longer a stage (0008): a deal there moves to Demos (one made a client has left the board anyway).
   (data.deals || []).forEach((dl) => { if (dl.stage === 'Won') dl.stage = 'Demos'; });
   (data.clients || []).forEach((c) => {

@@ -234,7 +234,7 @@ const norm = (s) => String(s ?? '').trim().toLowerCase();
 
 /** A deal's fields from 0019 on, as a new deal starts (the database's defaults; reached its stage `at`). */
 export const dealDefaults = (at = new Date().toISOString()) => ({
-  accountId: '', contactIds: [], currency: 'AUD', closeOn: '', probability: null, waitingOn: '', lostReason: '', stageAt: at,
+  accountId: '', contactIds: [], currency: 'AUD', closeOn: '', probability: null, waitingOn: '', lostReason: '', stageAt: at, productType: '',
 });
 /** An account's fields as a new one starts (0019's defaults). */
 export const accountDefaults = (at = new Date().toISOString()) => ({

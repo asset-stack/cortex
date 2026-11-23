@@ -30,7 +30,7 @@ const LEAD_FILTER = [
 // A deal's Lead colours its card's left edge (on top of the chip's own inset highlight).
 const edgeOf = (deal) => (leadOf(deal) ? { boxShadow: `inset 4px 0 0 ${LEADS[leadOf(deal)].edge}, inset 0 1px 0 rgba(255,255,255,.3)` } : undefined);
 
-const dealText = (state, d) => [d.name, accountOf(state, d)?.name, d.sector, d.next, ...dealPeople(state, d).map((p) => p.name)].join(' ').toLowerCase();
+const dealText = (state, d) => [d.name, accountOf(state, d)?.name, d.sector, d.productType, d.next, ...dealPeople(state, d).map((p) => p.name)].join(' ').toLowerCase();
 
 export default function Opportunities({ editable, canConvert, onOpen, onEdit, onMakeClient }) {
   const { state, actions } = useStore();
@@ -89,6 +89,7 @@ export default function Opportunities({ editable, canConvert, onOpen, onEdit, on
           <WaitingPill value={d.waitingOn} />
           <DaysInStage deal={d} />
           {d.closeOn && <Pill className="chip" title="Expected close">{shortDate(d.closeOn)}</Pill>}
+          {d.productType && <Pill className="chip max-w-full" title="Product type"><span className="truncate">{d.productType}</span></Pill>}
         </div>
         <div className="mt-2 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -180,6 +181,7 @@ function DealTable({ deals, lost, onOpen }) {
             <tr className="text-left text-[12px] dimmer">
               <th className="px-3 py-2.5 pl-5 font-medium">Deal</th>
               <th className="px-3 py-2.5 font-medium">Stage</th>
+              <th className="px-3 py-2.5 font-medium">Product</th>
               <th className="px-3 py-2.5 font-medium">Value</th>
               <th className="px-3 py-2.5 font-medium">{lost ? 'Reason' : 'Probability'}</th>
               <th className="px-3 py-2.5 font-medium">Close</th>
@@ -199,6 +201,7 @@ function DealTable({ deals, lost, onOpen }) {
                     {account && account.name !== d.name && <div className="truncate text-[12px] dimmer">{account.name}</div>}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 dim">{dealStage(d)}</td>
+                  <td className="max-w-[180px] truncate px-3 py-2.5 dim" title={d.productType}>{d.productType || '—'}</td>
                   <td className="whitespace-nowrap px-3 py-2.5 font-semibold tnum">{compactIn(d.value, d.currency)}</td>
                   <td className="max-w-[160px] truncate px-3 py-2.5 dim tnum">{lost ? d.lostReason || '—' : `${dealProbability(d)}%`}</td>
                   <td className="whitespace-nowrap px-3 py-2.5 dim">{d.closeOn ? shortDate(d.closeOn) : '—'}</td>

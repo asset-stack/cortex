@@ -138,3 +138,8 @@ export function dropDealEntriesLocal(state, dealId) {
   state.crmEntries = state.crmEntries.filter((e) => !(e.dealId === dealId && !e.clientId));
   state.crmEntries.forEach((e) => { if (e.dealId === dealId) e.dealId = ''; });
 }
+
+/** A deal's latest note or meeting (its timeline's newest; links and stage moves aside), or null: Pipeline › Deal notes. */
+export function latestNote(state, dealId) {
+  return dealId ? timelineOf(state, { dealId }).find((e) => e.kind === 'note' || e.kind === 'meeting') || null : null;
+}

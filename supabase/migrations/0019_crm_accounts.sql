@@ -11,7 +11,7 @@
 --   maker, champion …) and whether they're still there. Deleting an account deletes its contacts.
 -- - deals: an account (account_id), the contacts on it (contact_ids), a currency, an expected close date, a probability
 --   (null: the stage's default), who it waits on (us / them), a lost reason, and when it reached its stage (stage_at, the
---   database's: set when the stage changes). The stages stay as they are (Opportunities → Contacted → First meetings →
+--   database's: set when the stage changes), and its product type (what it sells). The stages stay as they are (Opportunities → Contacted → First meetings →
 --   Demos → Proposal sent), plus Lost; Won is still Make client. Nothing is renamed.
 -- - The outreach automation (contact_pipeline) also files the contact's organisation as an account and the person as its
 --   contact (the stages and the deal it adds are as 0008).
@@ -86,6 +86,10 @@ alter table public.deals add column if not exists probability int check (probabi
 alter table public.deals add column if not exists waiting_on text not null default '' check (waiting_on in ('', 'us', 'them'));
 alter table public.deals add column if not exists lost_reason text not null default '' check (char_length(lost_reason) <= 500);
 alter table public.deals add column if not exists stage_at timestamptz;
+-- What the deal sells (PRODUCT_TYPES in src/data/boards.js; '' not set).
+alter table public.deals add column if not exists product_type text not null default '' check (product_type in ('',
+  'Platform subscription', 'Asset capture (LiDAR / 3D scanning)', 'Condition assessment', 'Asset register build',
+  'Predictive maintenance', 'Digital twin', 'Forward works programme', 'Advisory', 'Partnership'));
 create index if not exists deals_account_idx on public.deals (account_id);
 
 -- Existing deals reached their stage no later than their last change.

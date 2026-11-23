@@ -5257,7 +5257,7 @@ async function syncWriteCheck({ david, alice, boss, hello, early, newcomer, boar
     }],
     deals: [{
       id: dl, name: 'Example Client', sector: 'Utilities', value: '1,500.50', priority: 'P1', stage: 'Won', contact: alice, next: '',
-      clientId: cli, contactId: con, source: 'lyco', accountId: acct, contactIds: [ppl], currency: 'GBP', closeOn: '2026-12-01', probability: 70, waitingOn: 'them',
+      clientId: cli, contactId: con, source: 'lyco', accountId: acct, contactIds: [ppl], currency: 'GBP', closeOn: '2026-12-01', probability: 70, waitingOn: 'them', productType: 'Digital twin',
       lostReason: '', stageAt: '2026-10-01T00:00:00.000Z',
     }],
     // The CRM (0019): the deal's account (its client's) and a person there.
@@ -6837,6 +6837,18 @@ async function phase19(ctx) {
   await as(david);
   await db.query("delete from module_access where user_id = $1 and module = 'pipeline'", [hello]);
   await as(null);
+
+  // 140. A deal's product type: one of PRODUCT_TYPES (src/data/boards.js) or '' (not set); anything else is refused.
+  await as(boss);
+  const typed = (await one("insert into deals (name, stage, product_type) values ('Example Product', 'Opportunities', 'Digital twin') returning id, product_type"));
+  const blank = (await one("insert into deals (name, stage) values ('Example Blank', 'Opportunities') returning product_type")).product_type;
+  const bad = await error("update deals set product_type = 'Widgets' where id = $1", [typed.id]);
+  const { PRODUCT_TYPES } = await import('../src/data/boards.js');
+  const allowed = await Promise.all(PRODUCT_TYPES.map((p) => affected('update deals set product_type = $2 where id = $1', [typed.id, p])));
+  await db.query("delete from deals where name in ('Example Product', 'Example Blank')");
+  await as(null);
+  check('140. a deal’s product type is one of PRODUCT_TYPES (each accepted) or blank by default; anything else is refused',
+    typed.product_type === 'Digital twin' && blank === '' && bad !== null && allowed.every((n) => n === 1), { typed, blank, bad, allowed });
   return ctx;
 }
 
